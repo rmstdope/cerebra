@@ -1,0 +1,48 @@
+{
+  "name": "cerebra",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "packageManager": "pnpm@11.24.0",
+  "bin": { "cerebra": "./dist/cli.js" },
+  "scripts": {
+    "dev": "tsx apps/server/src/cli.ts serve",
+    "dev:web": "vite --config apps/web/vite.config.ts",
+    "build": "tsup apps/server/src/cli.ts --format esm --target node22 --out-dir dist --clean && vite build --config apps/web/vite.config.ts",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p apps/web/tsconfig.json",
+    "test": "vitest run",
+    "test:integration": "tsx scripts/integration.ts",
+    "test:docker": "CEREBRA_DOCKER=1 vitest run tests/integration/docker.test.ts tests/integration/provider-startup.test.ts",
+    "test:e2e": "playwright test",
+    "check": "pnpm typecheck && pnpm test && pnpm build",
+    "start": "node dist/cli.js serve"
+  },
+  "dependencies": {
+    "@fastify/cookie": "^11.0.2",
+    "@fastify/rate-limit": "^10.3.0",
+    "@fastify/static": "^10.1.4",
+    "@fastify/websocket": "^11.2.0",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
+    "fastify": "^5.6.1",
+    "mysql2": "^3.15.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "ws": "^8.18.3",
+    "zod": "^4.1.11"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.1",
+    "@types/node": "^22.18.6",
+    "@types/react": "^19.1.14",
+    "@types/react-dom": "^19.1.9",
+    "@types/ws": "^8.18.1",
+    "@vitejs/plugin-react": "^5.0.3",
+    "tsup": "^8.5.0",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.7",
+    "vitest": "^4.1.11"
+  }
+}

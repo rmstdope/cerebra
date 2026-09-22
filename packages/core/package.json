@@ -1,0 +1,5 @@
+{
+  "name": "@cerebra/core",
+  "private": true,
+  "type": "module"
+}

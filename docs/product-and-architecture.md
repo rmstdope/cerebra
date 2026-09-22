@@ -4,6 +4,12 @@ Status: approved direction; implementation feasibility gates remain open.
 
 Date: 2026-09-21.
 
+Implementation follow-up (2026-09-22): see
+[implementation decisions and evidence](implementation-notes.md) and the
+[operator guide](operator-guide.md). The interview baseline below is retained
+as the original agreement; live-environment acceptance gates are tracked in
+the implementation notes.
+
 This document records the initial product and technology interview. It is the
 baseline for implementation, not a claim that the integrations below have been
 built or tested. Changes to agreed behavior should be explicit decisions rather

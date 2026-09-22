@@ -1,0 +1,40 @@
+# Copy into the consumer project's .github/workflows/deploy.yml and implement
+# the project-specific deployment step before enabling it.
+name: Deploy
+run-name: Cerebra deployment ${{ inputs.cerebra_request_id }}
+on:
+  workflow_dispatch:
+    inputs:
+      cerebra_request_id:
+        description: Cerebra deployment request UUID
+        required: true
+        type: string
+      cerebra_commit:
+        description: Human-authorized merge commit
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.cerebra_commit }}
+      - name: Validate deployment request
+        env:
+          REQUEST_ID: ${{ inputs.cerebra_request_id }}
+          COMMIT: ${{ inputs.cerebra_commit }}
+        run: |
+          [[ "$REQUEST_ID" =~ ^[a-f0-9-]{36}$ ]]
+          [[ "$COMMIT" =~ ^[a-f0-9]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$COMMIT"
+      - name: Project deployment
+        run: |
+          echo "Replace this step with the project's real deployment procedure." >&2
+          exit 1

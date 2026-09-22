@@ -1,0 +1,81 @@
+{
+  "instance": "laptop-a",
+  "host": "127.0.0.1",
+  "port": 4545,
+  "publicUrl": "http://localhost:4545",
+  "dataDirectory": "../.cerebra-local/laptop-a",
+  "database": {
+    "host": "127.0.0.1",
+    "port": 3307,
+    "user": "cerebra",
+    "passwordEnv": "CEREBRA_DATABASE_PASSWORD",
+    "database": "cerebra"
+  },
+  "project": {
+    "id": "example-product",
+    "repository": "your-organization/your-product",
+    "checkout": "../../your-product",
+    "beadsDirectory": "../../your-product",
+    "defaultBranch": "main",
+    "policy": "Humans rank top-level work, decide UX, and authorize deployment. Agents may clarify and decompose approved work, design and implement technical changes, and make small decisions consistent with existing documented conventions. Escalate ambiguous or medium/large changes. Use TDD when useful, not for docs-only edits. Every delivery PR needs a separate agent review. GitHub operations use gh.",
+    "requireRebase": true,
+    "requireHumanReview": false,
+    "requireCI": true,
+    "requireVerification": true,
+    "checkpoints": [],
+    "deploymentWorkflow": "deploy.yml",
+    "deploymentRoles": ["product"]
+  },
+  "sandbox": {
+    "image": "cerebra-agent:local",
+    "cpus": 2,
+    "memory": "4g",
+    "credentialsDirectory": "../.cerebra-local/credentials",
+    "engineUrl": "http://host.docker.internal:4546",
+    "bridgeHost": "127.0.0.1",
+    "bridgePort": 4546
+  },
+  "agents": [
+    {
+      "id": "planner",
+      "name": "Planner",
+      "role": "planner",
+      "provider": "copilot",
+      "instructions": "Clarify ideas with the relevant humans. Propose work with concrete acceptance criteria and ask the product role to rank it. Record long-lived decisions in project documents."
+    },
+    {
+      "id": "builder",
+      "name": "Builder",
+      "role": "implementer",
+      "provider": "claude",
+      "instructions": "Implement assigned work using an isolated branch. Use TDD where it adds value. Ask the UX/UI roles about non-trivial experience decisions. Open a PR and submit it for independent review."
+    },
+    {
+      "id": "reviewer",
+      "name": "Reviewer",
+      "role": "reviewer",
+      "provider": "copilot",
+      "instructions": "Independently inspect the assigned PR at its recorded head. Read acceptance criteria and verify tests. Do not author or edit the reviewed change. Report concrete findings through cerebra review."
+    },
+    {
+      "id": "ux",
+      "name": "UX liaison",
+      "role": "ux",
+      "provider": "claude",
+      "instructions": "Clarify user journeys with the UX and UI roles. Record decisions and propose implementation work without choosing its priority."
+    },
+    {
+      "id": "release",
+      "name": "Release coordinator",
+      "role": "release",
+      "provider": "copilot",
+      "instructions": "Prepare release documentation and project deployment workflows. Production deployment requires a human request in Cerebra; never dispatch or merge directly."
+    }
+  ],
+  "pollMs": 5000,
+  "githubPollMs": 60000,
+  "stuckMs": 1800000,
+  "toolTimeoutMs": 21600000,
+  "recoveryStableMs": 60000,
+  "maxRecoveryAttempts": 3
+}
