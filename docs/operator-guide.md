@@ -29,6 +29,47 @@ and the authenticated-provider/deployment gates that still need pilot verificati
 No provider tokens are checked into the repository. No production deployment
 secrets are mounted into agent containers.
 
+### Start Docker before building or running agents
+
+Installing the Docker CLI does not start a Docker engine. On macOS, either
+launch Docker Desktop and wait until it is ready, or start a Colima VM.
+For the Colima setup used during Cerebra's local verification:
+
+```sh
+# Only needed if these tools are not already installed:
+brew install docker colima
+
+# Creates the named VM on first use, or starts it again after it was stopped.
+colima start --profile cerebra-release --cpu 4 --memory 8 --disk 30 --activate=false
+
+# Select this engine for Docker and Cerebra commands in the current shell.
+export DOCKER_CONTEXT=colima-cerebra-release
+docker info
+```
+
+Keep that environment variable set in the shell where you build the image, log
+agents in, and run Cerebra. Repeat the export in new shells, or pass
+`--context colima-cerebra-release` to individual Docker commands. This avoids
+changing the global default Docker context. The 4-CPU/8-GiB VM is a starting
+development allocation, not sizing guidance for twenty active agents.
+
+If Docker reports that `/var/run/docker.sock` does not exist, check both the
+engine and its selected context:
+
+```sh
+colima list
+docker context ls
+docker --context colima-cerebra-release info
+```
+
+The default context can point to `/var/run/docker.sock` even when Colima's engine
+is running under another context. A legacy-builder/Buildx deprecation warning is
+separate: it is not the cause of a missing Docker socket.
+
+On Linux, start the Docker service using your distribution's installation
+instructions, configure non-root access, and confirm `docker info` succeeds.
+Do not build or start Cerebra until that check works.
+
 ## 1. Build the application and agent image
 
 ```sh
@@ -53,23 +94,252 @@ daemon that cannot mount the same local task paths.
 
 ## 2. Prepare the shared work store
 
-Run a Dolt SQL server on an always-available private-network host, with persistent
-storage, a configured database account, and network access restricted to your
-engines. TLS/private-network administration is the installer's responsibility.
-Do not expose it on the public internet. Use the Dolt documentation for user
-creation and grants.
+Run **one Dolt SQL server** for the installation. It hosts separate logical
+databases: `cerebra` for accounts/application state, and `product_work` for this
+consumer project's Beads work packages. Both Cerebra instances must reach this
+same server, even if they connect through different SSH tunnels. Do not start an
+independent database server on every worker.
 
-Initialize Beads once in the consumer repository, pointing to that shared server:
+For initial local use, the server can run on your laptop. For a team, put it on
+an always-on machine: sleeping or stopping the database host prevents new claims
+and durable updates on every worker.
+
+### 2.1. Install Dolt on the database host
+
+On macOS, if Dolt is not already installed:
+
+```sh
+brew install dolt
+```
+
+On Linux, install the appropriate release binary using the
+[official installation instructions](https://www.dolthub.com/docs/introduction/installation/).
+Check the release checksum and put the `dolt` binary on PATH.
+
+```sh
+dolt version
+```
+
+Use a Dolt version compatible with your Beads release; record that version before
+onboarding other workers. Homebrew installs its current version, not necessarily
+the version previously tested with Cerebra. Consult the Beads compatibility
+guidance before upgrading an existing database.
+
+This is a **native Dolt process**, separate from the Docker containers used for
+agents. No DoltHub account or hosted database is required.
+
+### 2.2. Create persistent storage and start the server
+
+Run these commands as the normal OS account that will own the database, not as
+root. Keep this data outside the Cerebra and consumer Git repositories:
+
+```sh
+mkdir -p "$HOME/.local/share/cerebra-dolt/data" \
+  "$HOME/.local/share/cerebra-dolt/config"
+chmod 700 "$HOME/.local/share/cerebra-dolt" \
+  "$HOME/.local/share/cerebra-dolt/data" \
+  "$HOME/.local/share/cerebra-dolt/config"
+
+dolt sql-server \
+  --host 127.0.0.1 \
+  --port 3307 \
+  --data-dir "$HOME/.local/share/cerebra-dolt/data" \
+  --doltcfg-dir "$HOME/.local/share/cerebra-dolt/config" \
+  --socket "$HOME/.local/share/cerebra-dolt/mysql.sock"
+```
+
+The command stays in the foreground. Leave this terminal running and use another
+terminal for the next steps. Server startup messages should report a listener on
+port 3307; if the command exits or reports an occupied port, resolve that before
+continuing. The explicit socket path avoids colliding with another local MySQL
+server's `/tmp/mysql.sock`.
+
+The `data` directory holds the databases. The `config` directory holds Dolt
+users/grants and branch-control state. **Retain both directories across restarts
+and upgrades.** Starting with a different or empty configuration directory can
+lose your account configuration. Do not commit these directories to Git or run
+multiple Dolt server processes over the same data directory.
+
+Binding to loopback is intentional: do not change this to `0.0.0.0` just to connect
+another worker. Use the SSH-tunnel instructions below. Cerebra's current database
+configuration does not expose MySQL TLS settings, so setting Dolt to require TLS
+without also changing the client configuration is not a supported setup path.
+
+### 2.3. Create database credentials
+
+On a **fresh** Dolt server, the initial account is `root@localhost` with no
+password. Bootstrap only from the database host. The following creates a
+password-protected local administrator and a separate Cerebra service account,
+then removes the passwordless root account. It is a first-time setup procedure,
+not something to rerun on an existing installation.
+
+Use two different generated passwords and retain them in your password manager.
+In a second terminal on the database host, from the Cerebra checkout after
+`pnpm install`, read them without putting their values in shell history:
+
+```sh
+printf 'New Dolt administrator password: '
+read -r -s DOLT_ADMIN_PASSWORD
+printf '\nNew Cerebra database password: '
+read -r -s CEREBRA_DATABASE_PASSWORD
+printf '\n'
+export DOLT_ADMIN_PASSWORD CEREBRA_DATABASE_PASSWORD
+```
+
+The Node.js snippet uses Cerebra's already-installed MySQL client library.
+Passwords are read from the environment rather than interpolated into shell
+commands or written to configuration files:
+
+```sh
+node --input-type=module <<'NODE'
+import mysql from "mysql2/promise";
+
+const adminPassword = process.env.DOLT_ADMIN_PASSWORD;
+const servicePassword = process.env.CEREBRA_DATABASE_PASSWORD;
+if (!adminPassword || !servicePassword ||
+    adminPassword.length < 16 || servicePassword.length < 16 ||
+    adminPassword === servicePassword) {
+  throw new Error("Supply two different generated passwords of at least 16 characters.");
+}
+
+const endpoint = { host: "127.0.0.1", port: 3307 };
+let bootstrap;
+let admin;
+try {
+  bootstrap = await mysql.createConnection({ ...endpoint, user: "root" });
+  await bootstrap.query(
+    "CREATE USER 'cerebra_admin'@'localhost' IDENTIFIED BY ?", [adminPassword]);
+  await bootstrap.query(
+    "GRANT ALL PRIVILEGES ON *.* TO 'cerebra_admin'@'localhost' WITH GRANT OPTION");
+  await bootstrap.query(
+    "CREATE USER 'cerebra'@'%' IDENTIFIED BY ?", [servicePassword]);
+  await bootstrap.query(
+    "GRANT ALL PRIVILEGES ON `cerebra`.* TO 'cerebra'@'%'");
+  await bootstrap.query(
+    "GRANT ALL PRIVILEGES ON `product_work`.* TO 'cerebra'@'%'");
+
+  admin = await mysql.createConnection({
+    ...endpoint, user: "cerebra_admin", password: adminPassword,
+  });
+  await admin.query("SELECT 1");
+  await admin.query("DROP USER 'root'@'localhost'");
+  console.log("Dolt accounts created; passwordless root removed.");
+} catch (error) {
+  console.error("Database bootstrap failed:", error.code ?? error.name);
+  console.error("Inspect the account state with an administrator; do not blindly rerun bootstrap.");
+  process.exitCode = 1;
+} finally {
+  if (bootstrap) await bootstrap.end();
+  if (admin) await admin.end();
+}
+NODE
+unset DOLT_ADMIN_PASSWORD
+```
+
+The service account has privileges only for the two named databases, including
+the ability to create/migrate them. It does not receive global administration or
+grant permissions. The `%` account host permits forwarded connections; it does
+**not** expose the loopback-bound listener to the network. Protect the database
+host's OS accounts and SSH access as well.
+
+Do not grant workers the administrator password. For an existing managed Dolt
+server, have its administrator create equivalent service-account grants instead
+of running the fresh-server bootstrap. Additional consumer work databases need
+their own database-specific grant.
+
+Dolt persists `CREATE USER` and `GRANT` changes in its privilege file immediately;
+there is no `FLUSH PRIVILEGES` or Git commit step. See
+[Dolt access management](https://www.dolthub.com/docs/sql-reference/server/access-management/).
+
+### 2.4. Check the service account and configure each worker
+
+Keep `CEREBRA_DATABASE_PASSWORD` set for the engine and give Beads the same
+password through its supported environment variable:
+
+```sh
+export BEADS_DOLT_PASSWORD="$CEREBRA_DATABASE_PASSWORD"
+```
+
+From the Cerebra checkout, verify that the account can connect:
+
+```sh
+node --input-type=module <<'NODE'
+import mysql from "mysql2/promise";
+const connection = await mysql.createConnection({
+  host: "127.0.0.1", port: 3307, user: "cerebra",
+  password: process.env.CEREBRA_DATABASE_PASSWORD,
+});
+try {
+  const [rows] = await connection.query("SELECT CURRENT_USER() AS account, 1 AS ready");
+  console.log(rows);
+} finally {
+  await connection.end();
+}
+NODE
+```
+
+Expected output contains `cerebra@%` and `ready: 1`. An access-denied error means
+the account/password is wrong; connection-refused usually means the server or
+tunnel is not running, or the port is wrong.
+
+Use these application settings in each worker's Cerebra configuration:
+
+```json
+"database": {
+  "host": "127.0.0.1",
+  "port": 3307,
+  "user": "cerebra",
+  "passwordEnv": "CEREBRA_DATABASE_PASSWORD",
+  "database": "cerebra"
+}
+```
+
+These settings also work on another machine when it uses the following tunnel.
+Environment variables are per shell: on every worker, load the service password
+securely and set both password variables in the shell that runs Cerebra. Never
+add passwords to the committed configuration.
+
+### 2.5. Connect a second machine through SSH
+
+On every worker that is not the database host, first open a tunnel in a separate
+terminal. Replace `SSH_USER` and `DB_HOST` with the SSH account and private
+hostname of the **one shared database host**:
+
+```sh
+ssh -N \
+  -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=30 \
+  -o ServerAliveCountMax=3 \
+  -L 127.0.0.1:3307:127.0.0.1:3307 \
+  SSH_USER@DB_HOST
+```
+
+Leave it running. Both Cerebra and Beads on that worker connect to
+`127.0.0.1:3307`, which now forwards to the shared server; they do not connect to
+an independent local Dolt database. SSH encrypts traffic between the machines.
+If port 3307 is already occupied on the worker, choose another local port in
+`-L` and use that port consistently in both its Cerebra and Beads settings.
+
+Run the service-account connection check from the worker before initializing or
+bootstrapping Beads there. A sleeping worker may need its tunnel restarted after
+waking; its existing work claims are not automatically released.
+
+### 2.6. Initialize the consumer's Beads database
+
+With the server reachable and `BEADS_DOLT_PASSWORD` set, run this **from the
+consumer repository**, not the Cerebra implementation checkout unless Cerebra
+itself is your consumer project:
 
 ```sh
 bd init --server --external \
-  --server-host YOUR_PRIVATE_DB_HOST --server-port 3307 \
-  --server-user YOUR_DB_USER --database product_work \
+  --server-host 127.0.0.1 --server-port 3307 \
+  --server-user cerebra --database product_work \
   --prefix product --skip-agents --non-interactive
 ```
 
-Supply `BEADS_DOLT_PASSWORD` through your local secret mechanism. Do not put it
-in the command line or committed configuration.
+Beads creates/migrates `product_work`. Later, section 4 creates/migrates the
+separate `cerebra` application database. Do not point both tools at the same
+logical database or manually create Beads tables.
 
 For other clones, use Beads' non-destructive bootstrap procedure and point their
 server configuration at the **same database and branch**. For example, set the
@@ -84,6 +354,20 @@ bd sql 'SELECT active_branch() AS branch' --json
 Do not use independent embedded stores with push/pull to coordinate claims.
 Do not run Beads automatic lease-reclaim commands on Cerebra work. A sleeping
 worker retains ownership until it returns or a human explicitly releases it.
+
+### Stopping and restarting the database
+
+Stop or drain the engines first when doing planned database maintenance. For
+this foreground setup, press `Ctrl-C` in the Dolt terminal and wait for shutdown.
+Restart with the exact command from section 2.2 and the same data/config paths;
+**do not rerun account bootstrap or `bd init`**. Verify the service connection
+again, restore any SSH tunnels, then resume the engines.
+
+Closing the Dolt terminal or rebooting its host stops this manual setup. For
+an always-on installation, run that same command under your OS service manager
+(`launchd` on macOS or `systemd` on Linux), as the same non-root owner, with
+absolute persistent paths, restart-on-failure, and retained logs. Cerebra does
+not currently install that service or a backup policy for you.
 
 ## 3. Configure each engine
 
