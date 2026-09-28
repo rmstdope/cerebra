@@ -13,5 +13,6 @@
 node_modules/
 packages/*/dist/
 packages/*/dist-types/
+packages/*/*.tsbuildinfo
 .env
 .env.*
