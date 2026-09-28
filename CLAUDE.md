@@ -65,6 +65,9 @@ planning.
   checks, typecheck, build, unit and real-Postgres database tests). Foundations implements these
   commands and documents the database prerequisite; they are not runnable in the documents-only
   repository. Step 7 adds real-Podman end-to-end coverage.
+- Before the workspace exists, worktree preparation installs nothing: `install` is deliberately
+  undeclared. The foundation producer creates the manifest and lockfile and installs dependencies;
+  once `pnpm-lock.yaml` exists, the harness detects `pnpm install --frozen-lockfile` automatically.
 - Prefer the simple design; say so when you decline a more general one.
 
 ## Producer review

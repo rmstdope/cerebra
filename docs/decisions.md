@@ -356,7 +356,11 @@ Confirmed during project definition on 2026-09-28:
   Postgres prerequisite. Real-Podman end-to-end coverage is added at roadmap step 7.
 
 No application workspace or executable gate exists at project definition time; the declaration is
-the contract foundations must implement, not a passing check. Classic Cerebro's building fleet
+the contract foundations must implement, not a passing check. Automatic worktree installation is
+left undeclared until the foundation producer creates the manifest and lockfile; the harness then
+detects `pnpm install --frozen-lockfile` from `pnpm-lock.yaml`. Declaring it before bootstrap
+prevented that producer from starting, because pnpm cannot install without a package manifest.
+Classic Cerebro's building fleet
 keeps its existing Copilot configuration; that is separate from the product's Claude-only MVP.
 
 ### D45. The UI is modern, stylish and easy, with accessible themes from the start — decided

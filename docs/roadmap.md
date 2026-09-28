@@ -69,6 +69,8 @@ One epic implementing the foundation choices confirmed during project definition
   typecheck, build, unit and database tests on every pull request. Both declared gates use that
   command, exactly as CI does. Installation is `pnpm install --frozen-lockfile`; foundations
   documents the real-Postgres prerequisite and implements these currently absent commands.
+  Worktree preparation skips installation until the first producer creates the manifest and
+  lockfile; `install` stays undeclared so the harness detects the frozen pnpm install thereafter.
 - **Confirmed decisions:** D16 (a runner over the vendors' SDKs, subject to step 3's spike) and
   D25 (rework continues the same pull request).
 
