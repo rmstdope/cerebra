@@ -55,19 +55,17 @@ describe('App', () => {
 
     expect(screen.getByText('Cerebra')).toBeTruthy();
     expect(
-      screen.getByRole('heading', { name: 'Welcome to Cerebra' }),
+      screen.getByRole('heading', { name: 'Manage Cerebra' }),
     ).toBeTruthy();
     expect(
       screen.getByText(
-        'There is nothing to review yet. Add your first project to start organising work here.',
+        'Your private workspace is available only on this computer.',
       ),
     ).toBeTruthy();
-    expect(screen.getByText('No projects have been added')).toBeTruthy();
     expect(
-      screen.getByText(
-        'Your projects and any work waiting for you will appear in this space.',
-      ),
+      screen.getByRole('heading', { name: 'Instance status' }),
     ).toBeTruthy();
+    expect(screen.getByText('Update Cerebra')).toBeTruthy();
 
     screen.getByRole('button', { name: 'Theme: System' });
     await user.keyboard('{Tab}{ArrowDown}');

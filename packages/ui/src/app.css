@@ -32,3 +32,15 @@ body {
   margin: 0;
   min-width: 20rem;
 }
+
+.card {
+  @apply rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6 shadow-sm;
+}
+
+.primary-button {
+  @apply rounded-lg bg-[var(--accent)] px-4 py-2.5 font-bold text-white outline-none focus-visible:ring-3 focus-visible:ring-[var(--focus)] disabled:opacity-60;
+}
+
+.secondary-button {
+  @apply rounded-lg border border-[var(--control-border)] bg-[var(--surface)] px-4 py-2.5 font-bold outline-none focus-visible:ring-3 focus-visible:ring-[var(--focus)];
+}

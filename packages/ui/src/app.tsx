@@ -8,6 +8,11 @@ import {
   type ThemePreference,
   type ThemeStorageWriter,
 } from './theme';
+import {
+  browserInstanceClient,
+  type InstanceClient,
+  type InstanceStatus,
+} from './instance';
 
 export interface ThemeMediaQuery {
   readonly matches: boolean;
@@ -26,6 +31,7 @@ type ThemeStorage = ThemeStorageWriter & Pick<Storage, 'getItem'>;
 interface AppProps {
   mediaQuery?: ThemeMediaQuery;
   storage?: ThemeStorage;
+  instanceClient?: InstanceClient;
 }
 
 const preferences: ThemePreference[] = ['light', 'dark', 'system'];
@@ -62,6 +68,7 @@ function getInitialPreference(storage: ThemeStorage): ThemePreference {
 export function App({
   mediaQuery = getBrowserMediaQuery(),
   storage = getBrowserStorage(),
+  instanceClient = browserInstanceClient,
 }: AppProps): ReactNode {
   const [preference, setPreference] = useState<ThemePreference>(() =>
     getInitialPreference(storage),
@@ -71,6 +78,13 @@ export function App({
   );
   const [menuOpen, setMenuOpen] = useState(false);
   const [saveError, setSaveError] = useState(false);
+  const [instance, setInstance] = useState<InstanceStatus | null>(null);
+  const [instanceError, setInstanceError] = useState<
+    'not-running' | 'restart-failed' | null
+  >(null);
+  const [confirmingUpdate, setConfirmingUpdate] = useState(false);
+  const [updating, setUpdating] = useState(false);
+  const updateButton = useRef<HTMLButtonElement>(null);
   const items = useRef<Record<ThemePreference, HTMLDivElement | null>>({
     light: null,
     dark: null,
@@ -103,6 +117,35 @@ export function App({
 
     return undefined;
   }, [menuOpen, preference]);
+
+  const refreshInstance = async () => {
+    try {
+      const nextInstance = await instanceClient.getStatus();
+      setInstance(nextInstance);
+      setInstanceError(null);
+    } catch {
+      setInstance(null);
+      setInstanceError('not-running');
+    }
+  };
+
+  useEffect(() => {
+    void refreshInstance();
+  }, [instanceClient]);
+
+  async function updateInstance(): Promise<void> {
+    setConfirmingUpdate(false);
+    setUpdating(true);
+    try {
+      await instanceClient.update();
+      await refreshInstance();
+    } catch {
+      setInstance(null);
+      setInstanceError('restart-failed');
+    } finally {
+      setUpdating(false);
+    }
+  }
 
   function choosePreference(
     nextPreference: ThemePreference,
@@ -183,27 +226,187 @@ export function App({
           </DropdownMenu.Portal>
         </DropdownMenu.Root>
       </header>
-      <main className="mx-auto w-full max-w-190 px-5 pb-15 pt-24 text-center sm:pt-30">
-        <div
-          aria-hidden="true"
-          className="mx-auto mb-6 grid size-14 place-items-center rounded-2xl bg-[var(--accent-muted)] text-2xl text-[var(--accent)]"
-        >
-          ✦
-        </div>
-        <h1 className="text-4xl font-bold tracking-tight sm:text-5xl">
-          Welcome to Cerebra
-        </h1>
-        <p className="mx-auto mt-5 max-w-150 text-base leading-relaxed text-[var(--muted)] sm:text-lg">
-          There is nothing to review yet. Add your first project to start
-          organising work here.
+      <main className="mx-auto w-full max-w-255 px-5 py-10 sm:py-14">
+        <p className="text-xs font-extrabold uppercase tracking-widest text-[var(--accent)]">
+          This Mac
         </p>
-        <section className="mx-auto mt-10 max-w-190 rounded-2xl border border-[var(--border)] bg-[var(--surface)] px-6 py-5 text-left shadow-sm">
-          <h2 className="text-sm font-bold">No projects have been added</h2>
-          <p className="mt-1 text-sm leading-relaxed text-[var(--muted)]">
-            Your projects and any work waiting for you will appear in this
-            space.
+        <h1 className="mt-2 text-3xl font-bold tracking-tight sm:text-4xl">
+          Manage Cerebra
+        </h1>
+        <p className="mt-1 text-[var(--muted)]">
+          Your private workspace is available only on this computer.
+        </p>
+        {instanceError === 'not-running' ? (
+          <section className="mt-7 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6 shadow-sm">
+            <h2 className="text-lg font-bold">Cerebra isn’t running</h2>
+            <p className="mt-2 text-[var(--muted)]">
+              Start Cerebra, then try again.
+            </p>
+            <code className="mt-4 block rounded-lg bg-slate-900 p-3 text-sm text-slate-100">
+              ./cerebra start
+            </code>
+            <div className="mt-5 flex flex-col gap-3 sm:flex-row">
+              <button
+                className="primary-button"
+                onClick={() => void refreshInstance()}
+                type="button"
+              >
+                Try again
+              </button>
+              <button className="secondary-button" type="button">
+                View setup help
+              </button>
+            </div>
+          </section>
+        ) : instanceError === 'restart-failed' ? (
+          <section className="mt-7 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6 shadow-sm">
+            <h2 className="text-lg font-bold text-[var(--danger)]">
+              Cerebra couldn’t restart
+            </h2>
+            <p className="mt-2 text-[var(--muted)]">
+              Your data is still safe. Read the update details, then try again.
+            </p>
+            <div className="mt-5 flex flex-col gap-3 sm:flex-row">
+              <button
+                className="primary-button"
+                onClick={() => void refreshInstance()}
+                type="button"
+              >
+                Try again
+              </button>
+              <button className="secondary-button" type="button">
+                View update details
+              </button>
+            </div>
+          </section>
+        ) : (
+          <div className="mt-7 grid gap-5 lg:grid-cols-[1.35fr_.85fr]">
+            <section className="card">
+              <h2>Instance status</h2>
+              <p className="mt-3 font-bold text-emerald-700 dark:text-emerald-300">
+                Running
+              </p>
+              <p className="mt-1 text-[var(--muted)]">
+                Cerebra is ready at{' '}
+                <strong>{instance?.address ?? 'http://localhost:4317'}</strong>.
+              </p>
+              <div className="mt-6 grid gap-4 border-t border-[var(--border)] pt-5 sm:grid-cols-2">
+                <p>
+                  <strong>Data</strong>
+                  <br />
+                  <span className="text-sm text-[var(--muted)]">
+                    Stored locally
+                  </span>
+                </p>
+                <p>
+                  <strong>Last updated</strong>
+                  <br />
+                  <span className="text-sm text-[var(--muted)]">
+                    {instance
+                      ? new Date(instance.lastUpdatedAt).toLocaleString()
+                      : 'Loading…'}
+                  </span>
+                </p>
+              </div>
+              <a
+                className="primary-button mt-5 inline-block"
+                href={instance?.address ?? 'http://localhost:4317'}
+              >
+                Open Cerebra
+              </a>
+            </section>
+            <section className="card">
+              <h2>Get started</h2>
+              <ol className="mt-3 space-y-4 text-sm text-[var(--muted)]">
+                <li>
+                  <strong className="block text-[var(--foreground)]">
+                    1. Install Podman
+                  </strong>
+                  Set up the local container service.
+                </li>
+                <li>
+                  <strong className="block text-[var(--foreground)]">
+                    2. Start Cerebra
+                  </strong>
+                  Run one command from the Cerebra folder.
+                </li>
+                <li>
+                  <strong className="block text-[var(--foreground)]">
+                    3. Choose a password
+                  </strong>
+                  Then add your first project.
+                </li>
+              </ol>
+              <button className="secondary-button mt-5" type="button">
+                View setup steps
+              </button>
+            </section>
+          </div>
+        )}
+        <section className="card mt-5">
+          <h2>Update Cerebra</h2>
+          <p className="mt-2 text-[var(--muted)]">
+            Get the latest version when you are ready.
           </p>
+          <p className="mt-5 rounded-lg border-l-4 border-amber-500 bg-amber-50 p-4 text-sm text-amber-950 dark:bg-amber-950 dark:text-amber-50">
+            <strong>Running work will stop.</strong> Updating restarts Cerebra.
+            Work that was still running returns to its queue and can be started
+            again.
+          </p>
+          <button
+            ref={updateButton}
+            className="primary-button mt-5"
+            disabled={updating}
+            onClick={() => setConfirmingUpdate(true)}
+            type="button"
+          >
+            Update and restart
+          </button>
         </section>
+        {confirmingUpdate ? (
+          <div
+            aria-modal="true"
+            className="fixed inset-0 grid place-items-center bg-black/40 p-5"
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                setConfirmingUpdate(false);
+                updateButton.current?.focus();
+              }
+            }}
+            role="dialog"
+          >
+            <section className="card w-full max-w-md">
+              <h2>Update Cerebra?</h2>
+              <p className="mt-3 text-[var(--muted)]">
+                The latest version will be installed and Cerebra will restart.
+              </p>
+              <p className="mt-3 text-sm text-[var(--muted)]">
+                <strong>Running work will stop.</strong> Work that was still
+                running returns to its queue and can be started again.
+              </p>
+              <div className="mt-6 flex gap-3">
+                <button
+                  autoFocus
+                  className="secondary-button"
+                  onClick={() => {
+                    setConfirmingUpdate(false);
+                    updateButton.current?.focus();
+                  }}
+                  type="button"
+                >
+                  Cancel
+                </button>
+                <button
+                  className="primary-button"
+                  onClick={() => void updateInstance()}
+                  type="button"
+                >
+                  Update and restart
+                </button>
+              </div>
+            </section>
+          </div>
+        ) : null}
       </main>
     </div>
   );

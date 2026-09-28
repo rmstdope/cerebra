@@ -44,6 +44,26 @@ The workspace packages are:
 - `packages/runner` — the agent runtime protocol adapter.
 - `packages/ui` — the React/Vite web interface.
 
+## Local instance
+
+Cerebra runs as a rootless Podman pod. On macOS, install Podman and create/start its machine
+before the first launch:
+
+```bash
+podman machine init
+podman machine start
+printf 'POSTGRES_PASSWORD=choose-a-long-local-password\n' > .env
+./cerebra start
+```
+
+The application is published only at `http://localhost:4317`; Postgres has no host port. The named
+`cerebra-data` and `cerebra-postgres` volumes retain application data and database records across
+container restarts. Check the pod with `./cerebra status`.
+
+When ready to update, run `./cerebra update`. It rebuilds and restarts the pod. Running work stops
+and is returned to its queue by the backend; persisted data remains safe in the named volumes. A
+failed start or update reports the Podman failure directly so it can be corrected before retrying.
+
 [`images/`](images/) is reserved for Containerfiles and [`spikes/`](spikes/) for throwaway
 experiments.
 

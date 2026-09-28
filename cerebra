@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly compose_file="images/podman-compose.yml"
+
+fail() {
+  printf 'Cerebra: %s\n' "$*" >&2
+  exit 1
+}
+
+require_podman() {
+  command -v podman >/dev/null 2>&1 || fail "Podman is required. Install it, then run ./cerebra start."
+  podman info >/dev/null 2>&1 || fail "The rootless Podman service is unavailable. Start your Podman machine, then try again."
+}
+
+run_compose() {
+  podman compose --file "$compose_file" "$@"
+}
+
+case "${1:-}" in
+  start)
+    require_podman
+    [ -f .env ] || fail "Missing .env. Set a local POSTGRES_PASSWORD before starting Cerebra."
+    run_compose up --build --detach || fail "Cerebra could not start. Read the Podman output above, then try again."
+    printf 'Cerebra is ready at http://localhost:4317.\n'
+    ;;
+  status)
+    require_podman
+    run_compose ps
+    ;;
+  update)
+    require_podman
+    [ -f .env ] || fail "Missing .env. Set a local POSTGRES_PASSWORD before updating Cerebra."
+    printf 'Running work will stop. Updating restarts Cerebra; unfinished work returns to its queue.\n'
+    run_compose up --build --detach || fail "Cerebra could not restart. Your data is still safe; read the Podman output above, then try again."
+    printf 'Cerebra is ready at http://localhost:4317.\n'
+    ;;
+  *)
+    printf 'Usage: ./cerebra {start|status|update}\n' >&2
+    exit 2
+    ;;
+esac

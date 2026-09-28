@@ -1,0 +1,35 @@
+services:
+  main:
+    build:
+      context: ..
+      dockerfile: images/main.Containerfile
+    environment:
+      CEREBRA_ADDRESS: http://localhost:4317
+      CEREBRA_DATA_DIR: /data
+      DATABASE_URL: postgresql://cerebra:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/cerebra
+    ports:
+      - '127.0.0.1:4317:4317'
+    volumes:
+      - cerebra-data:/data
+      - ${XDG_RUNTIME_DIR}/podman/podman.sock:/run/podman/podman.sock
+    networks:
+      - internal
+    depends_on:
+      postgres:
+        condition: service_started
+  postgres:
+    image: docker.io/library/postgres:18
+    environment:
+      POSTGRES_DB: cerebra
+      POSTGRES_USER: cerebra
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - cerebra-postgres:/var/lib/postgresql
+    networks:
+      - internal
+networks:
+  internal:
+    internal: true
+volumes:
+  cerebra-data:
+  cerebra-postgres:
