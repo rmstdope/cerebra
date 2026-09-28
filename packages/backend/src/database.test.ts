@@ -49,6 +49,19 @@ afterEach(async () => {
 });
 
 describe('database migrations', () => {
+  test('rejects an unreachable database connection', async () => {
+    const unreachableUrl = new URL(databaseUrl);
+    unreachableUrl.hostname = '127.0.0.1';
+    unreachableUrl.port = '1';
+    const database = createDatabase(unreachableUrl.toString());
+
+    try {
+      await expect(migrateToLatest(database)).rejects.toThrow();
+    } finally {
+      await database.destroy();
+    }
+  });
+
   test('migrates a fresh schema', async () => {
     const schema = schemas[0];
     const database = createDatabase(databaseUrl, schema);
@@ -90,6 +103,19 @@ describe('database migrations', () => {
           withInternalKyselyTables: true,
         }),
       ).toContainEqual(expect.objectContaining({ name: 'users' }));
+    } finally {
+      await database.destroy();
+    }
+  });
+
+  test('rejects a failed migration', async () => {
+    const schema = schemas[0];
+    const database = createDatabase(databaseUrl, schema);
+
+    try {
+      await database.schema.createTable('users').execute();
+
+      await expect(migrateToLatest(database, schema)).rejects.toThrow();
     } finally {
       await database.destroy();
     }
