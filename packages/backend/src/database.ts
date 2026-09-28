@@ -4,6 +4,10 @@ import { Pool } from 'pg';
 import type { Priority, WaitingKind, WorkItemState } from './lifecycle.js';
 
 export interface Database {
+  authentication_configuration: {
+    id: Generated<boolean>;
+    user_id: string;
+  };
   lifecycle_events: {
     created_at: Generated<Date>;
     id: Generated<number>;
@@ -24,6 +28,12 @@ export interface Database {
     id: string;
     role: 'groomer' | 'designer' | 'builder' | 'reviewer' | 'verifier';
     status: 'active' | 'ended';
+  };
+  sessions: {
+    created_at: Generated<Date>;
+    expires_at: Date;
+    token_hash: string;
+    user_id: string;
   };
   users: {
     created_at: Date;

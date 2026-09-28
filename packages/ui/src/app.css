@@ -44,3 +44,19 @@ body {
 .secondary-button {
   @apply rounded-lg border border-[var(--control-border)] bg-[var(--surface)] px-4 py-2.5 font-bold outline-none focus-visible:ring-3 focus-visible:ring-[var(--focus)];
 }
+
+.auth-label {
+  @apply mt-5 block text-sm font-bold;
+}
+
+.auth-input {
+  @apply mt-2 w-full rounded-lg border border-[var(--control-border)] bg-[var(--surface)] px-3 py-2.5 outline-none focus-visible:ring-3 focus-visible:ring-[var(--focus)];
+}
+
+.auth-error {
+  @apply mt-5 rounded-lg bg-red-50 p-3 text-sm text-[var(--danger)] dark:bg-red-950;
+}
+
+.auth-expired {
+  @apply bg-amber-50 dark:bg-amber-950;
+}

@@ -7,13 +7,25 @@ import { createServer as createNodeServer } from 'node:net';
 import { afterEach, expect, test } from 'vitest';
 
 const servers: Array<{ close: () => Promise<void> }> = [];
+const authenticatedAuth = {
+  setup: async () => ({
+    ok: false as const,
+    reason: 'already-configured' as const,
+  }),
+  signIn: async () => ({
+    ok: false as const,
+    reason: 'rejected-password' as const,
+  }),
+  signOut: async () => undefined,
+  status: async () => ({ state: 'authenticated' as const }),
+};
 
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => server.close()));
 });
 
 test('serves a health response', async () => {
-  const server = await createServer();
+  const server = await createServer({ auth: authenticatedAuth });
   servers.push(server);
 
   const response = await server.inject('/health');
@@ -24,6 +36,7 @@ test('serves a health response', async () => {
 
 test('serves truthful local instance status', async () => {
   const server = await createServer({
+    auth: authenticatedAuth,
     instance: {
       getStatus: () => ({
         address: 'http://localhost:4317',
@@ -57,7 +70,7 @@ test('reports an unavailable update explicitly', async () => {
       throw new Error('The local update command is unavailable.');
     },
   };
-  const server = await createServer({ instance });
+  const server = await createServer({ auth: authenticatedAuth, instance });
   servers.push(server);
 
   const response = await server.inject({
@@ -72,7 +85,10 @@ test('reports an unavailable update explicitly', async () => {
 });
 
 test('starts and stops cleanly', async () => {
-  const server = await startServer({ host: '127.0.0.1', port: 0 });
+  const server = await startServer(
+    { host: '127.0.0.1', port: 0 },
+    { auth: authenticatedAuth },
+  );
   servers.push(server);
   const address = server.server.address();
 
@@ -84,7 +100,7 @@ test('starts and stops cleanly', async () => {
 });
 
 test('echoes WebSocket messages', async () => {
-  const server = await createServer();
+  const server = await createServer({ auth: authenticatedAuth });
   servers.push(server);
   await server.ready();
   const socket = await server.injectWS('/ws');
@@ -99,6 +115,71 @@ test('echoes WebSocket messages', async () => {
   });
 
   expect(message).toBe('hello');
+});
+
+test('creates a session and protects application routes', async () => {
+  const server = await createServer({
+    auth: {
+      setup: async (password) =>
+        password === 'a password'
+          ? { ok: true, sessionToken: 'session-token' }
+          : { ok: false, reason: 'invalid-password' },
+      signIn: async () => ({ ok: false, reason: 'rejected-password' }),
+      signOut: async () => undefined,
+      status: async (sessionToken) =>
+        sessionToken === 'session-token'
+          ? { state: 'authenticated' }
+          : { state: 'unauthenticated', reason: 'signed-out' },
+    },
+  });
+  servers.push(server);
+
+  const unauthorized = await server.inject('/api/instance');
+  expect(unauthorized.statusCode).toBe(401);
+  expect(unauthorized.json()).toEqual({
+    error: 'Sign in to continue.',
+    reason: 'signed-out',
+  });
+
+  const setup = await server.inject({
+    method: 'POST',
+    url: '/api/auth/setup',
+    payload: { password: 'a password' },
+  });
+  expect(setup.statusCode).toBe(201);
+  expect(setup.headers['set-cookie']).toContain(
+    'cerebra_session=session-token',
+  );
+  expect(setup.headers['set-cookie']).toContain('HttpOnly');
+  expect(setup.headers['set-cookie']).toContain('SameSite=Strict');
+
+  const authorized = await server.inject({
+    url: '/api/instance',
+    cookies: { cerebra_session: 'session-token' },
+  });
+  expect(authorized.statusCode).toBe(200);
+});
+
+test('clears an expired session and rejects unauthenticated event streams', async () => {
+  const server = await createServer({
+    auth: {
+      setup: async () => ({ ok: false, reason: 'already-configured' }),
+      signIn: async () => ({ ok: false, reason: 'rejected-password' }),
+      signOut: async () => undefined,
+      status: async () => ({ state: 'unauthenticated', reason: 'expired' }),
+    },
+  });
+  servers.push(server);
+
+  const status = await server.inject('/api/auth/status');
+  expect(status.json()).toEqual({
+    state: 'unauthenticated',
+    reason: 'expired',
+  });
+  expect(status.headers['set-cookie']).toContain('Max-Age=0');
+
+  await expect(server.injectWS('/ws')).rejects.toThrow();
+  await expect(server.injectWS('/ws?stream=events')).rejects.toThrow();
 });
 
 test('rejects when it cannot start listening', async () => {
@@ -126,6 +207,9 @@ test('rejects when it cannot start listening', async () => {
   });
 
   await expect(
-    startServer({ host: '127.0.0.1', port: occupiedPort }),
+    startServer(
+      { host: '127.0.0.1', port: occupiedPort },
+      { auth: authenticatedAuth },
+    ),
   ).rejects.toThrow();
 });

@@ -1,6 +1,6 @@
 import { sql } from 'kysely';
 import { Pool } from 'pg';
-import { afterEach, beforeEach, describe, expect, test } from 'vitest';
+import { describe, expect, test } from 'vitest';
 
 import { createDatabase } from './database.js';
 import { migrateToLatest } from './migrations/index.js';
@@ -10,8 +10,6 @@ const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) {
   throw new Error('DATABASE_URL is required to run database tests');
 }
-
-const schemas: string[] = [];
 
 function schemaName(): string {
   return `cerebra_test_${crypto.randomUUID().replaceAll('-', '')}`;
@@ -27,29 +25,20 @@ async function createSchema(): Promise<string> {
     await pool.end();
   }
 
-  schemas.push(schema);
   return schema;
 }
 
-beforeEach(async () => {
-  await createSchema();
-});
-
-afterEach(async () => {
+async function dropSchema(schema: string): Promise<void> {
   const pool = new Pool({ connectionString: databaseUrl });
 
   try {
-    await Promise.all(
-      schemas
-        .splice(0)
-        .map((schema) => pool.query(`DROP SCHEMA "${schema}" CASCADE`)),
-    );
+    await pool.query(`DROP SCHEMA "${schema}" CASCADE`);
   } finally {
     await pool.end();
   }
-});
+}
 
-describe('database migrations', () => {
+describe('database migrations', { concurrent: false }, () => {
   test('rejects an unreachable database connection', async () => {
     const unreachableUrl = new URL(databaseUrl);
     unreachableUrl.hostname = '127.0.0.1';
@@ -64,7 +53,7 @@ describe('database migrations', () => {
   });
 
   test('migrates a fresh schema', async () => {
-    const schema = schemas[0];
+    const schema = await createSchema();
     const database = createDatabase(databaseUrl, schema);
 
     try {
@@ -79,6 +68,14 @@ describe('database migrations', () => {
           migrationName: '20260928210000_create_lifecycle',
           status: 'Success',
         }),
+        expect.objectContaining({
+          migrationName: '20260928220000_create_sessions',
+          status: 'Success',
+        }),
+        expect.objectContaining({
+          migrationName: '20260928230000_create_authentication_configuration',
+          status: 'Success',
+        }),
       ]);
       expect(
         await database.introspection.getTables({
@@ -87,9 +84,11 @@ describe('database migrations', () => {
       ).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ name: 'kysely_migration' }),
+          expect.objectContaining({ name: 'authentication_configuration' }),
           expect.objectContaining({ name: 'lifecycle_events' }),
           expect.objectContaining({ name: 'projects' }),
           expect.objectContaining({ name: 'runs' }),
+          expect.objectContaining({ name: 'sessions' }),
           expect.objectContaining({ name: 'users' }),
           expect.objectContaining({ name: 'work_item_history' }),
           expect.objectContaining({ name: 'work_item_records' }),
@@ -98,11 +97,12 @@ describe('database migrations', () => {
       );
     } finally {
       await database.destroy();
+      await dropSchema(schema);
     }
   });
 
   test('does not change an already-migrated schema', async () => {
-    const schema = schemas[0];
+    const schema = await createSchema();
     const database = createDatabase(databaseUrl, schema);
 
     try {
@@ -116,11 +116,12 @@ describe('database migrations', () => {
       ).toContainEqual(expect.objectContaining({ name: 'users' }));
     } finally {
       await database.destroy();
+      await dropSchema(schema);
     }
   });
 
   test('rejects a failed migration', async () => {
-    const schema = schemas[0];
+    const schema = await createSchema();
     const database = createDatabase(databaseUrl, schema);
 
     try {
@@ -129,11 +130,12 @@ describe('database migrations', () => {
       await expect(migrateToLatest(database, schema)).rejects.toThrow();
     } finally {
       await database.destroy();
+      await dropSchema(schema);
     }
   });
 
   test('refuses direct work-item writes that violate single-row invariants', async () => {
-    const schema = schemas[0];
+    const schema = await createSchema();
     const database = createDatabase(databaseUrl, schema);
     const projectId = crypto.randomUUID();
 
@@ -179,6 +181,7 @@ describe('database migrations', () => {
       ).rejects.toThrow();
     } finally {
       await database.destroy();
+      await dropSchema(schema);
     }
   });
 });

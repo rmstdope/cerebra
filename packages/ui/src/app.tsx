@@ -9,10 +9,17 @@ import {
   type ThemeStorageWriter,
 } from './theme';
 import {
+  AuthenticationRequiredError,
   browserInstanceClient,
   type InstanceClient,
   type InstanceStatus,
 } from './instance';
+import {
+  AuthRequestError,
+  browserAuthClient,
+  type AuthClient,
+  type AuthStatus,
+} from './auth';
 
 export interface ThemeMediaQuery {
   readonly matches: boolean;
@@ -32,6 +39,7 @@ interface AppProps {
   mediaQuery?: ThemeMediaQuery;
   storage?: ThemeStorage;
   instanceClient?: InstanceClient;
+  authClient?: AuthClient;
 }
 
 const preferences: ThemePreference[] = ['light', 'dark', 'system'];
@@ -69,6 +77,7 @@ export function App({
   mediaQuery = getBrowserMediaQuery(),
   storage = getBrowserStorage(),
   instanceClient = browserInstanceClient,
+  authClient = browserAuthClient,
 }: AppProps): ReactNode {
   const [preference, setPreference] = useState<ThemePreference>(() =>
     getInitialPreference(storage),
@@ -79,11 +88,14 @@ export function App({
   const [menuOpen, setMenuOpen] = useState(false);
   const [saveError, setSaveError] = useState(false);
   const [instance, setInstance] = useState<InstanceStatus | null>(null);
+  const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
+  const [authUnavailable, setAuthUnavailable] = useState(false);
   const [instanceError, setInstanceError] = useState<
     'not-running' | 'restart-failed' | null
   >(null);
   const [confirmingUpdate, setConfirmingUpdate] = useState(false);
   const [updating, setUpdating] = useState(false);
+  const [signOutError, setSignOutError] = useState(false);
   const updateButton = useRef<HTMLButtonElement>(null);
   const items = useRef<Record<ThemePreference, HTMLDivElement | null>>({
     light: null,
@@ -107,6 +119,19 @@ export function App({
   }, [effectiveTheme]);
 
   useEffect(() => {
+    void authClient
+      .status()
+      .then((status) => {
+        setAuthStatus(status);
+        setAuthUnavailable(false);
+      })
+      .catch(() => {
+        setAuthStatus({ state: 'unauthenticated', reason: 'signed-out' });
+        setAuthUnavailable(true);
+      });
+  }, [authClient]);
+
+  useEffect(() => {
     if (menuOpen) {
       const timer = window.setTimeout(() => {
         items.current[preference]?.focus();
@@ -123,15 +148,228 @@ export function App({
       const nextInstance = await instanceClient.getStatus();
       setInstance(nextInstance);
       setInstanceError(null);
-    } catch {
+    } catch (error) {
+      if (error instanceof AuthenticationRequiredError) {
+        setAuthStatus({ state: 'unauthenticated', reason: error.reason });
+        return;
+      }
       setInstance(null);
       setInstanceError('not-running');
     }
   };
 
   useEffect(() => {
+    if (authStatus?.state !== 'authenticated') {
+      return;
+    }
     void refreshInstance();
-  }, [instanceClient]);
+  }, [authStatus?.state, instanceClient]);
+
+  if (authStatus?.state !== 'authenticated') {
+    return (
+      <AccessPanel
+        authClient={authClient}
+        initialMode={authStatus?.state === 'setup' ? 'setup' : 'sign-in'}
+        initialUnavailable={authUnavailable}
+        expired={
+          authStatus?.state === 'unauthenticated' &&
+          authStatus.reason === 'expired'
+        }
+        onAuthenticated={() => {
+          setAuthStatus({ state: 'authenticated' });
+          setAuthUnavailable(false);
+        }}
+      />
+    );
+  }
+
+  function AccessPanel({
+    authClient,
+    expired,
+    initialMode,
+    initialUnavailable,
+    onAuthenticated,
+  }: {
+    readonly authClient: AuthClient;
+    readonly expired: boolean;
+    readonly initialMode: 'setup' | 'sign-in';
+    readonly initialUnavailable: boolean;
+    readonly onAuthenticated: () => void;
+  }): ReactNode {
+    const [mode, setMode] = useState(initialMode);
+    const [password, setPassword] = useState('');
+    const [confirmation, setConfirmation] = useState('');
+    const [submitting, setSubmitting] = useState(false);
+    const [error, setError] = useState<
+      'rejected' | 'service' | 'expired' | null
+    >(expired ? 'expired' : initialUnavailable ? 'service' : null);
+    const passwordInput = useRef<HTMLInputElement>(null);
+    const isSetup = mode === 'setup';
+    const passwordValid = password.length >= 8;
+    const confirmationMatches = password === confirmation;
+    const canSubmit =
+      !submitting &&
+      password.length > 0 &&
+      (!isSetup || (passwordValid && confirmationMatches));
+
+    useEffect(() => {
+      passwordInput.current?.focus();
+    }, [error, mode]);
+
+    useEffect(() => {
+      setMode(initialMode);
+      setError(expired ? 'expired' : initialUnavailable ? 'service' : null);
+    }, [expired, initialMode, initialUnavailable]);
+
+    async function submit(
+      event: React.FormEvent<HTMLFormElement>,
+    ): Promise<void> {
+      event.preventDefault();
+      if (!canSubmit) {
+        return;
+      }
+
+      setSubmitting(true);
+      setError(null);
+      try {
+        if (isSetup) {
+          await authClient.setup(password);
+        } else {
+          await authClient.signIn(password);
+        }
+        setPassword('');
+        setConfirmation('');
+        onAuthenticated();
+      } catch (caught) {
+        const requestError =
+          caught instanceof AuthRequestError
+            ? caught
+            : new AuthRequestError(
+                'Cerebra couldn’t sign you in. Check that it is running, then try again.',
+                'service',
+              );
+        if (requestError.reason === 'rejected-password') {
+          setPassword('');
+          setError('rejected');
+        } else {
+          setError('service');
+        }
+      } finally {
+        setSubmitting(false);
+      }
+    }
+
+    return (
+      <main className="mx-auto flex min-h-screen w-full max-w-225 items-center px-5 py-8">
+        <section className="grid w-full overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] shadow-sm md:grid-cols-2">
+          <aside className="bg-[var(--accent-muted)] p-8 md:p-12">
+            <div
+              aria-hidden="true"
+              className="grid size-13 place-items-center rounded-2xl bg-[var(--surface)] text-2xl text-[var(--accent)]"
+            >
+              *
+            </div>
+            <h1 className="mt-6 text-3xl font-bold tracking-tight">
+              Your work, in one private place.
+            </h1>
+            <p className="mt-4 leading-relaxed text-[var(--muted)]">
+              Return to the board, conversations and decisions that keep your
+              projects moving.
+            </p>
+            <p className="mt-8 border-t border-[var(--border)] pt-5 text-sm font-medium text-[var(--muted)]">
+              Private to this computer
+            </p>
+          </aside>
+          <form
+            className="p-8 md:p-12"
+            onSubmit={(event) => void submit(event)}
+          >
+            <h2 className="text-2xl font-bold tracking-tight">
+              {isSetup
+                ? 'Protect Cerebra'
+                : error === 'expired'
+                  ? 'Sign in to continue'
+                  : 'Sign in'}
+            </h2>
+            <p className="mt-2 text-[var(--muted)]">
+              {isSetup
+                ? 'Create a password before you begin.'
+                : 'Enter your password to continue.'}
+            </p>
+            {error === 'rejected' ? (
+              <p className="auth-error" role="alert">
+                That password didn’t match. Try again.
+              </p>
+            ) : error === 'expired' ? (
+              <p className="auth-error auth-expired" role="alert">
+                For your security, please enter your password again.
+              </p>
+            ) : error === 'service' ? (
+              <p className="auth-error" role="alert">
+                Cerebra couldn’t sign you in. Check that it is running, then try
+                again.
+              </p>
+            ) : null}
+            <label className="auth-label" htmlFor="password">
+              Password
+            </label>
+            <input
+              aria-invalid={isSetup && !passwordValid && password.length > 0}
+              className="auth-input"
+              id="password"
+              onChange={(event) => setPassword(event.target.value)}
+              ref={passwordInput}
+              type="password"
+              value={password}
+            />
+            {isSetup ? (
+              <p className="mt-2 text-sm text-[var(--muted)]">
+                Use at least 8 characters.
+              </p>
+            ) : null}
+            {isSetup ? (
+              <>
+                <label className="auth-label" htmlFor="confirmation">
+                  Confirm password
+                </label>
+                <input
+                  aria-invalid={confirmation.length > 0 && !confirmationMatches}
+                  className="auth-input"
+                  id="confirmation"
+                  onChange={(event) => setConfirmation(event.target.value)}
+                  type="password"
+                  value={confirmation}
+                />
+                {confirmation.length > 0 && !confirmationMatches ? (
+                  <p className="mt-2 text-sm text-[var(--danger)]">
+                    Passwords don’t match.
+                  </p>
+                ) : null}
+              </>
+            ) : null}
+            <button
+              className="primary-button mt-6 w-full"
+              disabled={!canSubmit}
+              type="submit"
+            >
+              {submitting
+                ? isSetup
+                  ? 'Creating password…'
+                  : 'Signing in…'
+                : isSetup
+                  ? 'Create password'
+                  : 'Sign in'}
+            </button>
+            {!isSetup ? (
+              <p className="mt-5 text-sm text-[var(--muted)]">
+                You’ll stay signed in here until you sign out.
+              </p>
+            ) : null}
+          </form>
+        </section>
+      </main>
+    );
+  }
 
   async function updateInstance(): Promise<void> {
     setConfirmingUpdate(false);
@@ -139,7 +377,11 @@ export function App({
     try {
       await instanceClient.update();
       await refreshInstance();
-    } catch {
+    } catch (error) {
+      if (error instanceof AuthenticationRequiredError) {
+        setAuthStatus({ state: 'unauthenticated', reason: error.reason });
+        return;
+      }
       setInstance(null);
       setInstanceError('restart-failed');
     } finally {
@@ -225,6 +467,47 @@ export function App({
             </DropdownMenu.Content>
           </DropdownMenu.Portal>
         </DropdownMenu.Root>
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger asChild>
+            <button
+              aria-label="Account"
+              className="ml-2 rounded-lg border border-[var(--control-border)] bg-[var(--surface)] px-3.5 py-2.5 text-sm font-medium shadow-sm outline-none transition-colors focus-visible:ring-3 focus-visible:ring-[var(--focus)] motion-reduce:transition-none sm:text-base"
+              type="button"
+            >
+              Account
+            </button>
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content
+              align="end"
+              className="z-10 mt-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-1.5 shadow-xl outline-none"
+              sideOffset={8}
+            >
+              <DropdownMenu.Item
+                className="rounded-lg px-3 py-2 text-sm font-medium outline-none data-[highlighted]:bg-[var(--accent-muted)] focus-visible:ring-2 focus-visible:ring-[var(--focus)]"
+                onSelect={() => {
+                  void authClient
+                    .signOut()
+                    .then(() => {
+                      setSignOutError(false);
+                      setAuthStatus({
+                        state: 'unauthenticated',
+                        reason: 'signed-out',
+                      });
+                    })
+                    .catch(() => setSignOutError(true));
+                }}
+              >
+                Sign out
+              </DropdownMenu.Item>
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
+        {signOutError ? (
+          <p className="sr-only" role="alert">
+            Cerebra couldn’t sign you out. Try again.
+          </p>
+        ) : null}
       </header>
       <main className="mx-auto w-full max-w-255 px-5 py-10 sm:py-14">
         <p className="text-xs font-extrabold uppercase tracking-widest text-[var(--accent)]">

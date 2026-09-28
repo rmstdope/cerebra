@@ -1,8 +1,10 @@
 import { App, type ThemeMediaQuery } from './app';
+import type { AuthClient } from './auth';
+import { AuthenticationRequiredError } from './instance';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { act } from 'react';
-import { afterEach, describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 
 class FakeMediaQuery implements ThemeMediaQuery {
   public readonly listeners = new Set<(event: MediaQueryListEvent) => void>();
@@ -37,6 +39,13 @@ class FakeMediaQuery implements ThemeMediaQuery {
 
 afterEach(cleanup);
 
+const authenticatedAuth: AuthClient = {
+  setup: async () => undefined,
+  signIn: async () => undefined,
+  signOut: async () => undefined,
+  status: async () => ({ state: 'authenticated' }),
+};
+
 describe('App', () => {
   test('renders the agreed empty state and selects an appearance by keyboard', async () => {
     const user = userEvent.setup();
@@ -46,6 +55,7 @@ describe('App', () => {
     render(
       <App
         mediaQuery={mediaQuery}
+        authClient={authenticatedAuth}
         storage={{
           getItem: (key) => storage.get(key) ?? null,
           setItem: (key, value) => storage.set(key, value),
@@ -62,6 +72,7 @@ describe('App', () => {
       />,
     );
 
+    await screen.findByRole('heading', { name: 'Manage Cerebra' });
     expect(screen.getByText('Cerebra')).toBeTruthy();
     expect(
       screen.getByRole('heading', { name: 'Manage Cerebra' }),
@@ -94,9 +105,51 @@ describe('App', () => {
     expect(storage.get('cerebra.theme')).toBe('dark');
   });
 
+  test('sets up a valid first password and opens the authenticated application', async () => {
+    const user = userEvent.setup();
+    const setup = vi.fn(async () => undefined);
+
+    render(
+      <App
+        authClient={{
+          setup,
+          signIn: async () => undefined,
+          signOut: async () => undefined,
+          status: async () => ({ state: 'setup' }),
+        }}
+        mediaQuery={new FakeMediaQuery(false)}
+      />,
+    );
+
+    expect(
+      await screen.findByRole('heading', { name: 'Protect Cerebra' }),
+    ).toBeTruthy();
+    expect(
+      (
+        screen.getByRole('button', {
+          name: 'Create password',
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+    await user.type(screen.getByLabelText('Password'), 'a password');
+    await user.type(screen.getByLabelText('Confirm password'), 'a password');
+    await user.click(screen.getByRole('button', { name: 'Create password' }));
+
+    expect(setup).toHaveBeenCalledWith('a password');
+    expect(
+      await screen.findByRole('heading', { name: 'Manage Cerebra' }),
+    ).toBeTruthy();
+  });
+
   test('follows a changed system preference while System is selected', () => {
     const mediaQuery = new FakeMediaQuery(false);
-    render(<App mediaQuery={mediaQuery} storage={window.localStorage} />);
+    render(
+      <App
+        authClient={authenticatedAuth}
+        mediaQuery={mediaQuery}
+        storage={window.localStorage}
+      />,
+    );
 
     expect(document.documentElement.dataset.theme).toBe('light');
     act(() => mediaQuery.update(true));
@@ -112,8 +165,16 @@ describe('App', () => {
       },
     };
 
-    render(<App mediaQuery={new FakeMediaQuery(false)} storage={storage} />);
-    await user.click(screen.getByRole('button', { name: 'Theme: System' }));
+    render(
+      <App
+        authClient={authenticatedAuth}
+        mediaQuery={new FakeMediaQuery(false)}
+        storage={storage}
+      />,
+    );
+    await user.click(
+      await screen.findByRole('button', { name: 'Theme: System' }),
+    );
     await user.click(screen.getByRole('menuitemradio', { name: 'Dark' }));
 
     expect(screen.getByRole('menu')).toBeTruthy();
@@ -134,8 +195,15 @@ describe('App', () => {
     });
 
     try {
-      render(<App mediaQuery={new FakeMediaQuery(false)} />);
-      await user.click(screen.getByRole('button', { name: 'Theme: System' }));
+      render(
+        <App
+          authClient={authenticatedAuth}
+          mediaQuery={new FakeMediaQuery(false)}
+        />,
+      );
+      await user.click(
+        await screen.findByRole('button', { name: 'Theme: System' }),
+      );
       await user.click(screen.getByRole('menuitemradio', { name: 'Dark' }));
 
       expect(document.documentElement.dataset.theme).toBe('dark');
@@ -145,5 +213,54 @@ describe('App', () => {
     } finally {
       Object.defineProperty(window, 'localStorage', descriptor!);
     }
+  });
+
+  test('returns to sign-in when a protected request finds an expired session', async () => {
+    render(
+      <App
+        authClient={authenticatedAuth}
+        instanceClient={{
+          getStatus: async () => {
+            throw new AuthenticationRequiredError('expired');
+          },
+          update: async () => undefined,
+        }}
+        mediaQuery={new FakeMediaQuery(false)}
+      />,
+    );
+
+    expect(
+      await screen.findByRole('heading', { name: 'Sign in to continue' }),
+    ).toBeTruthy();
+    expect(
+      screen.getByText('For your security, please enter your password again.'),
+    ).toBeTruthy();
+  });
+
+  test('keeps access open and explains a failed sign-out', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <App
+        authClient={{
+          ...authenticatedAuth,
+          signOut: async () => {
+            throw new Error('Network error');
+          },
+        }}
+        mediaQuery={new FakeMediaQuery(false)}
+      />,
+    );
+
+    await screen.findByRole('heading', { name: 'Manage Cerebra' });
+    await user.click(screen.getByRole('button', { name: 'Account' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Sign out' }));
+
+    expect(
+      await screen.findByRole('heading', { name: 'Manage Cerebra' }),
+    ).toBeTruthy();
+    expect(screen.getByRole('alert').textContent).toBe(
+      'Cerebra couldn’t sign you out. Try again.',
+    );
   });
 });
