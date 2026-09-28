@@ -1,7 +1,9 @@
 import {
   createServer,
+  GitHubAccessError,
   startServer,
   type InstanceService,
+  type ProjectRegistration,
 } from '@cerebra/backend';
 import { createServer as createNodeServer } from 'node:net';
 import { afterEach, expect, test } from 'vitest';
@@ -81,6 +83,70 @@ test('reports an unavailable update explicitly', async () => {
   expect(response.statusCode).toBe(503);
   expect(response.json()).toEqual({
     error: 'The local update command is unavailable.',
+  });
+});
+
+test('discovers a GitHub project without returning its credential', async () => {
+  const projects: ProjectRegistration = {
+    discover: async () => ({
+      defaultBranch: 'main',
+      name: 'website',
+      owner: 'acme',
+      prefix: 'WEBSITE',
+      remote: 'https://github.com/acme/website.git',
+    }),
+    register: async () => {
+      throw new Error('Not exercised');
+    },
+  };
+  const server = await createServer({ projects });
+  servers.push(server);
+
+  const response = await server.inject({
+    method: 'POST',
+    payload: {
+      credential: 'secret-token',
+      remote: 'https://github.com/acme/website',
+    },
+    url: '/api/projects/discover',
+  });
+
+  expect(response.statusCode).toBe(200);
+  expect(response.json()).toEqual({
+    defaultBranch: 'main',
+    name: 'website',
+    owner: 'acme',
+    prefix: 'WEBSITE',
+    remote: 'https://github.com/acme/website.git',
+  });
+  expect(response.body).not.toContain('secret-token');
+});
+
+test('reports inaccessible GitHub projects explicitly', async () => {
+  const projects: ProjectRegistration = {
+    discover: async () => {
+      throw new GitHubAccessError();
+    },
+    register: async () => {
+      throw new Error('Not exercised');
+    },
+  };
+  const server = await createServer({ projects });
+  servers.push(server);
+
+  const response = await server.inject({
+    method: 'POST',
+    payload: {
+      credential: 'secret-token',
+      remote: 'https://github.com/acme/website',
+    },
+    url: '/api/projects/discover',
+  });
+
+  expect(response.statusCode).toBe(401);
+  expect(response.json()).toEqual({
+    error:
+      'GitHub rejected the access token or it cannot read this repository.',
   });
 });
 

@@ -20,6 +20,7 @@ import {
   type AuthClient,
   type AuthStatus,
 } from './auth';
+import { ProjectRegistration } from './project-registration';
 
 export interface ThemeMediaQuery {
   readonly matches: boolean;
@@ -519,6 +520,9 @@ export function App({
         <p className="mt-1 text-[var(--muted)]">
           Your private workspace is available only on this computer.
         </p>
+        <div className="mt-7">
+          <ProjectRegistration />
+        </div>
         {instance === null && instanceError !== 'restart-failed' ? (
           <section className="mt-7 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6 shadow-sm">
             <h2 className="text-lg font-bold">Cerebra isn’t running</h2>
