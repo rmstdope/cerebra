@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Option A - Board with detail panel</title>
+<style>
+:root { color: #172033; background: #f6f8fc; font-family: Inter, ui-sans-serif, system-ui, sans-serif; } * { box-sizing: border-box; } body { margin: 0; } button, input { font: inherit; } button { cursor: pointer; } button:focus-visible, input:focus-visible { outline: 3px solid #5a43d6; outline-offset: 3px; }
+header { height: 64px; display: flex; align-items: center; justify-content: space-between; padding: 0 max(24px, 5vw); background: #fff; border-bottom: 1px solid #dfe5ef; } .brand { font-size: 19px; font-weight: 760; } .project { color: #536078; font-size: 14px; } main { max-width: 1280px; margin: auto; padding: 32px 24px 56px; } .heading { display: flex; align-items: end; justify-content: space-between; gap: 16px; margin-bottom: 22px; } h1 { margin: 0; font-size: clamp(28px, 4vw, 38px); letter-spacing: -.04em; } .lede { margin: 6px 0 0; color: #5c6880; } .primary { border: 0; border-radius: 9px; padding: 11px 15px; background: #4934b5; color: white; font-weight: 720; white-space: nowrap; }
+.filters { display: flex; gap: 10px; margin-bottom: 18px; } .search { flex: 1; max-width: 360px; border: 1px solid #bfc8d8; border-radius: 9px; padding: 10px 12px; background: #fff; } .filter { border: 1px solid #bfc8d8; border-radius: 9px; padding: 10px 12px; color: #36435c; background: #fff; } .layout { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(330px, .85fr); gap: 20px; } .board, .detail { border: 1px solid #dfe5ef; border-radius: 14px; background: #fff; box-shadow: 0 1px 2px #17203308; } .board-head { display: flex; justify-content: space-between; align-items: center; padding: 17px 18px; border-bottom: 1px solid #e8ecf2; } h2 { margin: 0; font-size: 16px; } .count { color: #68758b; font-size: 13px; }
+.row { display: grid; grid-template-columns: auto 1fr auto; gap: 12px; align-items: center; padding: 15px 18px; border-bottom: 1px solid #edf0f5; } .row.active { background: #f2efff; box-shadow: inset 3px 0 #503bbf; } .priority { display: grid; place-items: center; width: 35px; height: 28px; border-radius: 7px; background: #fff2c8; color: #765800; font-size: 12px; font-weight: 800; } .name { display: block; font-size: 14px; font-weight: 700; } .meta { display: block; margin-top: 3px; color: #68758b; font-size: 12px; } .state { border-radius: 99px; padding: 5px 8px; background: #e9efff; color: #2850b1; font-size: 12px; font-weight: 740; } .new { background: #fff0c7; color: #785900; }
+.detail { overflow: hidden; } .detail-top { padding: 20px; border-bottom: 1px solid #e8ecf2; } .eyebrow { color: #68758b; font-size: 12px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; } h3 { margin: 7px 0; font-size: 19px; letter-spacing: -.02em; } .detail p { margin: 0; color: #526078; font-size: 14px; line-height: 1.5; } .tabs { display: flex; gap: 18px; padding: 0 20px; border-bottom: 1px solid #e8ecf2; } .tab { padding: 12px 0; color: #5d6980; font-size: 13px; font-weight: 700; } .tab.active { border-bottom: 2px solid #503bbf; color: #34258a; } .triage { padding: 20px; } .triage h4 { margin: 0 0 6px; font-size: 16px; } .options { display: grid; gap: 8px; margin: 14px 0; } .choice { padding: 11px; border: 1px solid #cbd3e1; border-radius: 9px; background: #fff; text-align: left; } .choice.selected { border-color: #6b59ca; background: #f4f1ff; } .choice strong, .choice span { display: block; } .choice span { margin-top: 3px; color: #5c6880; font-size: 12px; } .actions { display: flex; gap: 9px; } .secondary { border: 1px solid #bfc8d8; border-radius: 9px; padding: 10px 12px; background: #fff; color: #26344c; font-weight: 700; } .danger { margin-top: 20px; color: #b42318; font-size: 13px; font-weight: 700; }
+@media (max-width: 820px) { main { padding: 24px 16px; } .layout { grid-template-columns: 1fr; } .detail { order: -1; } } @media (max-width: 520px) { header { padding: 0 16px; } .heading { align-items: start; flex-direction: column; } .filters { flex-wrap: wrap; } .search { min-width: 100%; } }
+</style>
+</head>
+<body>
+<header><strong class="brand">Cerebra</strong><span class="project">acme/web-app</span></header>
+<main>
+  <div class="heading"><div><h1>Project board</h1><p class="lede">See what is waiting, in progress and finished.</p></div><button class="primary">Add work item</button></div>
+  <div class="filters"><input class="search" aria-label="Search work items" placeholder="Search work items"><button class="filter">All states</button><button class="filter">All priorities</button></div>
+  <div class="layout">
+    <section class="board" aria-label="Work items"><div class="board-head"><h2>Work items</h2><span class="count">12 items</span></div>
+      <article class="row active"><span class="priority">—</span><span><strong class="name">Show a clearer delivery summary</strong><span class="meta">Filed today</span></span><span class="state new">Needs triage</span></article>
+      <article class="row"><span class="priority">P1</span><span><strong class="name">Let people choose the appearance</strong><span class="meta">Waiting for design</span></span><span class="state">Design</span></article>
+      <article class="row"><span class="priority">P2</span><span><strong class="name">Register a project with guided steps</strong><span class="meta">Storm is building</span></span><span class="state">Building</span></article>
+      <article class="row"><span class="priority">P2</span><span><strong class="name">Show activity after a pull request opens</strong><span class="meta">Ready for review</span></span><span class="state">Review</span></article>
+    </section>
+    <aside class="detail" aria-label="Selected work item">
+      <div class="detail-top"><div class="eyebrow">New work item</div><h3>Show a clearer delivery summary</h3><p>People need to understand what has happened and what comes next without reading a long activity trail.</p></div>
+      <nav class="tabs" aria-label="Selected work item sections"><span class="tab active">Overview</span><span class="tab">Discussion</span><span class="tab">History</span></nav>
+      <section class="triage"><h4>Choose what happens next</h4><p>Set a priority and send this work to the right next step.</p><div class="options"><button class="choice selected"><strong>Groom the outcome</strong><span>Clarify the intended result before anyone designs it.</span></button><button class="choice"><strong>Send to design</strong><span>The intended result is already clear.</span></button><button class="choice"><strong>Send to build</strong><span>It can be built without a design session.</span></button></div><div class="actions"><button class="primary">Set priority and continue</button><button class="secondary">Save for later</button></div><button class="danger">Cancel this work item</button></section>
+    </aside>
+  </div>
+</main>
+</body>
+</html>
