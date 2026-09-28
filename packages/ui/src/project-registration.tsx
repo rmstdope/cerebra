@@ -95,7 +95,10 @@ export function ProjectRegistration({
         <div className="mt-6 flex gap-3">
           <button
             className="secondary-button"
-            onClick={() => setDiscovery(null)}
+            onClick={() => {
+              setCreationFailed(false);
+              setDiscovery(null);
+            }}
             type="button"
           >
             Cancel
