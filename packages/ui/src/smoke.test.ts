@@ -1,4 +1,4 @@
-import { packageName } from './package.js';
+import { packageName } from '@cerebra/ui';
 import { expect, test } from 'vitest';
 
 test('identifies the UI package', () => {

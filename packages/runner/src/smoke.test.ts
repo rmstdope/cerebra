@@ -1,4 +1,4 @@
-import { packageName } from './index.js';
+import { packageName } from '@cerebra/runner';
 import { expect, test } from 'vitest';
 
 test('identifies the runner package', () => {
