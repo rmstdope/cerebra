@@ -1,4 +1,8 @@
-import { createServer, startServer } from '@cerebra/backend';
+import {
+  createServer,
+  startServer,
+  type InstanceService,
+} from '@cerebra/backend';
 import { createServer as createNodeServer } from 'node:net';
 import { afterEach, expect, test } from 'vitest';
 
@@ -16,6 +20,55 @@ test('serves a health response', async () => {
 
   expect(response.statusCode).toBe(200);
   expect(response.json()).toEqual({ status: 'ok' });
+});
+
+test('serves truthful local instance status', async () => {
+  const server = await createServer({
+    instance: {
+      getStatus: () => ({
+        address: 'http://localhost:4317',
+        lastUpdatedAt: '2026-09-28T20:00:00.000Z',
+        version: '0.0.0',
+      }),
+      requestUpdate: async () => ({ ok: true }),
+    },
+  });
+  servers.push(server);
+
+  const response = await server.inject('/api/instance');
+
+  expect(response.statusCode).toBe(200);
+  expect(response.json()).toEqual({
+    address: 'http://localhost:4317',
+    lastUpdatedAt: '2026-09-28T20:00:00.000Z',
+    status: 'running',
+    version: '0.0.0',
+  });
+});
+
+test('reports an unavailable update explicitly', async () => {
+  const instance: InstanceService = {
+    getStatus: () => ({
+      address: 'http://localhost:4317',
+      lastUpdatedAt: '2026-09-28T20:00:00.000Z',
+      version: '0.0.0',
+    }),
+    requestUpdate: async () => {
+      throw new Error('The local update command is unavailable.');
+    },
+  };
+  const server = await createServer({ instance });
+  servers.push(server);
+
+  const response = await server.inject({
+    method: 'POST',
+    url: '/api/instance/update',
+  });
+
+  expect(response.statusCode).toBe(503);
+  expect(response.json()).toEqual({
+    error: 'The local update command is unavailable.',
+  });
 });
 
 test('starts and stops cleanly', async () => {

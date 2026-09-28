@@ -1,3 +1,4 @@
+import { sql } from 'kysely';
 import { Pool } from 'pg';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
@@ -74,6 +75,10 @@ describe('database migrations', () => {
           migrationName: '20260928190000_create_users',
           status: 'Success',
         }),
+        expect.objectContaining({
+          migrationName: '20260928210000_create_lifecycle',
+          status: 'Success',
+        }),
       ]);
       expect(
         await database.introspection.getTables({
@@ -82,7 +87,13 @@ describe('database migrations', () => {
       ).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ name: 'kysely_migration' }),
+          expect.objectContaining({ name: 'lifecycle_events' }),
+          expect.objectContaining({ name: 'projects' }),
+          expect.objectContaining({ name: 'runs' }),
           expect.objectContaining({ name: 'users' }),
+          expect.objectContaining({ name: 'work_item_history' }),
+          expect.objectContaining({ name: 'work_item_records' }),
+          expect.objectContaining({ name: 'work_items' }),
         ]),
       );
     } finally {
@@ -116,6 +127,56 @@ describe('database migrations', () => {
       await database.schema.createTable('users').execute();
 
       await expect(migrateToLatest(database, schema)).rejects.toThrow();
+    } finally {
+      await database.destroy();
+    }
+  });
+
+  test('refuses direct work-item writes that violate single-row invariants', async () => {
+    const schema = schemas[0];
+    const database = createDatabase(databaseUrl, schema);
+    const projectId = crypto.randomUUID();
+
+    try {
+      await migrateToLatest(database, schema);
+      await sql`
+        INSERT INTO projects (id, name)
+        VALUES (${projectId}, 'Lifecycle test project')
+      `.execute(database);
+
+      await expect(
+        sql`
+          INSERT INTO work_items (id, project_id, state, priority)
+          VALUES (${crypto.randomUUID()}, ${projectId}, 'building', 'P1')
+        `.execute(database),
+      ).rejects.toThrow();
+
+      await expect(
+        sql`
+          INSERT INTO work_items (id, project_id, state, priority, waiting_kind)
+          VALUES (
+            ${crypto.randomUUID()},
+            ${projectId},
+            'waiting',
+            'P1',
+            'question'
+          )
+        `.execute(database),
+      ).rejects.toThrow();
+
+      await expect(
+        sql`
+          INSERT INTO work_items (id, project_id, state, priority)
+          VALUES (${crypto.randomUUID()}, ${projectId}, 'new', 'P1')
+        `.execute(database),
+      ).rejects.toThrow();
+
+      await expect(
+        sql`
+          INSERT INTO work_items (id, project_id, state, priority)
+          VALUES (${crypto.randomUUID()}, ${projectId}, 'not_a_state', 'P1')
+        `.execute(database),
+      ).rejects.toThrow();
     } finally {
       await database.destroy();
     }
