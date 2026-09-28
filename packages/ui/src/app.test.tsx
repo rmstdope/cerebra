@@ -110,10 +110,33 @@ describe('App', () => {
     await user.click(screen.getByRole('menuitemradio', { name: 'Dark' }));
 
     expect(screen.getByRole('menu')).toBeTruthy();
-    expect(
-      screen.getByText(
+    expect(screen.getByRole('alert').textContent).toBe(
+      'Cerebra couldn’t save that appearance choice. It will reset when you close this page.',
+    );
+  });
+
+  test('applies an appearance for the current visit when browser storage is unavailable', async () => {
+    const user = userEvent.setup();
+    const descriptor = Object.getOwnPropertyDescriptor(window, 'localStorage');
+
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      get: () => {
+        throw new DOMException('Storage is unavailable', 'SecurityError');
+      },
+    });
+
+    try {
+      render(<App mediaQuery={new FakeMediaQuery(false)} />);
+      await user.click(screen.getByRole('button', { name: 'Theme: System' }));
+      await user.click(screen.getByRole('menuitemradio', { name: 'Dark' }));
+
+      expect(document.documentElement.dataset.theme).toBe('dark');
+      expect(screen.getByRole('alert').textContent).toBe(
         'Cerebra couldn’t save that appearance choice. It will reset when you close this page.',
-      ),
-    ).toBeTruthy();
+      );
+    } finally {
+      Object.defineProperty(window, 'localStorage', descriptor!);
+    }
   });
 });

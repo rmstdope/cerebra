@@ -30,12 +30,25 @@ interface AppProps {
 
 const preferences: ThemePreference[] = ['light', 'dark', 'system'];
 
+const unavailableStorage: ThemeStorage = {
+  getItem: () => {
+    throw new Error('Storage is unavailable');
+  },
+  setItem: () => {
+    throw new Error('Storage is unavailable');
+  },
+};
+
 function getBrowserMediaQuery(): ThemeMediaQuery {
   return window.matchMedia('(prefers-color-scheme: dark)');
 }
 
 function getBrowserStorage(): ThemeStorage {
-  return window.localStorage;
+  try {
+    return window.localStorage;
+  } catch {
+    return unavailableStorage;
+  }
 }
 
 function getInitialPreference(storage: ThemeStorage): ThemePreference {
@@ -158,7 +171,10 @@ export function App({
                 ))}
               </DropdownMenu.RadioGroup>
               {saveError ? (
-                <p className="px-2.5 pb-1.5 pt-2 text-xs font-semibold leading-snug text-[var(--danger)]">
+                <p
+                  className="px-2.5 pb-1.5 pt-2 text-xs font-semibold leading-snug text-[var(--danger)]"
+                  role="alert"
+                >
                   Cerebra couldn’t save that appearance choice. It will reset
                   when you close this page.
                 </p>
