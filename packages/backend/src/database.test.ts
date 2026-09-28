@@ -66,7 +66,12 @@ describe('database migrations', () => {
         await database.introspection.getTables({
           withInternalKyselyTables: true,
         }),
-      ).toContainEqual(expect.objectContaining({ name: 'users' }));
+      ).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: 'kysely_migration' }),
+          expect.objectContaining({ name: 'users' }),
+        ]),
+      );
     } finally {
       await database.destroy();
     }
