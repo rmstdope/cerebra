@@ -62,6 +62,8 @@ export async function runStreamInput({ createQuery, write }) {
   let completed = false;
 
   for await (const message of query) {
+    const externalMessageWasSent = sent;
+
     if (startedInTurnOperation(message) && !sent) {
       inTurnOperationStarted = true;
       write('STREAM_INPUT_READY');
@@ -70,7 +72,10 @@ export async function runStreamInput({ createQuery, write }) {
       sent = true;
     }
 
-    if (assistantText(message).includes(EXTERNAL_MESSAGE_ACKNOWLEDGEMENT)) {
+    if (
+      externalMessageWasSent &&
+      assistantText(message) === EXTERNAL_MESSAGE_ACKNOWLEDGEMENT
+    ) {
       write(EXTERNAL_MESSAGE_ACKNOWLEDGEMENT);
       acknowledged = true;
     }

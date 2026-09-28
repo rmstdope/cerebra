@@ -89,3 +89,27 @@ test('fails when the SDK session completes before it starts its in-turn operatio
     /did not start its in-turn operation/,
   );
 });
+
+test('does not accept an acknowledgement marker from the event that triggers delivery', async () => {
+  const query = {
+    async streamInput() {},
+    async *[Symbol.asyncIterator]() {
+      yield { type: 'system', subtype: 'init' };
+      yield {
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'tool_use', name: 'Bash' },
+            { type: 'text', text: EXTERNAL_MESSAGE_ACKNOWLEDGEMENT },
+          ],
+        },
+      };
+      yield { type: 'result', subtype: 'success' };
+    },
+  };
+
+  await assert.rejects(
+    runStreamInput({ createQuery: () => query, write: () => {} }),
+    /did not acknowledge the external message/,
+  );
+});
