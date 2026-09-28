@@ -11,6 +11,32 @@ is shown as a structured chat the navigator can talk into.
 
 **Status:** designed, not yet built. The documents are the whole of it so far.
 
+## Development
+
+Use Node `v26.9.0`, pinned in [`.nvmrc`](.nvmrc), and pnpm `11.24.0`:
+
+```bash
+pnpm install --frozen-lockfile
+pnpm run check
+```
+
+`pnpm run check` runs linting, formatting checks, strict TypeScript checking, package builds, and
+Vitest tests across the workspace. It is the same command CI runs on Ubuntu.
+
+Database tests join this gate as backend behaviour is added. They require `DATABASE_URL` to point
+at a real Postgres instance; no test in the initial workspace fakes a successful database
+connection.
+
+The workspace packages are:
+
+- `packages/shared` — shared protocol, schema, API-type, and lifecycle foundations.
+- `packages/backend` — the Fastify and Postgres service.
+- `packages/runner` — the agent runtime protocol adapter.
+- `packages/ui` — the React/Vite web interface.
+
+[`images/`](images/) is reserved for Containerfiles and [`spikes/`](spikes/) for throwaway
+experiments.
+
 ## Documents
 
 Read them in this order:

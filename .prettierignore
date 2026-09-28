@@ -1,0 +1,8 @@
+.cerebro/
+.beads/
+CLAUDE.md
+docs/
+node_modules/
+packages/*/dist/
+packages/*/dist-types/
+pnpm-lock.yaml
