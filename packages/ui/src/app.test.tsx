@@ -50,24 +50,31 @@ describe('App', () => {
           getItem: (key) => storage.get(key) ?? null,
           setItem: (key, value) => storage.set(key, value),
         }}
+        instanceClient={{
+          getStatus: async () => ({
+            address: 'http://localhost:4317',
+            lastUpdatedAt: '2026-09-28T20:00:00.000Z',
+            status: 'running',
+            version: '0.0.0',
+          }),
+          update: async () => undefined,
+        }}
       />,
     );
 
     expect(screen.getByText('Cerebra')).toBeTruthy();
     expect(
-      screen.getByRole('heading', { name: 'Welcome to Cerebra' }),
+      screen.getByRole('heading', { name: 'Manage Cerebra' }),
     ).toBeTruthy();
     expect(
       screen.getByText(
-        'There is nothing to review yet. Add your first project to start organising work here.',
+        'Your private workspace is available only on this computer.',
       ),
     ).toBeTruthy();
-    expect(screen.getByText('No projects have been added')).toBeTruthy();
     expect(
-      screen.getByText(
-        'Your projects and any work waiting for you will appear in this space.',
-      ),
+      await screen.findByRole('heading', { name: 'Instance status' }),
     ).toBeTruthy();
+    expect(screen.getByText('Update Cerebra')).toBeTruthy();
 
     screen.getByRole('button', { name: 'Theme: System' });
     await user.keyboard('{Tab}{ArrowDown}');
