@@ -12,7 +12,8 @@
     "check": "pnpm run lint && pnpm run format:check && pnpm run test",
     "format:check": "prettier --check .",
     "lint": "eslint .",
-    "test": "pnpm run build && vitest run",
+    "test": "node scripts/test-database.mjs pnpm run test:vitest",
+    "test:vitest": "pnpm run build && vitest run",
     "typecheck": "tsc -b --pretty false"
   },
   "devDependencies": {
