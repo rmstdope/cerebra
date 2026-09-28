@@ -10,6 +10,17 @@ import {
 async function* successfulMessages() {
   yield {
     type: 'assistant',
+    message: {
+      content: [
+        {
+          type: 'tool_use',
+          name: 'mcp__external__read_external_result',
+        },
+      ],
+    },
+  };
+  yield {
+    type: 'assistant',
     message: { content: [{ type: 'text', text: MCP_TOOL_RESULT }] },
   };
   yield { type: 'result', subtype: 'success' };
@@ -46,16 +57,20 @@ test('requires Claude to receive the external MCP tool result before succeeding'
   assert.deepEqual(markers, ['MCP_TOOL_RESULT_RECEIVED', 'SPIKE_COMPLETE']);
 });
 
-test('fails if Claude completes without receiving the external MCP tool result', async () => {
+test('fails if Claude emits the result marker without calling the external MCP tool', async () => {
   await assert.rejects(
     runMcpToolCall({
       bearerToken: 'run-token',
       createQuery: () =>
         (async function* () {
+          yield {
+            type: 'assistant',
+            message: { content: [{ type: 'text', text: MCP_TOOL_RESULT }] },
+          };
           yield { type: 'result', subtype: 'success' };
         })(),
       write: () => {},
     }),
-    /Claude did not receive the external MCP tool result/,
+    /Claude did not call the external MCP tool/,
   );
 });

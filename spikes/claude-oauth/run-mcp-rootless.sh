@@ -4,10 +4,14 @@ set -euo pipefail
 readonly image_name='localhost/cerebra-claude-oauth-spike:latest'
 readonly network_name="cerebra-mcp-spike-$$"
 readonly server_name="cerebra-mcp-tool-server-$$"
+server_output=''
 
 cleanup() {
   podman rm --force "$server_name" >/dev/null 2>&1 || true
   podman network rm "$network_name" >/dev/null 2>&1 || true
+  if [[ "$server_output" != '' ]]; then
+    rm -f "$server_output"
+  fi
 }
 
 trap cleanup EXIT
@@ -43,4 +47,7 @@ podman run --rm --network "$network_name" --read-only \
   --security-opt no-new-privileges --cap-drop all --tmpfs /tmp \
   --tmpfs /home/node/.claude --env CLAUDE_CODE_OAUTH_TOKEN \
   --env MCP_BEARER_TOKEN "$image_name" npm run start:mcp-tool-call
-podman logs "$server_name"
+server_output="$(mktemp)"
+podman logs "$server_name" >"$server_output"
+grep --quiet --line-regexp 'MCP_TOOL_CALLED' "$server_output"
+cat "$server_output"

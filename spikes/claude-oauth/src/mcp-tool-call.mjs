@@ -19,6 +19,18 @@ function assistantText(message) {
     .join('\n');
 }
 
+function usedExternalMcpTool(message) {
+  return (
+    message.type === 'assistant' &&
+    Array.isArray(message.message?.content) &&
+    message.message.content.some(
+      (content) =>
+        content.type === 'tool_use' &&
+        content.name === 'mcp__external__read_external_result',
+    )
+  );
+}
+
 export function createMcpToolCallOptions(bearerToken) {
   if (typeof bearerToken !== 'string' || bearerToken === '') {
     throw new Error('MCP_BEARER_TOKEN must be set before running this spike.');
@@ -38,6 +50,7 @@ export function createMcpToolCallOptions(bearerToken) {
 }
 
 export async function runMcpToolCall({ bearerToken, createQuery, write }) {
+  let calledTool = false;
   let receivedResult = false;
   let completed = false;
 
@@ -45,10 +58,14 @@ export async function runMcpToolCall({ bearerToken, createQuery, write }) {
     prompt,
     options: createMcpToolCallOptions(bearerToken),
   })) {
+    calledTool ||= usedExternalMcpTool(message);
     receivedResult ||= assistantText(message).trim() === MCP_TOOL_RESULT;
     completed ||= message.type === 'result' && message.subtype === 'success';
   }
 
+  if (!calledTool) {
+    throw new Error('Claude did not call the external MCP tool.');
+  }
   if (!receivedResult) {
     throw new Error('Claude did not receive the external MCP tool result.');
   }
