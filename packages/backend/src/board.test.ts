@@ -182,11 +182,8 @@ describe('board lifecycle mutations', () => {
           .executeTakeFirstOrThrow(),
       ).toMatchObject({ holder_run_id: expect.any(String), state: 'building' });
       expect(
-        await database
-          .selectFrom('runs')
-          .select(({ fn }) => fn.countAll<number>().as('count'))
-          .executeTakeFirstOrThrow(),
-      ).toEqual({ count: 1 });
+        await database.selectFrom('runs').select('id').execute(),
+      ).toHaveLength(1);
     } finally {
       await database.destroy();
     }

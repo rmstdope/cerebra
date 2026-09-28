@@ -75,6 +75,10 @@ describe('database migrations', () => {
           migrationName: '20260928190000_create_users',
           status: 'Success',
         }),
+        expect.objectContaining({
+          migrationName: '20260928210000_create_lifecycle',
+          status: 'Success',
+        }),
       ]);
       expect(
         await database.introspection.getTables({
