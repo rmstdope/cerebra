@@ -50,6 +50,15 @@ describe('App', () => {
           getItem: (key) => storage.get(key) ?? null,
           setItem: (key, value) => storage.set(key, value),
         }}
+        instanceClient={{
+          getStatus: async () => ({
+            address: 'http://localhost:4317',
+            lastUpdatedAt: '2026-09-28T20:00:00.000Z',
+            status: 'running',
+            version: '0.0.0',
+          }),
+          update: async () => undefined,
+        }}
       />,
     );
 
@@ -63,7 +72,7 @@ describe('App', () => {
       ),
     ).toBeTruthy();
     expect(
-      screen.getByRole('heading', { name: 'Instance status' }),
+      await screen.findByRole('heading', { name: 'Instance status' }),
     ).toBeTruthy();
     expect(screen.getByText('Update Cerebra')).toBeTruthy();
 

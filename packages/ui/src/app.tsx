@@ -236,7 +236,7 @@ export function App({
         <p className="mt-1 text-[var(--muted)]">
           Your private workspace is available only on this computer.
         </p>
-        {instanceError === 'not-running' ? (
+        {instance === null && instanceError !== 'restart-failed' ? (
           <section className="mt-7 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6 shadow-sm">
             <h2 className="text-lg font-bold">Cerebra isn’t running</h2>
             <p className="mt-2 text-[var(--muted)]">
@@ -365,6 +365,7 @@ export function App({
         </section>
         {confirmingUpdate ? (
           <div
+            aria-labelledby="update-title"
             aria-modal="true"
             className="fixed inset-0 grid place-items-center bg-black/40 p-5"
             onKeyDown={(event) => {
@@ -372,11 +373,27 @@ export function App({
                 setConfirmingUpdate(false);
                 updateButton.current?.focus();
               }
+              if (event.key === 'Tab') {
+                const buttons = Array.from(
+                  event.currentTarget.querySelectorAll<HTMLButtonElement>(
+                    'button',
+                  ),
+                );
+                const first = buttons[0];
+                const last = buttons.at(-1);
+                if (event.shiftKey && document.activeElement === first) {
+                  event.preventDefault();
+                  last?.focus();
+                } else if (!event.shiftKey && document.activeElement === last) {
+                  event.preventDefault();
+                  first?.focus();
+                }
+              }
             }}
             role="dialog"
           >
             <section className="card w-full max-w-md">
-              <h2>Update Cerebra?</h2>
+              <h2 id="update-title">Update Cerebra?</h2>
               <p className="mt-3 text-[var(--muted)]">
                 The latest version will be installed and Cerebra will restart.
               </p>

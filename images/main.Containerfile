@@ -2,7 +2,7 @@ FROM node:26-bookworm-slim AS build
 WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.json ./
 COPY packages ./packages
-RUN corepack enable && pnpm install --frozen-lockfile && pnpm --filter @cerebra/ui build
+RUN corepack enable && pnpm install --frozen-lockfile && pnpm run build
 
 FROM node:26-bookworm-slim
 WORKDIR /app
