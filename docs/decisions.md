@@ -125,6 +125,15 @@ Confirmed by the navigator during project definition on 2026-09-28, subject to t
 in `roadmap.md` step 3. This is the chosen architecture, not a claim that SDK compatibility has
 already been demonstrated; the spike must confirm it or revise this decision before it is built on.
 
+**Spike evidence (2026-09-28):** `spikes/claude-oauth/` contains the reproducible first runtime
+probe: a rootless Podman image with Node, the Claude CLI and the Agent SDK, using the SDK's normal
+mode and forwarding only `CLAUDE_CODE_OAUTH_TOKEN`. It asks the model to call
+`AskUserQuestion`; `canUseTool` supplies the answer and the process emits only two non-secret
+success markers. The attempt on the navigator's Mac stopped before image build because `podman`
+is not installed (`podman: command not found`), so this does **not** yet confirm D16. On a host
+with rootless Podman and a token exported from `claude setup-token`, run
+`spikes/claude-oauth/run-rootless.sh`; its expected markers are documented beside the spike.
+
 ### D17. A named agent is an identity with a memory — decided
 
 Each named agent in a project keeps its own home directory and CLI state across runs: the
@@ -155,6 +164,11 @@ The model credential for the `claude` backend is a `CLAUDE_CODE_OAUTH_TOKEN` fro
 use; an API key is not designed for (it would be the same secret slot if ever wanted). Consequence:
 the runner must not use the SDK's bare mode, which ignores that token. Copilot runs on a
 fine-grained personal PAT with the "Copilot Requests" permission, billed to that seat.
+
+**Spike evidence (2026-09-28):** the OAuth-only probe described in D16 was prepared without an
+API-key fallback and explicitly leaves bare mode disabled. Its real rootless-container run is
+blocked on this Mac because Podman is absent, before the token is read or emitted. D20 remains
+unconfirmed until the documented command runs successfully on a rootless-Podman host.
 
 ### D21. The backend is TypeScript on Node — decided
 
