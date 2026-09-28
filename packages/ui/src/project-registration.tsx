@@ -18,6 +18,7 @@ export function ProjectRegistration({
   const [project, setProject] = useState<RegisteredProject | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const [creationFailed, setCreationFailed] = useState(false);
 
   async function discover(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -32,6 +33,8 @@ export function ProjectRegistration({
           ? failure.message
           : 'GitHub couldn’t open this repository',
       );
+    } finally {
+      setCredential('');
     }
   }
 
@@ -48,8 +51,10 @@ export function ProjectRegistration({
           ? failure.message
           : 'Cerebra couldn’t create a private working copy of this repository.',
       );
+      setCreationFailed(true);
     } finally {
       setAdding(false);
+      setCredential('');
     }
   }
 
@@ -72,6 +77,40 @@ export function ProjectRegistration({
         <button className="primary-button mt-5" type="button">
           File work
         </button>
+      </section>
+    );
+  }
+
+  if (creationFailed) {
+    return (
+      <section className="card">
+        <h1>Cerebra couldn’t add this project</h1>
+        <p className="mt-2 text-[var(--muted)]">
+          Your project was not added. Check that GitHub is available and try
+          again.
+        </p>
+        <p className="mt-4 text-[var(--danger)]" role="alert">
+          Cerebra couldn’t create a private working copy of this repository.
+        </p>
+        <div className="mt-6 flex gap-3">
+          <button
+            className="secondary-button"
+            onClick={() => setDiscovery(null)}
+            type="button"
+          >
+            Cancel
+          </button>
+          <button
+            className="primary-button"
+            onClick={() => {
+              setCreationFailed(false);
+              setDiscovery(null);
+            }}
+            type="button"
+          >
+            Try again
+          </button>
+        </div>
       </section>
     );
   }
@@ -143,6 +182,7 @@ export function ProjectRegistration({
       <input
         className="mt-2 w-full rounded-lg border p-3"
         id="repository-link"
+        aria-invalid={error !== null}
         onChange={(event) => setRemote(event.target.value)}
         placeholder="https://github.com/owner/repository"
         required

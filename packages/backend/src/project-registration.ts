@@ -7,6 +7,7 @@ import type { Database } from './database.js';
 import { createProjectTokenCipher } from './project-token.js';
 import {
   GitHubAccessError,
+  ProjectMirrorError,
   ProjectRegistrationService,
   type Project,
 } from './projects.js';
@@ -35,9 +36,7 @@ function cloneMirror(
     });
     child.once('error', reject);
     child.once('exit', (code) =>
-      code === 0
-        ? resolve()
-        : reject(new Error('Could not create the project mirror.')),
+      code === 0 ? resolve() : reject(new ProjectMirrorError()),
     );
   });
 }

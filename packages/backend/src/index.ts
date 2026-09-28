@@ -39,6 +39,7 @@ export {
   InvalidProjectPrefixError,
   InvalidProjectUrlError,
   ProjectRegistrationService,
+  ProjectMirrorError,
   type GitHubProject,
   type GitHubRepository,
   type MirrorRepository,

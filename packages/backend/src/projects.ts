@@ -80,6 +80,12 @@ export class GitHubAccessError extends Error {
   }
 }
 
+export class ProjectMirrorError extends Error {
+  public constructor() {
+    super('Cerebra couldn’t create a private working copy of this repository.');
+  }
+}
+
 function canonicalRemote(remote: string): string {
   let url: URL;
   try {
