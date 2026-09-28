@@ -8,11 +8,11 @@
     "pnpm": ">=11.24.0 <12"
   },
   "scripts": {
-    "build": "pnpm --filter @cerebra/ui build",
-    "check": "pnpm run lint && pnpm run format:check && pnpm run typecheck && pnpm run build && pnpm run test",
+    "build": "pnpm run typecheck && pnpm --filter @cerebra/ui build",
+    "check": "pnpm run lint && pnpm run format:check && pnpm run test",
     "format:check": "prettier --check .",
     "lint": "eslint .",
-    "test": "vitest run",
+    "test": "pnpm run build && vitest run",
     "typecheck": "tsc -b --pretty false"
   },
   "devDependencies": {
