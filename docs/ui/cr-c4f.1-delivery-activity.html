@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Cerebra — Delivery activity</title>
+    <style>
+      * { box-sizing: border-box; }
+      body { margin: 0; background: #f6f8fc; color: #172033; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
+      .page { width: min(900px, calc(100% - 40px)); margin: 0 auto; padding: 36px 0 56px; }
+      .eyebrow, .time, .empty, .failure { color: #667085; font-size: 13px; }
+      .eyebrow { font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+      h1 { margin: 8px 0 6px; font-size: clamp(27px, 4vw, 35px); letter-spacing: -.03em; }
+      .lede { margin: 0 0 26px; color: #536078; }
+      .tabs { display: flex; gap: 24px; border-bottom: 1px solid #dbe1ea; margin-bottom: 24px; }
+      .tab { padding: 12px 2px; color: #667085; font-size: 14px; font-weight: 650; }
+      .tab.active { border-bottom: 2px solid #4263eb; color: #263e97; }
+      .layout { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(220px, .8fr); gap: 20px; }
+      .card { background: #fff; border: 1px solid #dbe1ea; border-radius: 14px; box-shadow: 0 1px 2px #17203308; }
+      .activity { padding: 22px; }
+      h2 { margin: 0; font-size: 18px; }
+      .event { position: relative; padding: 18px 0 0 38px; border-top: 1px solid #edf0f5; }
+      .event:first-of-type { margin-top: 14px; }
+      .dot { position: absolute; top: 21px; left: 3px; width: 16px; height: 16px; border: 4px solid #e9efff; border-radius: 50%; background: #4263eb; }
+      .waiting .dot { border-color: #fff1c5; background: #e89b00; }
+      .event h3 { margin: 0; font-size: 15px; }
+      .event p { margin: 4px 0; color: #536078; font-size: 13px; line-height: 1.45; }
+      .event a { color: #3157c7; font-weight: 700; text-decoration-thickness: 1px; text-underline-offset: 2px; }
+      a:focus-visible { outline: 3px solid #5a43d6; outline-offset: 3px; border-radius: 2px; }
+      .summary { padding: 21px; height: fit-content; }
+      .badge { display: inline-block; margin: 14px 0 3px; padding: 5px 9px; border-radius: 99px; background: #fff4cc; color: #725500; font-size: 13px; font-weight: 750; }
+      .summary dt { margin-top: 16px; color: #78849a; font-size: 11px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; }
+      .summary dd { margin: 4px 0 0; font-size: 14px; }
+      .states { display: grid; grid-template-columns: repeat(3, 1fr); gap: 13px; margin-top: 20px; }
+      .state { padding: 16px; background: #fff; border: 1px solid #dbe1ea; border-radius: 11px; }
+      .state h3 { margin: 0 0 7px; font-size: 14px; }
+      .state p { margin: 0; color: #596780; font-size: 13px; line-height: 1.45; }
+      .failure { color: #b42318; }
+      @media (max-width: 680px) { .page { width: min(100% - 32px, 900px); padding-top: 24px; } .layout, .states { grid-template-columns: 1fr; } }
+      @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <div class="eyebrow">Work item CR-184</div>
+      <h1>Let builders deliver work from plan to pull request</h1>
+      <p class="lede">The overview shows where delivery has reached and what happens next.</p>
+      <nav class="tabs" aria-label="Work item sections">
+        <span class="tab active" aria-current="page">Overview</span>
+        <span class="tab">Discussion</span>
+      </nav>
+      <div class="layout">
+        <section class="card activity" aria-labelledby="delivery-activity">
+          <h2 id="delivery-activity">Delivery activity</h2>
+          <article class="event">
+            <i class="dot" aria-hidden="true"></i>
+            <h3>Plan recorded</h3>
+            <p>Wolverine set out how this change will be built and checked.</p>
+            <span class="time">Today, 10:14</span>
+          </article>
+          <article class="event">
+            <i class="dot" aria-hidden="true"></i>
+            <h3>Checks passed</h3>
+            <p>All required checks finished successfully.</p>
+            <span class="time">Today, 10:31</span>
+          </article>
+          <article class="event">
+            <i class="dot" aria-hidden="true"></i>
+            <h3>Pull request opened</h3>
+            <p><a href="#pull-request">#482 Let builders deliver work from plan to pull request</a></p>
+            <span class="time">Today, 10:34</span>
+          </article>
+          <article class="event waiting">
+            <i class="dot" aria-hidden="true"></i>
+            <h3>Waiting for review</h3>
+            <p>Rogue will review the pull request next. Nothing is needed from you.</p>
+            <span class="time">Now</span>
+          </article>
+        </section>
+        <aside class="card summary" aria-label="Delivery summary">
+          <h2>At a glance</h2>
+          <div class="badge">Reviewing</div>
+          <dl>
+            <dt>Current step</dt><dd>Independent review</dd>
+            <dt>Pull request</dt><dd><a href="#pull-request">#482</a></dd>
+            <dt>Latest check</dt><dd>Passed 3 minutes ago</dd>
+          </dl>
+        </aside>
+      </div>
+      <section class="states" aria-label="Other delivery states">
+        <article class="state"><h3>No activity</h3><p>“No delivery activity yet. A builder will start when one is available.”</p></article>
+        <article class="state"><h3>Plan approval needed</h3><p>“Plan approval needed.” A “Review plan” button opens the plan.</p></article>
+        <article class="state"><h3>Checks failed</h3><p class="failure">“Checks failed. The builder will correct them before the pull request opens.”</p></article>
+      </section>
+    </main>
+  </body>
+</html>
