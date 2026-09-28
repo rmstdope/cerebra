@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Cerebra - Costs and notifications</title>
+    <style>
+      * { box-sizing: border-box; }
+      body { margin: 0; background: #f7f8fb; color: #172033; font: 15px/1.45 Inter, ui-sans-serif, system-ui, sans-serif; }
+      header { height: 72px; display: flex; align-items: center; padding: 0 5vw; background: #fff; border-bottom: 1px solid #e2e7f0; }
+      .brand { margin-right: auto; font-size: 20px; font-weight: 760; }
+      .bell { position: relative; width: 42px; height: 42px; border: 1px solid #bdc6d6; border-radius: 9px; background: #fff; color: #172033; font: inherit; font-size: 20px; }
+      .count { position: absolute; top: -7px; right: -7px; min-width: 20px; padding: 1px 5px; border-radius: 99px; background: #b42318; color: #fff; font-size: 12px; font-weight: 750; }
+      main { width: min(1020px, calc(100% - 40px)); margin: 34px auto; }
+      .eyebrow { color: #667085; font-size: 12px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+      h1 { margin: 7px 0 23px; font-size: 31px; letter-spacing: -.03em; }
+      .layout { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(260px, .75fr); gap: 20px; }
+      .card { padding: 21px; border: 1px solid #dbe1ea; border-radius: 14px; background: #fff; }
+      h2 { margin: 0; font-size: 18px; }
+      .money { margin: 15px 0 2px; font-size: 31px; font-weight: 780; letter-spacing: -.03em; }
+      .hint, .row span { color: #596780; font-size: 13px; }
+      .row { display: flex; justify-content: space-between; gap: 12px; padding: 15px 0; border-top: 1px solid #edf0f5; }
+      .row:first-of-type { margin-top: 16px; }
+      .row b, .row span { display: block; }
+      .link { color: #3157c7; font-size: 13px; font-weight: 750; }
+      .panel { position: absolute; z-index: 1; top: 62px; right: 5vw; width: 390px; max-height: 510px; overflow: auto; padding: 10px; border: 1px solid #cfd7e5; border-radius: 13px; background: #fff; box-shadow: 0 20px 46px #18223a2a; }
+      .panel-head { display: flex; align-items: center; justify-content: space-between; padding: 7px 9px 11px; }
+      .panel button { border: 0; border-radius: 7px; background: transparent; color: #3157c7; padding: 7px; font: inherit; font-weight: 700; }
+      .attention { padding: 13px 10px; border-top: 1px solid #edf0f5; }
+      .attention strong, .attention span { display: block; }
+      .attention strong { font-size: 14px; }
+      .attention span { margin-top: 3px; color: #536078; font-size: 13px; }
+      .tag { display: inline-block; margin-bottom: 5px; padding: 2px 7px; border-radius: 99px; background: #fff2c9; color: #765800; font-size: 11px; font-weight: 800; }
+      .trouble .tag { background: #fde8e7; color: #a33128; }
+      .states { margin-top: 20px; padding: 15px; border: 1px dashed #bdc6d6; border-radius: 12px; color: #596780; font-size: 13px; }
+      .states b { color: #172033; }
+      button:focus-visible, .link:focus-visible { outline: 3px solid #5a43d6; outline-offset: 3px; }
+      @media (max-width: 700px) { main { width: calc(100% - 32px); } .layout { grid-template-columns: 1fr; } .panel { right: 16px; left: 16px; width: auto; } }
+      @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+    </style>
+  </head>
+  <body>
+    <header><span class="brand">Cerebra</span><button class="bell" aria-label="Open attention center">◉<span class="count">3</span></button></header>
+    <main>
+      <div class="eyebrow">Project</div><h1>Atlas</h1>
+      <div class="layout">
+        <section class="card">
+          <h2>Work items</h2>
+          <div class="row"><div><b>Make the project board easier to scan</b><span>2 runs</span></div><b>$1.84</b></div>
+          <div class="row"><div><b>Set up the first repository</b><span>1 run</span></div><b>$0.31</b></div>
+        </section>
+        <aside class="card">
+          <h2>Cost so far</h2><div class="money">$2.36</div>
+          <p class="hint">Estimated API-price equivalent for Claude usage. This is not a subscription charge.</p>
+          <div class="row"><div><b>Work items</b><span>Costs linked to this project's work</span></div><b>$2.15</b></div>
+          <div class="row"><div><b>Not linked to work</b><span>Runs that had no work item</span></div><b>$0.21</b></div>
+          <p class="link">See all cost details</p>
+        </aside>
+      </div>
+      <section class="states"><b>When no cost is recorded:</b> “No usage has been recorded for this project yet.” &nbsp; <b>If a total cannot load:</b> “We couldn't load the cost. Try again.” &nbsp; <b>When attention is clear:</b> “You're all caught up. We'll let you know when something needs you.”</section>
+    </main>
+    <aside class="panel" aria-label="Attention center">
+      <div class="panel-head"><h2>Needs your attention</h2><button>Notification settings</button></div>
+      <article class="attention"><span class="tag">QUESTION</span><strong>Choose a layout for the project board</strong><span>Atlas · Design chat · Now</span></article>
+      <article class="attention"><span class="tag">WAITING</span><strong>Review the delivery plan</strong><span>Compass · Waiting since 14:26</span></article>
+      <article class="attention trouble"><span class="tag">TROUBLE</span><strong>A run stopped before it could finish</strong><span>Atlas · Open the conversation to see what happened</span></article>
+    </aside>
+  </body>
+</html>
