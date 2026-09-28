@@ -73,6 +73,31 @@ test('refuses an initial result without a session ID', async () => {
   );
 });
 
+test('refuses an unsuccessful initial session without persisting its ID', async () => {
+  let persisted = false;
+  let emitted = false;
+
+  await assert.rejects(
+    runInitialSession({
+      createQuery: () =>
+        messages(
+          { type: 'system', subtype: 'init', session_id: sessionId },
+          { type: 'result', subtype: 'error', session_id: sessionId },
+        ),
+      persistSessionId: async () => {
+        persisted = true;
+      },
+      write: () => {
+        emitted = true;
+      },
+    }),
+    /did not complete the initial session/,
+  );
+
+  assert.equal(persisted, false);
+  assert.equal(emitted, false);
+});
+
 test('refuses a resumed result without the prior context token', async () => {
   await assert.rejects(
     runResumedSession({
