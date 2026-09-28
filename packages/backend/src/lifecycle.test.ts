@@ -176,7 +176,7 @@ describe('lifecycle transitions', () => {
         waiting: {
           kind: 'question',
           reason: 'The requested implementation has an unresolved scope.',
-          returnState: 'building',
+          returnState: 'build_ready',
         },
       },
       context,
@@ -186,7 +186,7 @@ describe('lifecycle transitions', () => {
       ok: true,
       item: {
         holderRunId: null,
-        returnState: 'building',
+        returnState: 'build_ready',
         state: 'waiting',
         waitingKind: 'question',
       },
@@ -226,6 +226,31 @@ describe('lifecycle transitions', () => {
         waitingKind: null,
         waitingReason: null,
       },
+    });
+  });
+
+  test('refuses a wait whose return state bypasses the lifecycle', () => {
+    const result = transition(
+      createWorkItem({
+        priority: 'P1',
+        state: 'building',
+        holderRunId: 'run-1',
+      }),
+      {
+        actor: { role: 'builder', runId: 'run-1' },
+        to: 'waiting',
+        waiting: {
+          kind: 'question',
+          reason: 'A decision is needed.',
+          returnState: 'merging',
+        },
+      },
+      context,
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      reason: 'A waiting item must return to its originating queue state.',
     });
   });
 

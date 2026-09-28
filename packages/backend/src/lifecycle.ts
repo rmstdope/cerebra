@@ -290,9 +290,9 @@ export function transition(
     return refusal('A working-state transition requires a run holder.');
   }
 
-  if (request.to === 'waiting' && !isValidWaitingRequest(request)) {
+  if (request.to === 'waiting' && !isValidWaitingRequest(item, request)) {
     return refusal(
-      'A waiting transition requires its kind, reason and return state.',
+      'A waiting item must return to its originating queue state.',
     );
   }
 
@@ -432,11 +432,15 @@ function isWorkingState(state: WorkItemState): boolean {
   return workingStates.has(state);
 }
 
-function isValidWaitingRequest(request: TransitionRequest): boolean {
+function isValidWaitingRequest(
+  item: WorkItem,
+  request: TransitionRequest,
+): boolean {
   return (
     request.waiting !== undefined &&
     request.waiting.reason.length > 0 &&
-    request.waiting.returnState !== 'waiting'
+    request.waiting.returnState ===
+      (queueForWorkingState[item.state] ?? item.state)
   );
 }
 
