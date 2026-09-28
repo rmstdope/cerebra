@@ -71,6 +71,33 @@ SPIKE_COMPLETE
 `EXTERNAL_MESSAGE_SENT` is evidence of delivery while the original turn is active. As with the
 first probe, no raw model text, SDK error, or environment value is printed.
 
+## Resume after replacement
+
+This probe tests roadmap step 3's fourth capability: a new container resumes one specific prior
+conversation after the initial container has been removed. It uses the SDK's persisted session ID
+and a disposable Podman volume mounted at `CLAUDE_CONFIG_DIR` for both containers; `:U` maps the
+volume ownership to the unprivileged `node` user. The session ID stays inside that volume and is
+never printed.
+
+```bash
+npm run test:resume-session
+./run-resume-session-rootless.sh
+```
+
+The first container records a fixed context token and persists its SDK session ID before the
+wrapper removes it. The replacement container mounts the same CLI state, resumes that ID, and can
+complete only by returning the token from the prior conversation. A successful run prints these
+non-secret markers, in order:
+
+```text
+INITIAL_SESSION_COMPLETE
+SESSION_RESUMED
+SPIKE_COMPLETE
+```
+
+The wrapper removes the first container and the temporary named volume on exit, whether the probe
+succeeds or fails. It does not print the session ID, model text, or credential value.
+
 ## Cleanup
 
 The container is removed automatically. To remove the locally built disposable image:
