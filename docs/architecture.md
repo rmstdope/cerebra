@@ -1,4 +1,4 @@
-# Cerebro: architecture
+# Cerebra: architecture
 
 **Status:** draft 1, 2026-09-28. The behaviour it implements is `spec.md`; the choices behind it
 are in `decisions.md`.
@@ -87,6 +87,10 @@ Modules, each one concern:
 Written in TypeScript on Node (D21), sharing the runner protocol, the event schema and the API
 types with the runner and the UI as one workspace package.
 
+The workspace uses pnpm, with `packages/shared`, `packages/backend`, `packages/runner` and
+`packages/ui`. The backend uses Fastify with its WebSocket plugin and Kysely with its migrator
+for Postgres access (D44).
+
 ## 4. The lifecycle engine
 
 The transition table of `spec.md` §4.4 is data: `(from, to, actor role, preconditions, effects)`.
@@ -118,7 +122,7 @@ The function is tested exhaustively over every `(state, transition, actor)` trip
 
 Each agent image contains the **runner**, a small TypeScript program, and the CLIs of both
 backends. The runner reads its configuration from the gateway, drives the backend's SDK, and
-translates everything the SDK reports into Cerebro's event schema (D16):
+translates everything the SDK reports into Cerebra's event schema (D16):
 
 | Backend | SDK | Questions to the navigator | Messages mid-run | Resume |
 |---|---|---|---|---|
@@ -306,11 +310,16 @@ one WebSocket per open view: run events for a chat, item changes for a board. Po
 no raw HTML from an agent reaches the page, and a strict Content-Security-Policy is the second
 layer.
 
+React with Vite, using shadcn/ui with Radix primitives and Tailwind CSS (D44, D45). Component
+source is maintained in `packages/ui`; detailed screens and wording are agreed in UX sessions.
+The first application UI supports persistent Light/Dark/System themes and the WCAG 2.2 AA
+accessibility target of `spec.md` §12.
+
 **Mockups.** `show_mockups` has the gateway fetch the named files from the run's checkout with
 `fetch_files` (§5.2) and stores them with the item's records. They are served from a second listener on its own port, so they have an origin
 of their own, with `Content-Security-Policy: sandbox allow-scripts` and no network access
 (`connect-src 'none'`, `default-src` limited to the mockup itself), and shown in the UI in
-sandboxed iframes. A mockup's script can therefore run but can reach neither Cerebro's page, its
+sandboxed iframes. A mockup's script can therefore run but can reach neither Cerebra's page, its
 cookies, the API, nor anything else.
 
 **Notifications.** A push is sent to every open tab over its WebSocket, which raises a browser
@@ -332,6 +341,12 @@ authentication.
   build keeps the previous image.
 
 ## 13. Testing
+
+Vitest is the workspace test runner. `pnpm install --frozen-lockfile` installs dependencies;
+`pnpm run check` is both gates, locally and in GitHub Actions on `ubuntu-latest`: lint, format
+checks, typecheck, build, unit and real-Postgres database tests (D44). Foundations implements this
+contract and documents how to provide the database; real-Podman end-to-end coverage arrives at
+roadmap step 7.
 
 - **Lifecycle:** every `(state, transition, actor)` triple, and every invariant as a database
   constraint test.

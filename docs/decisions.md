@@ -1,4 +1,4 @@
-# Cerebro: decisions and open questions
+# Cerebra: decisions and open questions
 
 The log behind `spec.md` and `architecture.md`. Each decision says what was chosen and why, so
 the other two documents can state the result without arguing for it. A decision is changed by
@@ -11,9 +11,13 @@ Status: **decided** (the navigator chose), **proposed** (drafted, awaiting the n
 
 ### D1. Deployment is local first, server later — decided
 
-One navigator runs Cerebro on their own machine. Nothing in the design may assume that, though:
+One navigator runs Cerebra on their own machine. Nothing in the design may assume that, though:
 the web UI authenticates even on localhost, and every boundary a hosted, multi-user version needs
 (users, sessions, per-request authorisation) exists from the start with exactly one user in it.
+
+The navigator manually installs and updates the local instance when convenient. MVP updates may
+interrupt live runs: a backend restart fails them and returns their held items to their queues.
+Confirmed during project definition on 2026-09-28.
 
 ### D2. One instance serves many projects — decided
 
@@ -41,7 +45,7 @@ its state must commit together — and once agents reach the board through the b
 rather than a CLI of their own, beads' advantage (every clone writes and syncs) no longer applies.
 Portability is given up; a later export can win it back if it is missed.
 
-### D6. The lifecycle is fixed by Cerebro, with optional stages — decided
+### D6. The lifecycle is fixed by Cerebra, with optional stages — decided
 
 One canonical state machine for every project. A project can switch the *grooming* (D34),
 *design* and *verify* stages off, and chooses how involved the navigator is (D32), but cannot add
@@ -100,10 +104,10 @@ already clear; or cancel) are done by the navigator on the board. An assistant a
 Any item can have children. Only items without children move through the build stages; a parent
 waits in `split` and is done when its last child is (spec, *Parents*).
 
-### D16. Agents run under an in-container runner over native SDKs — proposed
+### D16. Agents run under an in-container runner over native SDKs — decided
 
-Each agent container runs a small Cerebro runner that drives the vendor's own SDK — the Claude
-Agent SDK for Claude, the GitHub Copilot SDK for Copilot — and speaks one Cerebro protocol to the
+Each agent container runs a small Cerebra runner that drives the vendor's own SDK — the Claude
+Agent SDK for Claude, the GitHub Copilot SDK for Copilot — and speaks one Cerebra protocol to the
 backend: normalised events up, messages and answers down.
 
 *Why:* both SDKs deliver what the chat view needs as first-class callbacks — the agent's questions
@@ -116,6 +120,10 @@ clearly part of it. The runner confines vendor churn to one small program per ba
 
 *Consequence:* the runner is TypeScript, since both SDKs are first-class there. The backend's
 language is free; it is TypeScript too (D21).
+
+Confirmed by the navigator during project definition on 2026-09-28, subject to the runtime spike
+in `roadmap.md` step 3. This is the chosen architecture, not a claim that SDK compatibility has
+already been demonstrated; the spike must confirm it or revise this decision before it is built on.
 
 ### D17. A named agent is an identity with a memory — decided
 
@@ -171,12 +179,14 @@ child is done, as classic Cerebro verifies an epic.
 
 Reviewing pull requests from outside the fleet (Cypher's job in classic Cerebro) is dropped from v1.
 
-### D25. Rework continues the same pull request — proposed
+### D25. Rework continues the same pull request — decided
 
 When a reviewer, a failed merge or a failed verification sends an item back to `build_ready`, the
 next builder run checks out the item's existing branch and pushes to the same pull request, with
 the reviewer's findings or the verdict as its first message. A pull request is closed and replaced
 only when the item goes back to `design_ready`; the backend closes it, with a comment saying why.
+
+Confirmed by the navigator during project definition on 2026-09-28.
 
 ### D26. v1 ships nine roles — decided
 
@@ -204,11 +214,14 @@ Postgres was to be the only copy of the board, with database dumps as backup. Th
 reopened it: work and code would live apart, with no version history of the board and no copy off
 the machine.
 
-### D29. Next-generation Cerebro is a new repository — decided
+### D29. Cerebra is a new repository — decided
 
 It is built in a fresh repository, `rmstdope/cerebra`; classic Cerebro's repository,
 `rmstdope/cerebro`, keeps running its own fleet until the new system can take over. These
 documents were written there and moved here when this repository was created.
+
+The product name **Cerebra**, distinct from classic Cerebro, was confirmed during project
+definition on 2026-09-28. Existing technical identifiers such as `.cerebro/` are unchanged.
 
 ### D30. Projects share the instance by per-project limits — decided
 
@@ -242,7 +255,7 @@ reviewer agent's review always runs; the navigator's code review is on top of it
 
 Under `code_review` the navigator reviews the pull request on GitHub, and the backend reads that
 review (approval or requested changes) from the navigator's configured GitHub account. It sits
-behind the same forge interface as everything else GitHub (D12), so a review inside Cerebro's own
+behind the same forge interface as everything else GitHub (D12), so a review inside Cerebra's own
 UI can be added later without changing the lifecycle.
 
 ### D34. Grooming agrees an item's outcome before anything is designed — decided
@@ -266,7 +279,7 @@ enters the board. Only the navigator (at triage) and a groomer (with the navigat
 
 A release is made by the assistant when the navigator asks, following the project's release skill.
 The process is unique to each project, so it lives in the project's repository
-(`.cerebro/skills/release/SKILL.md`), versioned with the code it releases; Cerebro ships a template.
+(`.cerebro/skills/release/SKILL.md`), versioned with the code it releases; Cerebra ships a template.
 
 ### D37. Any agent type can carry skills — decided
 
@@ -303,7 +316,7 @@ webhook covers the need), Web Push with a service worker, reminders and quiet ho
 
 The first delivery runs one item from `new` through grooming, design, build, review and merge, with
 the navigator in the chat, on the Claude backend. The design stage stays in the MVP at the
-navigator's request: agreeing the experience before building is what Cerebro is for. Postponed to
+navigator's request: agreeing the experience before building is what Cerebra is for. Postponed to
 v1, each without a redesign: Copilot, the verify stage, nesting, schedules (architect, inbox),
 releases, instance skills, revisions of agent types, the board mirror, the cost views, the webhook
 and feed, project image builds, surviving a backend restart, and the beads importer
@@ -326,9 +339,46 @@ this system and removes the scaffolding. *Rejected:* a single Claude session loo
 checklist — quicker to start, but without tracking or independent review unless the loop enforced
 them itself.
 
-## Open questions
+### D44. The foundation stack and gate are shared across the workspace — decided
 
-- **Foundations** (`roadmap.md`, step 2): repository layout, Node version, HTTP framework, Postgres
-  access, UI framework, test runner, lint, CI. Proposals are listed there.
-- **D16 and D25** are proposed, not yet confirmed by the navigator; step 2 confirms them, and step 3
-  tests D16 (with D20) against the real SDK.
+Confirmed during project definition on 2026-09-28:
+
+- One pnpm workspace: `packages/shared`, `packages/backend`, `packages/runner`, `packages/ui`,
+  plus `images/` and throwaway `spikes/`.
+- The current Node LTS at foundation implementation, pinned in `.nvmrc` and `engines`. Bun was
+  reconsidered and declined; D21 stands.
+- Fastify with its WebSocket plugin; Postgres with Kysely and its migrator; React with Vite.
+- Vitest throughout, with database tests against real Postgres; ESLint, Prettier and strict
+  TypeScript.
+- `pnpm install --frozen-lockfile` installs dependencies. `pnpm run check` is both the fast and
+  full gate: lint, format checks, typecheck, build, unit and database tests, identical locally and
+  in GitHub Actions on `ubuntu-latest`. Foundations establishes these commands and documents the
+  Postgres prerequisite. Real-Podman end-to-end coverage is added at roadmap step 7.
+
+No application workspace or executable gate exists at project definition time; the declaration is
+the contract foundations must implement, not a passing check. Classic Cerebro's building fleet
+keeps its existing Copilot configuration; that is separate from the product's Claude-only MVP.
+
+### D45. The UI is modern, stylish and easy, with accessible themes from the start — decided
+
+The navigator chose **Modern, Stylish, Easy** during project definition on 2026-09-28: simple to
+navigate and operate, with powerful controls available when needed. React/Vite uses **shadcn/ui
+with Radix primitives and Tailwind CSS**. Its component source is maintained in this repository;
+the toolkit is a starting point, not a substitute for agreeing the experience.
+
+The first application UI includes light and dark themes. The initial theme follows the system,
+with a persistent Light/Dark/System choice. Accessibility targets **WCAG 2.2 AA**: keyboard access,
+screen-reader labels, visible focus, sufficient contrast and reduced-motion support. Components
+alone do not establish compliance; the application flows must meet it.
+
+First use is password setup, GitHub project registration and credential configuration, followed
+by an honest empty board with a clear way to file the first item. Returning visits open the
+cross-project navigator queue. Errors are explicit; history, cancellation, reopening and reasoned
+overrides support correcting mistakes. Detailed screens and wording remain for UX agreement.
+
+## Remaining validation and implementation choices
+
+- **Foundations** (`roadmap.md`, step 2) implements D44 and D45. Exact package versions, the
+  pinned current Node LTS and lower-level library choices are recorded as they are implemented.
+- **The runtime spike** (step 3) tests D16 and D20 against the real SDK. Their chosen status does
+  not replace that evidence.

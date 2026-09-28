@@ -7,7 +7,7 @@ order of work is `roadmap.md`.
 
 ## Classic Cerebro
 
-This repository is the next generation of **Cerebro**. These documents call its predecessor
+This repository is **Cerebra**, the next generation of Cerebro. These documents call its predecessor
 **classic Cerebro**: the repository `github.com/rmstdope/cerebro`, still in use, and the fleet that
 builds this one until it can build itself (D43). "MVP" and "v1" always mean releases of *this*
 system, never of classic Cerebro.

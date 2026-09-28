@@ -39,7 +39,7 @@ git submodule update --init --recursive
 .cerebro/cerebro/scripts/install
 ```
 
-Then start Claude Code here and run `/project-definition`. It will find `docs/` and this
+Then start a fleet CLI session here and run `/project-definition`. It will find `docs/` and this
 repository's `CLAUDE.md` and ask whether to continue around what is here: answer *continue*. Its
 interview asks what the software is, where it runs, what it is built with and what using it is
 like; every answer is in `spec.md` and `architecture.md`, so point it at them. It merges its
@@ -51,8 +51,8 @@ in this repository.
 
 ## Step 2 — Foundations
 
-One epic, mostly decisions, recorded in `decisions.md` as they are made. Each item below is a
-proposal for the navigator to confirm or change:
+One epic implementing the foundation choices confirmed during project definition on 2026-09-28
+(D44, D45). Exact versions and remaining implementation choices are recorded as they are made:
 
 - **Repository layout:** one pnpm workspace — `packages/shared` (the runner protocol, the event
   schema, the API types, the lifecycle table), `packages/backend`, `packages/runner`,
@@ -60,14 +60,17 @@ proposal for the navigator to confirm or change:
 - **Node version:** the current LTS, pinned in `.nvmrc` and `engines`.
 - **Backend HTTP:** Fastify, with its WebSocket plugin.
 - **Postgres access and migrations:** Kysely with its migrator (typed SQL, no ORM).
-- **UI:** React with Vite.
+- **UI:** React with Vite, shadcn/ui with Radix primitives and Tailwind CSS. The first application
+  UI includes Light/Dark/System themes and WCAG 2.2 AA accessibility (D45).
 - **Tests:** Vitest everywhere; database tests against a real Postgres (a service container in CI);
   end-to-end tests against real Podman later (step 7).
 - **Lint and format:** ESLint and Prettier; TypeScript `strict`.
-- **CI:** GitHub Actions on `ubuntu-latest`: lint, typecheck, unit and database tests on every pull
-  request. The gate a producer runs before a pull request is exactly what CI runs.
-- **Confirm the two proposed decisions:** D16 (a runner over the vendors' SDKs) and D25 (rework
-  continues the same pull request).
+- **CI and gate:** GitHub Actions on `ubuntu-latest`: `pnpm run check` covers lint, format checks,
+  typecheck, build, unit and database tests on every pull request. Both declared gates use that
+  command, exactly as CI does. Installation is `pnpm install --frozen-lockfile`; foundations
+  documents the real-Postgres prerequisite and implements these currently absent commands.
+- **Confirmed decisions:** D16 (a runner over the vendors' SDKs, subject to step 3's spike) and
+  D25 (rework continues the same pull request).
 
 **Done when** the workspace builds, an empty test passes in each package, CI is green on `main`, and
 the decisions are recorded.

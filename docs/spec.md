@@ -1,4 +1,4 @@
-# Cerebro: specification
+# Cerebra: specification
 
 **Status:** draft 1, 2026-09-28. Written with the navigator by interview; every choice behind it
 is logged in `decisions.md` (D*n*). New to this project? Read `background.md` first: it explains
@@ -6,12 +6,12 @@ the system this one replaces, which these documents call *classic Cerebro*.
 
 This document says what the system does and for whom. How it is built is `architecture.md`.
 
-## 1. What Cerebro is
+## 1. What Cerebra is
 
-Cerebro runs a fleet of AI coding agents against a project's GitHub repository and puts one
+Cerebra runs a fleet of AI coding agents against a project's GitHub repository and puts one
 person, the **navigator**, in charge of it through a web UI. The navigator decides what is worth
 doing and in what order, agrees with a design agent what a person will see, and verifies the
-result; agents build, review and merge everything in between. Cerebro's job is to make that
+result; agents build, review and merge everything in between. Cerebra's job is to make that
 division of labour explicit: at every moment each work item is in exactly one state, held by at
 most one agent, and anything waiting on the navigator is in one place.
 
@@ -46,7 +46,7 @@ configuration rather than by a roster file and a supervisor process.
 
 | Term | Meaning |
 |---|---|
-| **Instance** | One running Cerebro: a main container, its database, and the agent containers it starts. |
+| **Instance** | One running Cerebra: a main container, its database, and the agent containers it starts. |
 | **Navigator** | The person operating the instance. Ranks, answers, approves at checkpoints and verifies. |
 | **Project** | A GitHub repository registered with the instance, with its own settings, board and fleet. |
 | **Work item** | One unit of work on a project's board: a feature, bug, task or refactoring. |
@@ -236,7 +236,7 @@ Only what blocks on the navigator interrupts them; everything else waits in the 
 | `informed` notices: a plan written, a pull request opened or merged, a release made | the feed only |
 
 **Channels.** Always, in the app: the navigator queue's count, the same count in the browser tab's
-title, and the feed, all live. By default, a browser notification for every push while any Cerebro
+title, and the feed, all live. By default, a browser notification for every push while any Cerebra
 tab is open; clicking it opens the item or the run. Optionally, one outbound webhook: a JSON POST
 per push to a URL the navigator sets (ntfy, Pushover, a Slack incoming webhook), which is how a
 push reaches their phone when they are away from the machine.
@@ -472,7 +472,7 @@ sources:
   skill of the same name.
 
 The release skill (§9) is the first project skill. The repository's own agent configuration
-(`.claude/`, `AGENTS.md`, `.github/agents/`) is still discovered by the backends as usual; Cerebro
+(`.claude/`, `AGENTS.md`, `.github/agents/`) is still discovered by the backends as usual; Cerebra
 neither copies nor overrides it.
 
 ## 6. Runs and conversations
@@ -510,7 +510,7 @@ a form with its options and a free-text answer, and the run waits in `awaiting_i
 answered. Opening a chat later shows everything that happened while nobody watched.
 
 An agent asks a free question with its own backend's question tool (Claude's `AskUserQuestion`,
-Copilot's user-input request), which the runner turns into the form; there is no separate Cerebro
+Copilot's user-input request), which the runner turns into the form; there is no separate Cerebra
 tool for it. The two structured questions — a plan for approval (`submit_plan`) and mockups to
 choose between (`show_mockups`) — are backend tools, because the backend records what was decided.
 
@@ -541,7 +541,7 @@ history, so the navigator can go back to an earlier one.
 
 When the experience is agreed, the chosen mockup is kept with the item as part of the design
 record, next to the written experience, and is what the builder, reviewer and verifier see. A
-mockup is shown isolated from Cerebro's own page: it can run its own scripts, but cannot reach the
+mockup is shown isolated from Cerebra's own page: it can run its own scripts, but cannot reach the
 UI's session, the API or the network.
 
 ## 7. Secrets
@@ -589,8 +589,8 @@ The UI lists names, scopes, when each was last used and by which run, never valu
 A release is made by the assistant when the navigator asks for one, by following the project's
 **release skill** (D36): how this project versions, what it builds, what it tags and publishes.
 The skill lives in the project's repository at `.cerebro/skills/release/SKILL.md`, versioned with
-the code it releases; Cerebro ships a template to start from. A project without one cannot be
-released through Cerebro, and the assistant says so.
+the code it releases; Cerebra ships a template to start from. A project without one cannot be
+released through Cerebra, and the assistant says so.
 
 When the release is made, the assistant records it with `record_release` (version, tag, commit).
 The backend completes the **release record** (D38) with every `done` item whose merge is contained
@@ -641,6 +641,19 @@ database backups (architecture, *Backups*).
 
 ## 12. The web UI
 
+The experience must feel **Modern, Stylish, Easy** (D45): simple to navigate and operate, with
+powerful controls available when needed, following web conventions. Light and dark themes are
+present from the first application UI; the initial theme follows the system preference, and a
+persistent Light/Dark/System choice lets the navigator override it. Accessibility targets
+WCAG 2.2 AA, including keyboard access, screen-reader labels, visible focus, sufficient contrast
+and reduced-motion support.
+
+On first use, the navigator chooses a password, registers a GitHub repository and configures its
+credentials, then reaches an empty board with a clear way to file the first item. Returning visits
+open the cross-project navigator queue. Errors are explicit, never rendered as empty results;
+history, cancellation, reopening and reasoned overrides support correcting mistakes. Detailed
+screens and wording are agreed with the navigator in UX sessions.
+
 The navigator works on several projects at once from one instance and one browser tab (D2):
 
 - **Home**: the navigator queue across every project (§4.7), active runs, and what merged recently.
@@ -680,7 +693,8 @@ not change what the MVP built.
 - Roles: groomer, designer, producer, bugfixer, reviewer, assistant.
 - Involvement per project, with the `plan` and `code_review` checkpoints.
 - Usage recorded for every run; cost shown per run and per item.
-- One user with a password; in-app counts and browser notifications.
+- One user with a password; in-app counts and browser notifications; light/dark/system themes
+  and the accessibility requirements of §12 from the first application UI.
 - A scheduled `pg_dump`.
 
 **Postponed to v1**
