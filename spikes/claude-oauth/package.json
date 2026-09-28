@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "test": "node --test src/permission.node.mjs",
-    "start": "node src/ask-user-question.mjs"
+    "start": "node src/ask-user-question.mjs",
+    "test:stream-input": "node --test src/stream-input.node.mjs",
+    "start:stream-input": "node src/stream-input.mjs"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.284"
