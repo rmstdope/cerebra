@@ -62,24 +62,24 @@ export interface Database {
     updated_at: Generated<Date>;
     waiting_kind: WaitingKind | null;
     waiting_reason: string | null;
+  };
   projects: {
     created_at: Generated<Date>;
-    default_branch: string;
+    default_branch: Generated<string>;
     design_enabled: Generated<boolean>;
     grooming_enabled: Generated<boolean>;
-    github_token_ciphertext: string;
-    github_token_iv: string;
-    github_token_tag: string;
+    github_token_ciphertext: Generated<string>;
+    github_token_iv: Generated<string>;
+    github_token_tag: Generated<string>;
     id: string;
-    key_prefix: string;
+    key_prefix: Generated<string>;
     max_attempts: Generated<number>;
     max_concurrent_runs: Generated<number>;
     max_rounds: Generated<number>;
     name: string;
-    owner: string;
-    remote: string;
+    owner: Generated<string>;
+    remote: Generated<string>;
     verify_enabled: Generated<boolean>;
-
   };
 }
 
