@@ -439,6 +439,7 @@ function isValidWaitingRequest(
   return (
     request.waiting !== undefined &&
     request.waiting.reason.length > 0 &&
+    request.waiting.returnState !== 'waiting' &&
     request.waiting.returnState ===
       (queueForWorkingState[item.state] ?? item.state)
   );

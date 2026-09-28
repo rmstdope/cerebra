@@ -254,6 +254,33 @@ describe('lifecycle transitions', () => {
     });
   });
 
+  test('refuses an attempt to wait an already waiting item', () => {
+    const result = transition(
+      createWorkItem({
+        priority: 'P1',
+        returnState: 'build_ready',
+        state: 'waiting',
+        waitingKind: 'question',
+        waitingReason: 'A decision is needed.',
+      }),
+      {
+        actor: { role: 'backend' },
+        to: 'waiting',
+        waiting: {
+          kind: 'question',
+          reason: 'A second decision is needed.',
+          returnState: 'waiting',
+        },
+      },
+      context,
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      reason: 'A waiting item must return to its originating queue state.',
+    });
+  });
+
   test('allows the navigator to cancel any non-terminal work item', () => {
     expect(
       transition(
