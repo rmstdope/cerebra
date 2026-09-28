@@ -71,6 +71,33 @@ SPIKE_COMPLETE
 `EXTERNAL_MESSAGE_SENT` is evidence of delivery while the original turn is active. As with the
 first probe, no raw model text, SDK error, or environment value is printed.
 
+## External MCP server
+
+This probe tests roadmap step 3's fifth capability: the Claude Agent SDK calls a tool from a
+streamable-HTTP MCP server running outside the agent container on the shared network. The server
+requires `MCP_BEARER_TOKEN`; requests without the exact `Authorization: Bearer` value receive
+`401` before MCP tools are exposed. The wrapper forwards that token by environment-variable name
+to both disposable containers, never as a command argument, file, image layer, or transcript.
+
+```bash
+npm run test:mcp-tool-call
+./run-mcp-rootless.sh
+```
+
+The agent is configured with the external HTTP MCP server and its bearer header, calls exactly one
+deterministic tool, and succeeds only after the model returns the fixed result marker. A successful
+run prints these non-secret markers, in order:
+
+```text
+MCP_TOOL_RESULT_RECEIVED
+SPIKE_COMPLETE
+MCP_TOOL_CALLED
+```
+
+The final marker comes from the external server after the agent has exited; together the markers
+show that Claude received the tool result and that the tool server accepted an authenticated call.
+Neither container prints model text, tool arguments, headers, errors, or environment values.
+
 ## Resume after replacement
 
 This probe tests roadmap step 3's fourth capability: a new container resumes one specific prior

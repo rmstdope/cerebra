@@ -157,6 +157,17 @@ token inspection, image build, or state creation. Session resumption is therefor
 this machine; rerun `spikes/claude-oauth/run-resume-session-rootless.sh` on a rootless-Podman host
 with the subscription token exported to confirm or revise D16.
 
+**Authenticated MCP spike evidence (2026-09-28):** `run-mcp-rootless.sh` prepares an external,
+streamable-HTTP MCP server on the same disposable rootless Podman network as the OAuth-only
+agent. The server refuses every request without the run's exact bearer token before it exposes its
+single deterministic tool; the SDK receives the token only in its HTTP MCP-server configuration,
+calls that tool, and requires the fixed tool-result marker before reporting success. The attempt
+on the navigator's Mac stopped at the wrapper's explicit prerequisite check (`Podman is required
+to run this rootless runtime spike.`), before either credential is inspected or an image is built.
+Authenticated MCP remains unconfirmed on this machine; rerun
+`spikes/claude-oauth/run-mcp-rootless.sh` on a rootless-Podman host with the subscription token
+and a per-run MCP bearer token exported to confirm or revise D16/D20.
+
 ### D17. A named agent is an identity with a memory — decided
 
 Each named agent in a project keeps its own home directory and CLI state across runs: the
