@@ -23,19 +23,24 @@ pnpm run check
 `pnpm run check` runs linting, formatting checks, strict TypeScript checking, package builds, and
 Vitest tests across the workspace. It is the same command CI runs on Ubuntu.
 
-Database tests are part of this gate and require `DATABASE_URL` to point to a reachable,
-disposable PostgreSQL database. The tests create and drop isolated schemas in that database, then
-run the Kysely migrations against each schema. For example, after starting a local PostgreSQL
-server:
+Database tests are part of this gate. With rootless Podman installed and running, `pnpm run check`
+automatically starts an isolated disposable PostgreSQL container, waits for it, and removes only
+that container after the tests finish. Each gate run owns a uniquely named container, so concurrent
+producer worktrees do not interfere with one another. The tests create and drop isolated schemas
+in that database, then run the Kysely migrations against each schema.
+
+To use an existing reachable disposable database instead, set `DATABASE_URL` before running the
+gate. The command treats that database as caller-owned: it neither creates nor removes it. This is
+how CI continues to use its PostgreSQL service container:
 
 ```bash
 export DATABASE_URL=postgres://postgres:postgres@localhost:5432/cerebra_test
 pnpm run check
 ```
 
-`DATABASE_URL` is deliberately required: a missing, unreachable, or migration-failing database
-makes the gate fail rather than skipping database behaviour. CI provides the same disposable
-PostgreSQL database through its service container.
+Podman startup, database-readiness, connection, and migration failures make the gate fail rather
+than skipping database behaviour. The generated connection details are never printed or written
+to the checkout.
 
 The workspace packages are:
 
