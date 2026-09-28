@@ -11,4 +11,4 @@ USER node
 ENV HOME=/home/node
 ENV CLAUDE_CONFIG_DIR=/home/node/.claude
 
-CMD ["npm", "start"]
+CMD ["node", "src/ask-user-question.mjs"]

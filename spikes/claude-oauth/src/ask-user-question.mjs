@@ -7,11 +7,13 @@ const prompt =
 
 let receivedQuestion = false;
 let completed = false;
+const relayUrl =
+  process.env.QUESTION_RELAY_URL ?? 'http://question-relay:8080/question';
 
 for await (const message of query({
   prompt,
   options: {
-    ...createAskUserQuestionOptions(() => {
+    ...createAskUserQuestionOptions(relayUrl, () => {
       receivedQuestion = true;
       process.stdout.write('ASK_USER_QUESTION_RECEIVED\n');
     }),
