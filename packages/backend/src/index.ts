@@ -1,6 +1,12 @@
 export const packageName = '@cerebra/backend';
 
 export { createDatabase, type Database } from './database.js';
+export {
+  createAuthService,
+  type AuthService,
+  type AuthStatus,
+  type AuthenticationResult,
+} from './auth.js';
 export { createBoard, type Board } from './board.js';
 export {
   createInstanceService,

@@ -5,17 +5,23 @@ import Fastify, {
   type FastifyListenOptions,
 } from 'fastify';
 import { join } from 'node:path';
+import { type AuthService, type AuthenticationResult } from './auth.js';
 import { createInstanceService, type InstanceService } from './instance.js';
 
-interface ServerOptions {
+export interface ServerOptions {
+  readonly auth: AuthService;
   readonly instance?: InstanceService;
   readonly uiDirectory?: string;
 }
 
+const sessionCookieName = 'cerebra_session';
+const sessionCookieLifetimeSeconds = 30 * 24 * 60 * 60;
+
 export const createServer = async ({
+  auth,
   instance = createInstanceService(),
   uiDirectory = process.env.CEREBRA_UI_DIR,
-}: ServerOptions = {}): Promise<FastifyInstance> => {
+}: ServerOptions): Promise<FastifyInstance> => {
   const server = Fastify();
 
   await server.register(websocket);
@@ -24,6 +30,38 @@ export const createServer = async ({
   }
 
   server.get('/health', async () => ({ status: 'ok' }));
+
+  server.get('/api/auth/status', async (request, reply) => {
+    const status = await auth.status(getSessionToken(request.headers.cookie));
+    if (status.state === 'unauthenticated' && status.reason === 'expired') {
+      clearSessionCookie(reply);
+    }
+    return status;
+  });
+
+  server.post('/api/auth/setup', async (request, reply) => {
+    const result = await auth.setup(getPassword(request.body));
+    return sendAuthenticationResult(result, reply, 201);
+  });
+
+  server.post('/api/auth/sign-in', async (request, reply) => {
+    const result = await auth.signIn(getPassword(request.body));
+    return sendAuthenticationResult(result, reply, 200);
+  });
+
+  server.post('/api/auth/sign-out', async (request, reply) => {
+    await auth.signOut(getSessionToken(request.headers.cookie));
+    clearSessionCookie(reply);
+    return reply.status(204).send();
+  });
+
+  server.addHook('onRequest', async (request, reply) => {
+    if (!requiresAuthentication(request.raw.url ?? request.url)) {
+      return;
+    }
+
+    return authorize(auth, request, reply);
+  });
 
   server.get('/api/instance', async () => ({
     status: 'running' as const,
@@ -41,9 +79,16 @@ export const createServer = async ({
     }
   });
 
-  server.get('/ws', { websocket: true }, (socket) => {
-    socket.on('message', (message) => socket.send(message));
-  });
+  server.get(
+    '/ws',
+    {
+      preValidation: (request, reply) => authorize(auth, request, reply),
+      websocket: true,
+    },
+    (socket) => {
+      socket.on('message', (message) => socket.send(message));
+    },
+  );
 
   if (uiDirectory !== undefined) {
     server.setNotFoundHandler((request, reply) => {
@@ -59,7 +104,7 @@ export const createServer = async ({
 
 export const startServer = async (
   options: FastifyListenOptions,
-  serverOptions?: ServerOptions,
+  serverOptions: ServerOptions,
 ): Promise<FastifyInstance> => {
   const server = await createServer(serverOptions);
 
@@ -67,3 +112,99 @@ export const startServer = async (
 
   return server;
 };
+
+function getSessionToken(cookieHeader: string | undefined): string | undefined {
+  if (cookieHeader === undefined) {
+    return undefined;
+  }
+
+  return cookieHeader
+    .split(';')
+    .map((cookie) => cookie.trim().split('=', 2))
+    .find(([name]) => name === sessionCookieName)?.[1];
+}
+
+function getPassword(body: unknown): string {
+  if (
+    typeof body !== 'object' ||
+    body === null ||
+    !('password' in body) ||
+    typeof body.password !== 'string'
+  ) {
+    return '';
+  }
+  return body.password;
+}
+
+function requiresAuthentication(url: string): boolean {
+  const pathname = new URL(url, 'http://localhost').pathname;
+  return (
+    (pathname.startsWith('/api/') && !pathname.startsWith('/api/auth/')) ||
+    pathname === '/ws'
+  );
+}
+
+async function authorize(
+  auth: AuthService,
+  request: { headers: { cookie?: string } },
+  reply: {
+    header(name: string, value: string): unknown;
+    status(statusCode: number): { send(payload: unknown): unknown };
+  },
+): Promise<unknown> {
+  const status = await auth.status(getSessionToken(request.headers.cookie));
+  if (status.state === 'authenticated') {
+    return;
+  }
+
+  const reason =
+    status.state === 'unauthenticated' ? status.reason : 'signed-out';
+  if (reason === 'expired') {
+    clearSessionCookie(reply);
+  }
+  return reply.status(401).send({
+    error: 'Sign in to continue.',
+    reason,
+  });
+}
+
+function clearSessionCookie(reply: {
+  header(name: string, value: string): unknown;
+}): void {
+  reply.header(
+    'set-cookie',
+    `${sessionCookieName}=; HttpOnly; Max-Age=0; Path=/; SameSite=Strict`,
+  );
+}
+
+function sendAuthenticationResult(
+  result: AuthenticationResult,
+  reply: {
+    header(name: string, value: string): unknown;
+    status(statusCode: number): { send(payload: unknown): unknown };
+  },
+  successStatus: number,
+): unknown {
+  if (!result.ok) {
+    return reply
+      .status(
+        result.reason === 'invalid-password'
+          ? 400
+          : result.reason === 'already-configured'
+            ? 409
+            : 401,
+      )
+      .send({
+        error:
+          result.reason === 'invalid-password'
+            ? 'Use at least 8 characters.'
+            : 'That password didn’t match. Try again.',
+      });
+  }
+
+  reply.header(
+    'set-cookie',
+    `${sessionCookieName}=${result.sessionToken}; HttpOnly; Max-Age=${sessionCookieLifetimeSeconds}; Path=/; SameSite=Strict`,
+  );
+  return reply.status(successStatus).send({ state: 'authenticated' });
+}

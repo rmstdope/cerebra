@@ -1,5 +1,5 @@
 import { Pool } from 'pg';
-import { afterEach, beforeEach, describe, expect, test } from 'vitest';
+import { describe, expect, test } from 'vitest';
 
 import { createBoard } from './board.js';
 import { createDatabase } from './database.js';
@@ -10,8 +10,6 @@ const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) {
   throw new Error('DATABASE_URL is required to run board tests');
 }
-
-const schemas: string[] = [];
 
 function schemaName(): string {
   return `cerebra_board_test_${crypto.randomUUID().replaceAll('-', '')}`;
@@ -27,37 +25,29 @@ async function createSchema(): Promise<string> {
     await pool.end();
   }
 
-  schemas.push(schema);
   return schema;
 }
 
-beforeEach(async () => {
-  await createSchema();
-});
-
-afterEach(async () => {
+async function dropSchema(schema: string): Promise<void> {
   const pool = new Pool({ connectionString: databaseUrl });
 
   try {
-    await Promise.all(
-      schemas
-        .splice(0)
-        .map((schema) => pool.query(`DROP SCHEMA "${schema}" CASCADE`)),
-    );
+    await pool.query(`DROP SCHEMA "${schema}" CASCADE`);
   } finally {
     await pool.end();
   }
-});
+}
 
-describe('board lifecycle mutations', () => {
+describe('board lifecycle mutations', { concurrent: false }, () => {
   test('writes an allowed transition with its history and lifecycle event', async () => {
-    const database = createDatabase(databaseUrl, schemas[0]);
+    const schema = await createSchema();
+    const database = createDatabase(databaseUrl, schema);
     const board = createBoard(database);
     const projectId = crypto.randomUUID();
     const itemId = crypto.randomUUID();
 
     try {
-      await migrateToLatest(database, schemas[0]);
+      await migrateToLatest(database, schema);
       await board.createProject({ id: projectId, name: 'Test project' });
       await board.createWorkItem({ id: itemId, projectId });
 
@@ -101,17 +91,19 @@ describe('board lifecycle mutations', () => {
       ).toEqual([{ kind: 'triage', work_item_id: itemId }]);
     } finally {
       await database.destroy();
+      await dropSchema(schema);
     }
   });
 
   test('claims an item and creates its fake run in one transaction', async () => {
-    const database = createDatabase(databaseUrl, schemas[0]);
+    const schema = await createSchema();
+    const database = createDatabase(databaseUrl, schema);
     const board = createBoard(database);
     const projectId = crypto.randomUUID();
     const itemId = crypto.randomUUID();
 
     try {
-      await migrateToLatest(database, schemas[0]);
+      await migrateToLatest(database, schema);
       await board.createProject({ id: projectId, name: 'Test project' });
       await board.createWorkItem({
         id: itemId,
@@ -143,17 +135,19 @@ describe('board lifecycle mutations', () => {
       });
     } finally {
       await database.destroy();
+      await dropSchema(schema);
     }
   });
 
   test('serializes competing claims so only one fake run holds the item', async () => {
-    const database = createDatabase(databaseUrl, schemas[0]);
+    const schema = await createSchema();
+    const database = createDatabase(databaseUrl, schema);
     const board = createBoard(database);
     const projectId = crypto.randomUUID();
     const itemId = crypto.randomUUID();
 
     try {
-      await migrateToLatest(database, schemas[0]);
+      await migrateToLatest(database, schema);
       await board.createProject({ id: projectId, name: 'Test project' });
       await board.createWorkItem({
         id: itemId,
@@ -186,6 +180,7 @@ describe('board lifecycle mutations', () => {
       ).toHaveLength(1);
     } finally {
       await database.destroy();
+      await dropSchema(schema);
     }
   });
 });
