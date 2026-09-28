@@ -193,7 +193,6 @@ export const createServer = async ({
     }
   });
 
-
   if (uiDirectory !== undefined) {
     server.setNotFoundHandler((request, reply) => {
       if (request.method === 'GET' && !request.url.startsWith('/api/')) {
