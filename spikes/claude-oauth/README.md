@@ -46,6 +46,31 @@ turn. The marker text is the only intended evidence from either container. Neith
 model messages, SDK errors, question contents, or environment values, which could accidentally
 disclose a secret.
 
+## Streaming input
+
+The second runtime probe demonstrates an externally sent navigator message reaching a Claude turn
+that is already executing. It asks Claude to run `sleep 10`, waits until the SDK reports that
+in-turn Bash operation, then supplies one message through `Query.streamInput`. It passes only if
+the same session replies with the acknowledgement marker.
+
+```bash
+node --test src/stream-input.node.mjs
+./run-stream-input-rootless.sh
+```
+
+A successful run prints these four markers, in order:
+
+```text
+STREAM_INPUT_READY
+EXTERNAL_MESSAGE_SENT
+EXTERNAL_MESSAGE_ACKNOWLEDGED
+SPIKE_COMPLETE
+```
+
+`STREAM_INPUT_READY` is emitted only after the SDK reports the Bash tool call, so
+`EXTERNAL_MESSAGE_SENT` is evidence of delivery while the original turn is active. As with the
+first probe, no raw model text, SDK error, or environment value is printed.
+
 ## Cleanup
 
 The container is removed automatically. To remove the locally built disposable image:

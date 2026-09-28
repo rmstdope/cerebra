@@ -135,6 +135,17 @@ because `podman` is not installed (`podman: command not found`), so this does **
 D16. On a host with rootless Podman and a token exported from `claude setup-token`, run
 `spikes/claude-oauth/run-rootless.sh`; its expected markers are documented beside the spike.
 
+**Streaming-input spike evidence (2026-09-28):** `run-stream-input-rootless.sh` builds the same
+OAuth-only image and invokes `Query.streamInput` only after the SDK reports that the initial turn
+has started its `Bash` `sleep 10` operation. It sends one fixed navigator message and succeeds
+only when the active session replies with `EXTERNAL_MESSAGE_ACKNOWLEDGED`; the documented marker
+order records both delivery and completion without raw model text or credential values. The
+attempt on the navigator's Mac stopped at the wrapper's explicit prerequisite check (`Podman is
+required to run this rootless runtime spike.`), before token inspection or image build. Streaming
+input is therefore still unconfirmed on this machine; rerun
+`spikes/claude-oauth/run-stream-input-rootless.sh` on a rootless-Podman host with the subscription
+token exported to confirm or revise D16.
+
 ### D17. A named agent is an identity with a memory — decided
 
 Each named agent in a project keeps its own home directory and CLI state across runs: the
@@ -171,6 +182,11 @@ API-key fallback and explicitly leaves bare mode disabled. Its real rootless-con
 external-question-relay run is blocked on this Mac because Podman is absent, before the token is
 read or emitted. D20 remains unconfirmed until the documented command runs successfully on a
 rootless-Podman host.
+
+**Streaming-input spike evidence (2026-09-28):** the streamed-input probe uses the same
+`CLAUDE_CODE_OAUTH_TOKEN`-only, non-bare image and forwards the token by environment name only.
+Its rootless execution is blocked before token inspection on this Mac because Podman is absent;
+it neither confirms nor changes D20 until the documented rootless run succeeds.
 
 ### D21. The backend is TypeScript on Node — decided
 
