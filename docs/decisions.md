@@ -146,12 +146,30 @@ input is therefore still unconfirmed on this machine; rerun
 `spikes/claude-oauth/run-stream-input-rootless.sh` on a rootless-Podman host with the subscription
 token exported to confirm or revise D16.
 
+**Session-resumption spike evidence (2026-09-28):**
+`run-resume-session-rootless.sh` starts an OAuth-only agent container with a disposable,
+unprivileged named state volume, records the SDK-provided session ID inside that volume, removes
+the container, and starts a replacement with the same volume. The replacement supplies that
+unprinted ID to `options.resume` and must return a fixed token from the prior turn before printing
+its non-secret success markers. The attempt on the navigator's Mac stopped at the wrapper's
+explicit prerequisite check (`Podman is required to run this rootless runtime spike.`), before
+token inspection, image build, or state creation. Session resumption is therefore unconfirmed on
+this machine; rerun `spikes/claude-oauth/run-resume-session-rootless.sh` on a rootless-Podman host
+with the subscription token exported to confirm or revise D16.
+
 ### D17. A named agent is an identity with a memory — decided
 
 Each named agent in a project keeps its own home directory and CLI state across runs: the
 backend's auto-memory, resumable conversations, tool caches. A name runs at most one run at a
 time, so its state is never shared by two runs, and the number of enabled names of a type is the
 type's concurrency limit in that project.
+
+**Spike evidence (2026-09-28):** the session-resumption probe described under D16 mounts one
+disposable named volume at the unprivileged agent's `CLAUDE_CONFIG_DIR` in two separately-created
+containers and removes both the first container and volume on exit. This Mac lacks Podman, so the
+run stopped before state creation and does not yet demonstrate that persisted CLI state and
+`options.resume` meet D17. No architectural consequence follows yet: D17 remains the chosen
+design, pending the documented rootless-Podman run.
 
 ### D18. Any agent may ask the navigator — decided
 
@@ -187,6 +205,12 @@ rootless-Podman host.
 `CLAUDE_CODE_OAUTH_TOKEN`-only, non-bare image and forwards the token by environment name only.
 Its rootless execution is blocked before token inspection on this Mac because Podman is absent;
 it neither confirms nor changes D20 until the documented rootless run succeeds.
+
+**Session-resumption spike evidence (2026-09-28):** the replacement-container probe forwards
+only `CLAUDE_CODE_OAUTH_TOKEN` by environment name to each agent container and emits neither it
+nor the persisted session ID. Its rootless execution stopped before token inspection on this Mac
+because Podman is absent, so it neither confirms nor changes D20 until the documented command
+succeeds on a rootless-Podman host.
 
 ### D21. The backend is TypeScript on Node — decided
 
