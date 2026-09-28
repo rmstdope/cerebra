@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Cerebra — App shell</title>
+    <style>
+      * { box-sizing: border-box; } body { margin: 0; min-height: 100vh; background: #f7f8fb; color: #172033; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
+      header { height: 72px; display: flex; align-items: center; justify-content: space-between; padding: 0 5vw; background: #fff; border-bottom: 1px solid #e3e7ef; }
+      .brand { font-size: 20px; font-weight: 740; }.right { position: relative; }.trigger { min-height: 42px; padding: 0 14px; border: 1px solid #bdc6d6; border-radius: 9px; background: #fff; color: #172033; font: inherit; }
+      .menu { position: absolute; z-index: 1; top: 52px; right: 0; width: 260px; padding: 6px; border: 1px solid #d7dce6; border-radius: 11px; background: #fff; box-shadow: 0 14px 32px #24304d22; }
+      .menu[hidden] { display: none; }
+      .menu p { margin: 8px 10px 5px; color: #66738a; font-size: 12px; font-weight: 700; }.choice { width: 100%; padding: 10px; border: 0; border-radius: 7px; background: transparent; color: #172033; text-align: left; font: inherit; }.choice[aria-current="true"] { background: #eeeaff; color: #4934b5; font-weight: 700; }.choice:focus-visible, .trigger:focus-visible { outline: 3px solid #5a43d6; outline-offset: 3px; }
+      .error { margin: 8px 10px 6px; color: #b42318 !important; font-size: 12px !important; font-weight: 600; line-height: 1.35; } main { width: min(760px, calc(100% - 40px)); margin: 0 auto; padding: 122px 0 60px; text-align: center; } .icon { width: 58px; height: 58px; display: grid; place-items: center; margin: 0 auto 24px; border-radius: 18px; background: #ebe8ff; color: #503bbf; font-size: 26px; } h1 { margin: 0; font-size: clamp(30px, 4vw, 42px); letter-spacing: -.04em; } main p { color: #536076; font-size: 17px; line-height: 1.55; }.empty { margin-top: 42px; padding: 20px 24px; border: 1px solid #e3e7ef; border-radius: 14px; background: #fff; text-align: left; }.empty strong { display: block; font-size: 15px; }.empty span { display: block; margin-top: 5px; color: #536076; font-size: 14px; line-height: 1.45; }
+      @media (max-width: 520px) { header { padding: 0 20px; }.brand { font-size: 18px; }.trigger { padding: 0 10px; } }
+      @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+    </style>
+  </head>
+  <body>
+    <header><div class="brand">Cerebra</div><div class="right"><button class="trigger" type="button" aria-haspopup="menu" aria-expanded="false">Theme: System</button><div class="menu" role="menu" aria-label="Appearance" hidden><p>Appearance</p><button class="choice" role="menuitemradio" aria-checked="false">Light</button><button class="choice" role="menuitemradio" aria-checked="false">Dark</button><button class="choice" role="menuitemradio" aria-checked="true" aria-current="true">System</button><p class="error" hidden>Cerebra couldn’t save that appearance choice. It will reset when you close this page.</p></div></div></header>
+    <main><div class="icon" aria-hidden="true">✦</div><h1>Welcome to Cerebra</h1><p>There is nothing to review yet. Add your first project to start organising work here.</p><div class="empty"><strong>No projects have been added</strong><span>Your projects and any work waiting for you will appear in this space.</span></div></main>
+    <script>
+      const trigger = document.querySelector(".trigger");
+      const menu = document.querySelector(".menu");
+      const choices = [...document.querySelectorAll(".choice")];
+
+      function closeMenu() {
+        menu.hidden = true;
+        trigger.setAttribute("aria-expanded", "false");
+        trigger.focus();
+      }
+
+      function openMenu() {
+        menu.hidden = false;
+        trigger.setAttribute("aria-expanded", "true");
+        choices.find((choice) => choice.getAttribute("aria-checked") === "true").focus();
+      }
+
+      trigger.addEventListener("click", () => (menu.hidden ? openMenu() : closeMenu()));
+      trigger.addEventListener("keydown", (event) => {
+        if (["Enter", " ", "ArrowDown"].includes(event.key)) {
+          event.preventDefault();
+          openMenu();
+        }
+      });
+      menu.addEventListener("keydown", (event) => {
+        const index = choices.indexOf(document.activeElement);
+        if (event.key === "Escape") closeMenu();
+        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+          event.preventDefault();
+          choices[(index + (event.key === "ArrowDown" ? 1 : choices.length - 1)) % choices.length].focus();
+        }
+        if (event.key === "Enter" || event.key === " ") closeMenu();
+      });
+      document.addEventListener("click", (event) => {
+        if (!menu.hidden && !event.target.closest(".right")) closeMenu();
+      });
+    </script>
+  </body>
+</html>
