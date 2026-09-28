@@ -1,24 +1,27 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { answerAskUserQuestion } from './permission.mjs';
+import { createAskUserQuestionOptions } from './runner.mjs';
 
-test('answers AskUserQuestion with the deterministic spike response', () => {
+test('registers AskUserQuestion as the only tool and returns the deterministic answer', async () => {
+  let receivedQuestion = false;
+  const options = createAskUserQuestionOptions(() => {
+    receivedQuestion = true;
+  });
+
+  assert.deepEqual(options.tools, ['AskUserQuestion']);
   assert.deepEqual(
-    answerAskUserQuestion({
-      name: 'AskUserQuestion',
-      input: {
-        questions: [
-          {
-            question: 'Should the spike continue?',
-            header: 'Spike',
-            options: [
-              { label: 'Yes', description: 'Continue' },
-              { label: 'No', description: 'Stop' },
-            ],
-          },
-        ],
-      },
+    await options.canUseTool('AskUserQuestion', {
+      questions: [
+        {
+          question: 'Should the spike continue?',
+          header: 'Spike',
+          options: [
+            { label: 'Yes', description: 'Continue' },
+            { label: 'No', description: 'Stop' },
+          ],
+        },
+      ],
     }),
     {
       behavior: 'allow',
@@ -37,11 +40,14 @@ test('answers AskUserQuestion with the deterministic spike response', () => {
       },
     },
   );
+  assert.equal(receivedQuestion, true);
 });
 
-test('refuses a tool other than AskUserQuestion', () => {
-  assert.throws(
-    () => answerAskUserQuestion({ name: 'Bash', input: { command: 'pwd' } }),
+test('the query callback refuses a tool other than AskUserQuestion', async () => {
+  const { canUseTool } = createAskUserQuestionOptions(() => {});
+
+  await assert.rejects(
+    canUseTool('Bash', { command: 'pwd' }),
     /Expected AskUserQuestion, received Bash/,
   );
 });
