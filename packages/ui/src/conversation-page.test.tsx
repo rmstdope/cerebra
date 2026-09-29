@@ -30,6 +30,7 @@ function conversation(
       failure: null,
       id: 'run-1',
       item: null,
+      projectId: 'project-1',
       startedAt,
       state: 'starting',
       ...run,

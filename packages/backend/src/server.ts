@@ -1184,6 +1184,7 @@ function conversationBody({ events, run }: Conversation) {
       failure: run.failure,
       id: run.id,
       item: run.item,
+      projectId: run.projectId,
       startedAt: run.startedAt.toISOString(),
       state: run.state,
     },
