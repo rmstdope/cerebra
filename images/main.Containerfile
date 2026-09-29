@@ -8,7 +8,12 @@ FROM node:26-bookworm-slim
 WORKDIR /app
 ENV NODE_ENV=production
 ENV CEREBRA_ADDRESS=http://localhost:4317
-RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/*
+# pg_dump must match the Postgres 18 server; Debian's own client is older, so it comes from PGDG.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends git ca-certificates postgresql-common tzdata \
+  && /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y \
+  && apt-get install -y --no-install-recommends postgresql-client-18 \
+  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /app/package.json /app/pnpm-lock.yaml /app/pnpm-workspace.yaml ./
 COPY --from=build /app/packages/backend/dist ./packages/backend/dist
 COPY --from=build /app/packages/backend/agent-types ./packages/backend/agent-types

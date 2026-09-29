@@ -468,4 +468,56 @@ describe('navigator queue', { concurrent: false }, () => {
     });
     expect(await board.getWorkItem(id)).toMatchObject({ state: 'build_ready' });
   });
+
+  async function attempt(
+    status: 'running' | 'completed' | 'failed',
+    startedAt: Date,
+  ): Promise<void> {
+    await database
+      .insertInto('backups')
+      .values({
+        cause: status === 'failed' ? 'the backup folder is full' : null,
+        file_name: 'cerebra.dump',
+        finished_at: status === 'running' ? null : startedAt,
+        size_bytes: status === 'completed' ? '10' : null,
+        started_at: startedAt,
+        status,
+        trigger: 'scheduled',
+      })
+      .execute();
+  }
+
+  test('shows a failed latest backup until a later one completes', async () => {
+    expect((await queue.list()).notices).toEqual([]);
+
+    await attempt('completed', new Date('2026-09-27T02:00:00Z'));
+    expect((await queue.list()).notices).toEqual([]);
+
+    const failedAt = new Date('2026-09-28T02:00:00Z');
+    await attempt('failed', failedAt);
+    const failed = await queue.list();
+    expect(failed.notices).toEqual([
+      {
+        at: failedAt,
+        cause: 'the backup folder is full',
+        kind: 'backup_failed',
+      },
+    ]);
+    expect(failed.total).toBe(0);
+
+    // A retry still running has not cleared it.
+    await attempt('running', new Date('2026-09-28T09:00:00Z'));
+    expect((await queue.list()).notices).toHaveLength(1);
+
+    await database
+      .updateTable('backups')
+      .set({
+        finished_at: new Date('2026-09-28T09:01:00Z'),
+        size_bytes: '10',
+        status: 'completed',
+      })
+      .where('status', '=', 'running')
+      .execute();
+    expect((await queue.list()).notices).toEqual([]);
+  });
 });

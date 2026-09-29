@@ -109,7 +109,11 @@ describe('database migrations', { concurrent: false }, () => {
           status: 'Success',
         }),
         expect.objectContaining({
-          migrationName: '20261005000000_record_usage',
+          migrationName: '20261005000000_add_backups',
+          status: 'Success',
+        }),
+        expect.objectContaining({
+          migrationName: '20261006000000_record_usage',
           status: 'Success',
         }),
       ]);
@@ -367,7 +371,7 @@ describe('database migrations', { concurrent: false }, () => {
     ];
 
     try {
-      await migrateTo(database, '20261004000000_add_builder_delivery', schema);
+      await migrateTo(database, '20261005000000_add_backups', schema);
       await sql`INSERT INTO projects (id, name) VALUES (${projectId}, 'Atlas')`.execute(
         database,
       );

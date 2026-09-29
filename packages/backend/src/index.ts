@@ -141,6 +141,7 @@ export {
 export {
   compareQueueEntries,
   createNavigatorQueue,
+  type InstanceNotice,
   type NavigatorQueue,
   type NavigatorQueuePage,
   type QueueActionResult,
@@ -179,6 +180,17 @@ export {
   type PushBatcher,
   type PushMessage,
 } from './notifier.js';
+export {
+  BackupConfigError,
+  createBackups,
+  createPgDump,
+  parseBackupConfig,
+  type BackupConfig,
+  type BackupRecord,
+  type BackupStatus,
+  type Backups,
+  type StartResult,
+} from './backups.js';
 export { migrateToLatest } from './migrations/index.js';
 export {
   createPodmanEngine,

@@ -8,6 +8,7 @@ import Fastify, {
 } from 'fastify';
 import { join } from 'node:path';
 import { type AuthService, type AuthenticationResult } from './auth.js';
+import type { Backups } from './backups.js';
 import {
   boardRoutes,
   boardSorts,
@@ -97,6 +98,8 @@ export interface ServerOptions {
   readonly startSettings?: StartSettings;
   /** Explains waiting work; absent when no container engine is configured. */
   readonly dispatcher?: Pick<Dispatcher, 'status'>;
+  /** The scheduled database backups; absent when no backup folder is configured. */
+  readonly backups?: Backups;
   /** Called after every request that changed something, so waiting work can be looked at again. */
   readonly onMutation?: () => void;
   /** Reads what runs, items and projects have cost. */
@@ -310,6 +313,7 @@ const contentSecurityPolicy = [
 
 export const createServer = async ({
   auth,
+  backups,
   board,
   conversations,
   credentials,
@@ -1190,6 +1194,27 @@ export const createServer = async ({
     costs,
     notificationSettings,
     notifications,
+  });
+
+  const backupsUnavailable = (reply: FastifyReply) =>
+    reply.status(503).send({ error: 'Backups are unavailable.' });
+
+  server.get('/api/settings/backups', async (_request, reply) =>
+    backups === undefined ? backupsUnavailable(reply) : backups.status(),
+  );
+
+  server.post('/api/settings/backups', async (_request, reply) => {
+    if (backups === undefined) {
+      return backupsUnavailable(reply);
+    }
+    const result = await backups.start('manual');
+    if (!result.started) {
+      return reply.status(409).send({
+        code: result.reason,
+        error: 'A backup is already running.',
+      });
+    }
+    return reply.status(202).send(await backups.status());
   });
 
   return server;

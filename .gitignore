@@ -17,3 +17,6 @@ packages/*/dist-types/
 packages/*/*.tsbuildinfo
 .env
 .env.*
+
+# ./cerebra writes scheduled database backups here unless CEREBRA_BACKUP_DIR says otherwise.
+/backups/

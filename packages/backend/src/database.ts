@@ -42,6 +42,20 @@ export interface Database {
     id: Generated<string>;
     project_id: string;
   };
+  backup_schedule: {
+    id: Generated<boolean>;
+    scheduled_since: Generated<Date>;
+  };
+  backups: {
+    cause: string | null;
+    file_name: string | null;
+    finished_at: Date | null;
+    id: Generated<string>;
+    size_bytes: string | null;
+    started_at: Date;
+    status: 'running' | 'completed' | 'failed';
+    trigger: 'scheduled' | 'manual';
+  };
   authentication_configuration: {
     id: Generated<boolean>;
     user_id: string;

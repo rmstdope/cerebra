@@ -13,11 +13,13 @@ had added `20261004000000_add_builder_delivery`, and this bead had added
 whole file name, so the tie was broken by the suffix alone. An instance already migrated to main
 would have refused this bead's migration as out of order. It was renamed to
 `20261005000000_record_usage`. This bead's backfill test also migrated to "the migration before
-mine" by name, so it needed the new predecessor too.
+mine" by name, so it needed the new predecessor too. After review and CI, main (cr-c4f.3, #57)
+added `20261005000000_add_backups`, the same tie a second time. The PR went `CONFLICTING`, and
+the migration was renamed again, to `20261006000000_record_usage`.
 **Why.** Each producer picks the next timestamp after the newest migration on main when it plans.
 Two beads planned from the same main pick the same one, and nothing checks for it before the rebase.
-**Cost.** One conflict resolution, a rename commit, and a rerun of the database suites and the
-full gate.
+**Cost.** Two conflict resolutions and two renames, each followed by the database suites, a
+full gate and a CI run.
 **Prevent by.** In produce-bead's step before opening the PR (or in the gate), fail when a
 migration added on the branch does not sort strictly after every migration on
 `origin/<default branch>`. Alternatively, have migration names carry the bead id after a
