@@ -268,6 +268,10 @@ export function App({
     setProjectView('board');
     setReturnToFleet(false);
     setBoardRequest(null);
+    if (conversation !== null) {
+      window.location.hash = '';
+      setHash('');
+    }
   }
 
   useEffect(() => {
@@ -769,6 +773,7 @@ export function App({
           </nav>
           {settings.page === 'credentials' ? (
             <CredentialsPage
+              key={projectId ?? 'instance'}
               client={credentialClient}
               projectId={projectId}
               storage={storage}

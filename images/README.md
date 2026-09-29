@@ -5,8 +5,10 @@ Containerfiles for Cerebra's two images (architecture §12). Build both from the
 ## `cerebro-main`
 
 The backend and the web UI, with Git and CA certificates for GitHub discovery and mirror cloning.
-Dependency installation caps Node's heap and download concurrency so the image can build in the
-default 2 GB Podman machine while the local application is running.
+Dependency installation caps Node's heap and download concurrency to reduce build memory usage.
+If the default 2 GB Podman machine kills a build with exit status 137, stop Cerebra's containers
+with `podman compose --file images/podman-compose.yml stop`, then retry `./cerebra update`.
+This keeps the persistent volumes and master-key secret.
 
 ```sh
 podman build -f images/main.Containerfile -t cerebro-main .
@@ -19,8 +21,9 @@ secret `cerebra-project-token-key`; Compose mounts it only in `main` at
 an unreadable or malformed key prevents startup. Never replace this secret on updates: existing
 credentials depend on it. See the root README for legacy-key migration and backup guidance.
 
-The `internal` network connects only `main` and Postgres. Only `main` also joins `egress`, for
-GitHub HTTPS and Git. Only the web port is published, on `127.0.0.1:4317`; Postgres has no host port.
+The private `database` network connects only `main` and Postgres. The main container also joins
+`internal` for runners and `egress` for GitHub HTTPS and Git. Only the web port is published, on
+`127.0.0.1:4317`; Postgres has no host port.
 
 Project discovery uses GitHub API Bearer authentication; mirror cloning uses Git-over-HTTPS
 Basic authentication with the token as the password. The Git header is passed only in the clone
@@ -51,7 +54,7 @@ the run completed or was stopped, 1 otherwise.
 ## `podman-compose.yml`
 
 The main container runs agents only when `CEREBRA_PODMAN_SOCKET` names the mounted Podman socket
-and `CEREBRA_PROJECT_TOKEN_KEY` lets it read credentials; otherwise starting an agent answers that
+and the mounted master key lets it read credentials; otherwise starting an agent answers that
 Cerebra can't run agents yet. The other settings, with the values compose gives them:
 
 | Variable                   | Value                   | What it is                                                      |
