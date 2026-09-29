@@ -1,4 +1,9 @@
-import type { Kysely, Transaction } from 'kysely';
+import {
+  sql,
+  type Kysely,
+  type SelectQueryBuilder,
+  type Transaction,
+} from 'kysely';
 
 import type { Database } from './database.js';
 import {
@@ -6,6 +11,7 @@ import {
   transition,
   type LifecycleContext,
   type LifecycleRole,
+  type Priority,
   type TransitionRequest,
   type TransitionResult,
   type WorkItem,
@@ -54,15 +60,90 @@ export interface BoardComment {
   readonly id: number;
 }
 
+export type BoardRoute = 'build_ready' | 'design_ready' | 'grooming_ready';
+export type BoardSort = 'newest' | 'oldest' | 'priority';
+
+export const boardRoutes: readonly BoardRoute[] = [
+  'grooming_ready',
+  'design_ready',
+  'build_ready',
+];
+export const boardSorts: readonly BoardSort[] = [
+  'newest',
+  'oldest',
+  'priority',
+];
+
+export interface BoardFilters {
+  readonly priority?: Priority | 'none';
+  readonly search?: string;
+  readonly state?: WorkItemState;
+}
+
+export interface BoardQuery extends BoardFilters {
+  readonly cursor?: string;
+  readonly limit?: number;
+  readonly snapshot?: string;
+  readonly sort?: BoardSort;
+}
+
+export interface BoardPage {
+  readonly items: readonly BoardWorkItem[];
+  readonly nextCursor: string | null;
+  readonly snapshot: string;
+}
+
+export type TriageResult =
+  | TransitionResult
+  | {
+      readonly code: 'route_unavailable';
+      readonly ok: false;
+      readonly reason: string;
+    };
+
+export class WorkItemNotFoundError extends Error {
+  constructor(itemId: string) {
+    super(`Work item ${itemId} does not exist.`);
+    this.name = 'WorkItemNotFoundError';
+  }
+}
+
+export class ProjectNotFoundError extends Error {
+  constructor(projectId: string) {
+    super(`Project ${projectId} does not exist.`);
+    this.name = 'ProjectNotFoundError';
+  }
+}
+
+const defaultPageSize = 25;
+const stageForRoute: Record<
+  BoardRoute,
+  keyof LifecycleContext['stages'] | null
+> = {
+  build_ready: null,
+  design_ready: 'design',
+  grooming_ready: 'grooming',
+};
+
 export interface Board {
   claim(itemId: string, role: RunRole): Promise<TransitionResult>;
   addComment(itemId: string, body: string): Promise<BoardComment>;
+  cancel(itemId: string): Promise<TransitionResult>;
+  countArrivals(
+    projectId: string,
+    query: BoardFilters & { readonly snapshot: string },
+  ): Promise<number>;
   createProject(input: CreateProject): Promise<void>;
   createWorkItem(input: CreateWorkItem): Promise<void>;
   getHistory(itemId: string): Promise<readonly BoardHistoryEntry[]>;
   getWorkItem(itemId: string): Promise<BoardWorkItem>;
   listComments(itemId: string): Promise<readonly BoardComment[]>;
-  listWorkItems(projectId: string): Promise<readonly BoardWorkItem[]>;
+  listWorkItems(projectId: string, query?: BoardQuery): Promise<BoardPage>;
+  triage(
+    itemId: string,
+    priority: Priority,
+    route: BoardRoute,
+  ): Promise<TriageResult>;
   transition(
     itemId: string,
     request: TransitionRequest,
@@ -75,6 +156,7 @@ export function createBoard(database: Kysely<Database>): Board {
       if (body.trim().length === 0) {
         throw new Error('A comment cannot be empty.');
       }
+      await assertWorkItemExists(database, itemId);
       const comment = await database
         .insertInto('work_item_comments')
         .values({ body: body.trim(), work_item_id: itemId })
@@ -108,6 +190,7 @@ export function createBoard(database: Kysely<Database>): Board {
       title = '',
       description = '',
     }) {
+      await assertProjectExists(database, projectId);
       const item = createWorkItem({ priority, state });
 
       await database
@@ -129,45 +212,73 @@ export function createBoard(database: Kysely<Database>): Board {
         .execute();
     },
 
-    async listWorkItems(projectId) {
-      return database
-        .selectFrom('work_items')
-        .select([
-          'created_at',
-          'description',
-          'id',
-          'priority',
-          'state',
-          'title',
-          'updated_at',
-        ])
-        .where('project_id', '=', projectId)
-        .orderBy('created_at asc')
-        .execute()
-        .then((rows) => rows.map(toBoardWorkItem));
+    async listWorkItems(projectId, query = {}) {
+      await assertProjectExists(database, projectId);
+      const snapshot: string =
+        query.snapshot ??
+        (await database
+          .selectFrom('work_items')
+          .select(
+            sql<string>`coalesce(max(filed_sequence), 0)::text`.as('snapshot'),
+          )
+          .executeTakeFirstOrThrow()
+          .then((row) => String(row.snapshot)));
+      const limit = query.limit ?? defaultPageSize;
+      const offset = query.cursor === undefined ? 0 : Number(query.cursor);
+      let rows = filtered(
+        database.selectFrom('work_items').select(boardColumns),
+        projectId,
+        query,
+      ).where('filed_sequence', '<=', snapshot);
+      rows =
+        query.sort === 'oldest'
+          ? rows.orderBy('filed_sequence', 'asc')
+          : query.sort === 'priority'
+            ? rows
+                .orderBy(sql`priority asc nulls last`)
+                .orderBy('filed_sequence', 'desc')
+            : rows.orderBy('filed_sequence', 'desc');
+      const page = await rows
+        .limit(limit + 1)
+        .offset(offset)
+        .execute();
+
+      return {
+        items: page.slice(0, limit).map(toBoardWorkItem),
+        nextCursor: page.length > limit ? String(offset + limit) : null,
+        snapshot,
+      };
+    },
+
+    async countArrivals(projectId, query) {
+      await assertProjectExists(database, projectId);
+      const row = await filtered(
+        database
+          .selectFrom('work_items')
+          .select((builder) => builder.fn.countAll<string>().as('count')),
+        projectId,
+        query,
+      )
+        .where('filed_sequence', '>', query.snapshot)
+        .executeTakeFirstOrThrow();
+      return Number(row.count);
     },
 
     async getWorkItem(itemId) {
+      await assertWorkItemExists(database, itemId);
       const row = await database
         .selectFrom('work_items')
-        .select([
-          'created_at',
-          'description',
-          'id',
-          'priority',
-          'state',
-          'title',
-          'updated_at',
-        ])
+        .select(boardColumns)
         .where('id', '=', itemId)
         .executeTakeFirst();
       if (row === undefined) {
-        throw new Error(`Work item ${itemId} does not exist.`);
+        throw new WorkItemNotFoundError(itemId);
       }
       return toBoardWorkItem(row);
     },
 
     async getHistory(itemId) {
+      await assertWorkItemExists(database, itemId);
       return database
         .selectFrom('work_item_history')
         .select([
@@ -192,6 +303,7 @@ export function createBoard(database: Kysely<Database>): Board {
     },
 
     async listComments(itemId) {
+      await assertWorkItemExists(database, itemId);
       return database
         .selectFrom('work_item_comments')
         .select(['body', 'created_at', 'id'])
@@ -224,6 +336,44 @@ export function createBoard(database: Kysely<Database>): Board {
           request,
         );
         return result;
+      });
+    },
+
+    async triage(itemId, priority, route) {
+      return database.transaction().execute(async (transactionDatabase) => {
+        const current = await getLockedItem(transactionDatabase, itemId);
+        const stage = stageForRoute[route];
+        if (stage !== null && !current.context.stages[stage]) {
+          return {
+            code: 'route_unavailable' as const,
+            ok: false as const,
+            reason: 'That next step is not available for this project.',
+          };
+        }
+        const request: TransitionRequest = {
+          actor: { role: 'navigator' },
+          priority,
+          record: { kind: 'triage' },
+          to: route,
+        };
+        const result = transition(current.item, request, current.context);
+        if (result.ok) {
+          await persistTransition(
+            transactionDatabase,
+            itemId,
+            current.item,
+            result,
+            request,
+          );
+        }
+        return result;
+      });
+    },
+
+    async cancel(itemId) {
+      return this.transition(itemId, {
+        actor: { role: 'navigator' },
+        to: 'cancelled',
       });
     },
 
@@ -262,6 +412,80 @@ export function createBoard(database: Kysely<Database>): Board {
   };
 }
 
+const boardColumns = [
+  'created_at',
+  'description',
+  'id',
+  'priority',
+  'state',
+  'title',
+  'updated_at',
+] as const;
+
+function filtered<O>(
+  query: SelectQueryBuilder<Database, 'work_items', O>,
+  projectId: string,
+  filters: BoardFilters,
+): SelectQueryBuilder<Database, 'work_items', O> {
+  let next = query.where('project_id', '=', projectId);
+  if (filters.state !== undefined) {
+    next = next.where('state', '=', filters.state);
+  }
+  if (filters.priority === 'none') {
+    next = next.where('priority', 'is', null);
+  } else if (filters.priority !== undefined) {
+    next = next.where('priority', '=', filters.priority);
+  }
+  const search = filters.search?.trim();
+  if (search) {
+    const pattern = `%${search.replace(/[\\%_]/g, (character) => `\\${character}`)}%`;
+    next = next.where((builder) =>
+      builder.or([
+        builder('title', 'ilike', pattern),
+        builder('description', 'ilike', pattern),
+      ]),
+    );
+  }
+  return next;
+}
+
+const uuidPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+async function assertProjectExists(
+  database: DatabaseExecutor,
+  projectId: string,
+): Promise<void> {
+  if (!uuidPattern.test(projectId)) {
+    throw new ProjectNotFoundError(projectId);
+  }
+  const row = await database
+    .selectFrom('projects')
+    .select('id')
+    .where('id', '=', projectId)
+    .executeTakeFirst();
+  if (row === undefined) {
+    throw new ProjectNotFoundError(projectId);
+  }
+}
+
+async function assertWorkItemExists(
+  database: DatabaseExecutor,
+  itemId: string,
+): Promise<void> {
+  if (!uuidPattern.test(itemId)) {
+    throw new WorkItemNotFoundError(itemId);
+  }
+  const row = await database
+    .selectFrom('work_items')
+    .select('id')
+    .where('id', '=', itemId)
+    .executeTakeFirst();
+  if (row === undefined) {
+    throw new WorkItemNotFoundError(itemId);
+  }
+}
+
 function toBoardWorkItem(row: {
   readonly created_at: Date;
   readonly description: string;
@@ -286,6 +510,7 @@ async function getLockedItem(
   database: DatabaseExecutor,
   itemId: string,
 ): Promise<{ readonly context: LifecycleContext; readonly item: WorkItem }> {
+  await assertWorkItemExists(database, itemId);
   const row = await database
     .selectFrom('work_items')
     .innerJoin('projects', 'projects.id', 'work_items.project_id')
@@ -307,7 +532,7 @@ async function getLockedItem(
     .executeTakeFirst();
 
   if (row === undefined) {
-    throw new Error(`Work item ${itemId} does not exist.`);
+    throw new WorkItemNotFoundError(itemId);
   }
 
   return {

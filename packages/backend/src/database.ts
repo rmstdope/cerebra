@@ -53,6 +53,7 @@ export interface Database {
     attempts: number;
     created_at: Generated<Date>;
     description: string;
+    filed_sequence: Generated<string>;
     holder_run_id: string | null;
     id: string;
     priority: Priority | null;

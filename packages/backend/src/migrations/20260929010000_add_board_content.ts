@@ -9,6 +9,13 @@ export async function up(database: Kysely<Database>): Promise<void> {
     .addColumn('description', 'text', (column) =>
       column.notNull().defaultTo(''),
     )
+    .addColumn('filed_sequence', 'bigserial', (column) => column.notNull())
+    .execute();
+
+  await database.schema
+    .createIndex('work_items_project_filed_sequence')
+    .on('work_items')
+    .columns(['project_id', 'filed_sequence'])
     .execute();
 
   await database.schema
@@ -28,6 +35,7 @@ export async function down(database: Kysely<Database>): Promise<void> {
   await database.schema.dropTable('work_item_comments').execute();
   await database.schema
     .alterTable('work_items')
+    .dropColumn('filed_sequence')
     .dropColumn('description')
     .dropColumn('title')
     .execute();

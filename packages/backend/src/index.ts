@@ -8,11 +8,21 @@ export {
   type AuthenticationResult,
 } from './auth.js';
 export {
+  boardRoutes,
+  boardSorts,
   createBoard,
+  ProjectNotFoundError,
+  WorkItemNotFoundError,
   type Board,
   type BoardComment,
+  type BoardFilters,
   type BoardHistoryEntry,
+  type BoardPage,
+  type BoardQuery,
+  type BoardRoute,
+  type BoardSort,
   type BoardWorkItem,
+  type TriageResult,
 } from './board.js';
 export {
   createInstanceService,
@@ -23,6 +33,7 @@ export {
   createWorkItem,
   transition,
   transitionTable,
+  workItemStates,
   type LifecycleContext,
   type LifecycleEffect,
   type LifecycleRole,
