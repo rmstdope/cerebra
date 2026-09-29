@@ -183,6 +183,49 @@ describe('navigator queue', { concurrent: false }, () => {
     });
   });
 
+  test('marks a merge block so its row can open the item', async () => {
+    const blocked = await file(alpha, 'Add export button', 'merging');
+    await wait(
+      blocked,
+      'escalation',
+      "Can't merge: a required check failed",
+      'merging',
+    );
+    await database
+      .insertInto('work_item_records')
+      .values({
+        kind: 'blocked',
+        payload: JSON.stringify({ check: 'build', reason: 'check_failed' }),
+        work_item_id: blocked,
+      })
+      .execute();
+    const stuck = await file(alpha, 'Stuck', 'build_ready');
+    await wait(stuck, 'escalation', 'Attempts ran out.', 'build_ready');
+
+    const page = await queue.list();
+
+    expect(page.entries.map((entry) => [entry.title, entry.blocked])).toEqual([
+      ['Add export button', true],
+      ['Stuck', false],
+    ]);
+  });
+
+  test('forgets a block once the item has waited again for another reason', async () => {
+    const id = await file(alpha, 'Answered', 'merging');
+    await database
+      .insertInto('work_item_records')
+      .values({
+        created_at: new Date(Date.now() - 60_000),
+        kind: 'blocked',
+        payload: JSON.stringify({ reason: 'conflict' }),
+        work_item_id: id,
+      })
+      .execute();
+    await wait(id, 'escalation', 'Something else.', 'merging');
+
+    expect((await queue.list()).entries[0]?.blocked).toBe(false);
+  });
+
   async function run(
     projectId: string | null,
     agentName: string,
@@ -265,6 +308,7 @@ describe('navigator queue', { concurrent: false }, () => {
     expect(page.entries[0]).toEqual({
       askedBy: 'Astra',
       availableRoutes: [],
+      blocked: false,
       description: '',
       id: `run:${waiting}:q-2`,
       kind: 'question',

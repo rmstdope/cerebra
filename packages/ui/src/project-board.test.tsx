@@ -1146,3 +1146,73 @@ test('reopens the item and refocuses the trail link after Back', async () => {
   await waitFor(() => expect(document.activeElement).toBe(link));
   expect(window.history.state).toMatchObject({ cerebraDeliveryFocus: null });
 });
+
+test('opens a blocked item’s Overview with its banner, and an answer moves the item on', async () => {
+  const user = userEvent.setup();
+  const waiting: WorkItem = { ...workItem, state: 'waiting' };
+  const blockedEvent = {
+    agentName: null,
+    at: '2026-10-04T11:40:00.000Z',
+    check: 'build',
+    id: '8',
+    kind: 'blocked',
+    reason: 'check_failed',
+    revision: 'd4e5f6a0',
+    reviewer: 'Rogue',
+    runId: null,
+  } as const;
+  let sent = false;
+  const delivery: DeliveryActivityClient = {
+    read: async () => ({
+      blocked: sent ? null : { canReturnToDesign: true, event: blockedEvent },
+      current: null,
+      earlierCursor: null,
+      events: [blockedEvent],
+      latestChecks: null,
+      latestPullRequest: null,
+    }),
+    sendBack: async () => {
+      sent = true;
+      return { ...workItem, state: 'build_ready' };
+    },
+  };
+  render(
+    <ProjectBoard
+      automaticStartsClient={startsClient()}
+      boardClient={createClient({
+        item: async () => waiting,
+        list: async () => page([waiting]),
+      })}
+      deliveryClient={delivery}
+      projectId="project-1"
+      storage={memoryStorage()}
+    />,
+  );
+
+  await openItem('Show the board');
+  const banner = await screen.findByRole('region', {
+    name: "Can't merge: a required check failed",
+  });
+  const description = screen.getByText(workItem.description);
+  expect(
+    banner.compareDocumentPosition(description) &
+      Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+
+  await user.click(
+    within(banner).getByRole('button', { name: 'Send back to the builder' }),
+  );
+
+  await waitFor(() =>
+    expect(
+      screen.queryByRole('region', {
+        name: "Can't merge: a required check failed",
+      }),
+    ).toBeNull(),
+  );
+  expect(
+    within(
+      screen.getByRole('complementary', { name: 'At a glance' }),
+    ).getByText('Build ready'),
+  ).toBeTruthy();
+});

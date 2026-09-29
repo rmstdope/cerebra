@@ -1042,15 +1042,19 @@ export function ProjectBoard({
                 comments={comments}
                 confirming={confirming}
                 delivery={
-                  deliveryStates.has(selected.state) ? (
-                    <DeliveryActivity
-                      client={deliveryClient}
-                      intervalMs={deliveryIntervalMs}
-                      itemId={selected.id}
-                      key={selected.id}
-                      state={selected.state}
-                    />
-                  ) : null
+                  deliveryStates.has(selected.state)
+                    ? (lead: ReactNode) => (
+                        <DeliveryActivity
+                          client={deliveryClient}
+                          intervalMs={deliveryIntervalMs}
+                          itemId={selected.id}
+                          key={selected.id}
+                          lead={lead}
+                          onAnswered={(item) => replaceItem(item as WorkItem)}
+                          state={selected.state}
+                        />
+                      )
+                    : null
                 }
                 dialogHeading={dialogHeading}
                 history={history}
@@ -1219,7 +1223,8 @@ function ItemDetail({
   readonly comment: string;
   readonly comments: Remote<readonly BoardComment[]>;
   readonly confirming: boolean;
-  readonly delivery: ReactNode;
+  /** Lays out the Overview's opening with its delivery story, when the item has one. */
+  readonly delivery: ((lead: ReactNode) => ReactNode) | null;
   readonly dialogHeading: RefObject<HTMLHeadingElement | null>;
   readonly history: Remote<readonly HistoryEntry[]>;
   readonly item: WorkItem;
@@ -1292,15 +1297,18 @@ function ItemDetail({
       >
         {tab === 'overview' ? (
           <>
-            <p className="text-[var(--muted)] whitespace-pre-wrap break-words">
-              {item.description || 'No description yet.'}
-            </p>
-            <p className="mt-3 text-sm">
-              <span className="font-bold">Priority</span>{' '}
-              {item.priority ?? 'Not set'}
-            </p>
-            <WorkItemCost client={costClient} itemId={item.id} />
-            {delivery}
+            {(delivery ?? ((lead: ReactNode) => lead))(
+              <>
+                <p className="text-[var(--muted)] whitespace-pre-wrap break-words">
+                  {item.description || 'No description yet.'}
+                </p>
+                <p className="mt-3 text-sm">
+                  <span className="font-bold">Priority</span>{' '}
+                  {item.priority ?? 'Not set'}
+                </p>
+                <WorkItemCost client={costClient} itemId={item.id} />
+              </>,
+            )}
             {item.state === 'new' ? (
               <div className="mt-6 border-t border-[var(--border)] pt-5">
                 <h3 className="font-bold">Review new work</h3>

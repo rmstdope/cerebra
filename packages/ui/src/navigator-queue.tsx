@@ -67,6 +67,11 @@ const directions: readonly {
   },
 ];
 
+/** Whether the request is answered in the queue's own panel, not on its run or item. */
+function opensHere(entry: QueueEntry): boolean {
+  return entry.run === null && !entry.blocked;
+}
+
 function asker(entry: QueueEntry): string {
   return entry.askedBy ?? 'Cerebra';
 }
@@ -220,7 +225,7 @@ export function NavigatorQueue({
       setRefreshError(false);
       setSelectedId((current) =>
         current !== null &&
-        next.entries.some((entry) => entry.id === current && entry.run === null)
+        next.entries.some((entry) => entry.id === current && opensHere(entry))
           ? current
           : null,
       );
@@ -360,7 +365,7 @@ export function NavigatorQueue({
 
   const entries = shown?.entries ?? [];
   const selected =
-    entries.find((entry) => entry.id === selectedId && entry.run === null) ??
+    entries.find((entry) => entry.id === selectedId && opensHere(entry)) ??
     null;
   const groups = groupByProject(entries);
   const visible = groups.flatMap((group) =>
@@ -627,6 +632,44 @@ export function NavigatorQueue({
                                   type="button"
                                 >
                                   Answer
+                                </button>
+                              </div>
+                            ) : entry.blocked ? (
+                              <div
+                                className="grid grid-cols-1 gap-2 border-b border-[var(--border)] p-4 sm:grid-cols-[auto_1fr_auto] sm:items-center sm:gap-3"
+                                data-blocked={entry.id}
+                                key={entry.id}
+                              >
+                                <span
+                                  className={`w-max self-start rounded-full px-2 py-1 text-xs font-bold ${kindBadges.attention}`}
+                                >
+                                  {kindLabels.attention}
+                                </span>
+                                <span className="min-w-0">
+                                  <strong className="block break-words">
+                                    {entry.title}
+                                  </strong>
+                                  <span className="mt-1 block text-sm break-words text-[var(--muted)]">
+                                    {`${entry.waitingReason ?? ''} · ${entry.projectName}`}
+                                  </span>
+                                </span>
+                                <button
+                                  className="primary-button w-max"
+                                  onClick={() =>
+                                    onViewWork(
+                                      entry.projectId,
+                                      entry.id,
+                                      'overview',
+                                    )
+                                  }
+                                  ref={(element) => {
+                                    if (element === null)
+                                      rows.current.delete(entry.id);
+                                    else rows.current.set(entry.id, element);
+                                  }}
+                                  type="button"
+                                >
+                                  Open
                                 </button>
                               </div>
                             ) : (
