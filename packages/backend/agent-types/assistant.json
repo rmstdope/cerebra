@@ -1,0 +1,37 @@
+{
+  "backend": "claude",
+  "defaultCount": 1,
+  "effort": "high",
+  "idleTimeoutSeconds": 1800,
+  "image": "cerebro-agent",
+  "interactive": true,
+  "model": "opus",
+  "name": "assistant",
+  "names": [
+    "Cerebro",
+    "Astra"
+  ],
+  "network": "unrestricted",
+  "resources": {
+    "cpus": 2,
+    "memoryMb": 4096
+  },
+  "role": "assistant",
+  "secrets": [
+    "CLAUDE_CODE_OAUTH_TOKEN"
+  ],
+  "serves": {},
+  "skills": [],
+  "tools": [
+    "get_item",
+    "list_items",
+    "comment",
+    "create_item",
+    "record_release"
+  ],
+  "triggers": [
+    {
+      "kind": "navigator"
+    }
+  ]
+}

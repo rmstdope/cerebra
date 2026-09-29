@@ -1,0 +1,45 @@
+{
+  "backend": "claude",
+  "defaultCount": 1,
+  "effort": "high",
+  "idleTimeoutSeconds": 1800,
+  "image": "cerebro-agent",
+  "interactive": true,
+  "model": "opus",
+  "name": "groomer",
+  "names": [
+    "Jubilee",
+    "Kitty"
+  ],
+  "network": "unrestricted",
+  "resources": {
+    "cpus": 2,
+    "memoryMb": 4096
+  },
+  "role": "groomer",
+  "secrets": [
+    "CLAUDE_CODE_OAUTH_TOKEN"
+  ],
+  "serves": {
+    "states": [
+      "grooming_ready"
+    ]
+  },
+  "skills": [],
+  "tools": [
+    "get_item",
+    "list_items",
+    "comment",
+    "create_item",
+    "transition",
+    "wait_for_navigator"
+  ],
+  "triggers": [
+    {
+      "kind": "state"
+    },
+    {
+      "kind": "navigator"
+    }
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "backend": "claude",
+  "defaultCount": 1,
+  "effort": "high",
+  "idleTimeoutSeconds": 1800,
+  "image": "cerebro-agent",
+  "interactive": true,
+  "model": "opus",
+  "name": "designer",
+  "names": [
+    "Xavier",
+    "Beast"
+  ],
+  "network": "unrestricted",
+  "resources": {
+    "cpus": 2,
+    "memoryMb": 4096
+  },
+  "role": "designer",
+  "secrets": [
+    "CLAUDE_CODE_OAUTH_TOKEN"
+  ],
+  "serves": {
+    "states": [
+      "design_ready"
+    ]
+  },
+  "skills": [],
+  "tools": [
+    "get_item",
+    "list_items",
+    "comment",
+    "transition",
+    "wait_for_navigator",
+    "show_mockups"
+  ],
+  "triggers": [
+    {
+      "kind": "state"
+    },
+    {
+      "kind": "navigator"
+    }
+  ]
+}
