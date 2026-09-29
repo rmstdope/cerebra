@@ -101,6 +101,11 @@ export interface ServerOptions {
   readonly onMutation?: () => void;
   /** Reads what runs, items and projects have cost. */
   readonly costs?: AttentionRouteOptions['costs'];
+  /** What needs the navigator now. */
+  readonly attention?: AttentionRouteOptions['attention'];
+  readonly notificationSettings?: AttentionRouteOptions['notificationSettings'];
+  /** Serves `/ws/notifications`, the browser pushes. */
+  readonly notifications?: AttentionRouteOptions['notifications'];
 }
 
 const sessionCookieName = 'cerebra_session';
@@ -320,7 +325,10 @@ export const createServer = async ({
   startSettings,
   dispatcher,
   onMutation,
+  attention,
   costs,
+  notificationSettings,
+  notifications,
 }: ServerOptions): Promise<FastifyInstance> => {
   const server = Fastify();
 
@@ -1177,7 +1185,12 @@ export const createServer = async ({
     ),
   );
 
-  registerAttentionRoutes(server, { costs });
+  registerAttentionRoutes(server, {
+    attention,
+    costs,
+    notificationSettings,
+    notifications,
+  });
 
   return server;
 };

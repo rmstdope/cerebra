@@ -158,6 +158,27 @@ export {
   type ProjectRunCost,
   type RunCost,
 } from './costs.js';
+export {
+  createAttention,
+  troubleTitle,
+  type Attention,
+  type AttentionEntry,
+  type AttentionKind,
+} from './attention.js';
+export {
+  createNotificationSettings,
+  type NotificationSettings,
+  type ProjectNotificationSetting,
+} from './notification-settings.js';
+export {
+  createNotifier,
+  createPushBatcher,
+  pushWindowMs,
+  type NotificationTab,
+  type Notifier,
+  type PushBatcher,
+  type PushMessage,
+} from './notifier.js';
 export { migrateToLatest } from './migrations/index.js';
 export {
   createPodmanEngine,
