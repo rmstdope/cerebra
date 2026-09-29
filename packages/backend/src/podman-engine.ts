@@ -47,6 +47,8 @@ export function createPodmanEngine(
     return new Promise((resolve, reject) => {
       const outgoing = httpRequest(
         {
+          // A pooled keep-alive socket the engine has since closed fails the next call.
+          agent: false,
           headers: {
             Host: 'podman',
             ...(payload === undefined

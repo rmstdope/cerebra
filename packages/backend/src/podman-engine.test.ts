@@ -60,12 +60,14 @@ let socketPath: string;
 let server: Server;
 let requests: RecordedRequest[];
 let reply: Reply;
+let connections: number;
 
 beforeEach(async () => {
   directory = await mkdtemp(join(tmpdir(), 'cerebra-engine-'));
   socketPath = join(directory, 'api.sock');
   requests = [];
   reply = empty(500);
+  connections = 0;
   server = createServer((request: IncomingMessage, response) => {
     const chunks: Buffer[] = [];
     request.on('data', (chunk: Buffer) => chunks.push(chunk));
@@ -78,6 +80,9 @@ beforeEach(async () => {
       });
       reply(response);
     });
+  });
+  server.on('connection', () => {
+    connections += 1;
   });
   await new Promise<void>((resolve) => server.listen(socketPath, resolve));
 });
@@ -281,6 +286,17 @@ describe('an unavailable engine', () => {
 
     expect(error).toBeInstanceOf(EngineError);
     expect(error.message).toContain(join(directory, 'missing.sock'));
+  });
+
+  test('opens a fresh connection for every call, so a closed keep-alive socket is never reused', async () => {
+    reply = empty(204);
+    const podman = engine();
+
+    await podman.start('abc');
+    await podman.start('abc');
+    await podman.start('abc');
+
+    expect(connections).toBe(3);
   });
 
   test('an engine that never answers times out', async () => {

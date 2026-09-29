@@ -66,7 +66,8 @@ export interface ContainerEngine {
   remove(id: string): Promise<void>;
 }
 
-export type EngineOperation = 'create' | 'start' | 'inspect' | 'stop' | 'remove';
+export type EngineOperation =
+  'create' | 'start' | 'inspect' | 'stop' | 'remove';
 
 export class EngineError extends Error {
   readonly operation: EngineOperation;

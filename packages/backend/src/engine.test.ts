@@ -107,9 +107,9 @@ describe('refusals', () => {
   test.each(['', '../x', 'a/b', '.hidden', 'x y', '-flag'])(
     'refuses the run or agent id %j',
     (id) => {
-      expect(() => agentContainerRequest({ ...spec, runId: id }, settings)).toThrow(
-        InvalidContainerSpecError,
-      );
+      expect(() =>
+        agentContainerRequest({ ...spec, runId: id }, settings),
+      ).toThrow(InvalidContainerSpecError);
       expect(() =>
         agentContainerRequest({ ...spec, agentId: id }, settings),
       ).toThrow(InvalidContainerSpecError);
@@ -124,15 +124,15 @@ describe('refusals', () => {
     { cpus: 1, memoryBytes: 1.5 },
     { cpus: 1, memoryBytes: Number.POSITIVE_INFINITY },
   ])('refuses the resources %j', (resources) => {
-    expect(() => agentContainerRequest({ ...spec, resources }, settings)).toThrow(
-      InvalidContainerSpecError,
-    );
+    expect(() =>
+      agentContainerRequest({ ...spec, resources }, settings),
+    ).toThrow(InvalidContainerSpecError);
   });
 
   test('refuses an empty image and incomplete settings', () => {
-    expect(() => agentContainerRequest({ ...spec, image: '' }, settings)).toThrow(
-      InvalidContainerSpecError,
-    );
+    expect(() =>
+      agentContainerRequest({ ...spec, image: '' }, settings),
+    ).toThrow(InvalidContainerSpecError);
     for (const key of [
       'dataVolume',
       'internalNetwork',
