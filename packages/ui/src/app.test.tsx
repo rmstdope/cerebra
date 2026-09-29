@@ -1,6 +1,7 @@
 import { App, type ThemeMediaQuery } from './app';
 import type { AuthClient } from './auth';
 import type { BoardClient, WorkItem } from './board';
+import type { CredentialClient } from './credentials';
 import type { QueueClient } from './queue';
 import { AuthenticationRequiredError } from './instance';
 import {
@@ -45,7 +46,10 @@ class FakeMediaQuery implements ThemeMediaQuery {
   }
 }
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  window.location.hash = '';
+});
 
 const emptyQueue: QueueClient = {
   answer: async () => undefined,
@@ -102,7 +106,7 @@ describe('App', () => {
     expect(screen.getByText('Update Cerebra')).toBeTruthy();
 
     screen.getByRole('button', { name: 'Theme: System' });
-    await user.keyboard('{Tab}{Tab}{ArrowDown}');
+    await user.keyboard('{Tab}{Tab}{Tab}{ArrowDown}');
 
     expect(screen.getByRole('menu')).toBeTruthy();
     await waitFor(() => {
@@ -422,6 +426,74 @@ describe('App', () => {
     );
     expect(
       within(board).getByRole('tab', { name: 'Discussion', selected: true }),
+    ).toBeTruthy();
+  });
+
+  test('opens credential and agent settings from the header, and returns to the queue', async () => {
+    const user = userEvent.setup();
+    const projects: Array<string | null> = [];
+    const credentialClient: CredentialClient = {
+      agentCredentials: async (_projectId, agentType) => ({
+        agentType,
+        available: [],
+        entries: [],
+      }),
+      overview: async (projectId) => {
+        projects.push(projectId);
+        return {
+          attention: [],
+          instanceCredentials: [],
+          project: { id: 'project-9', name: 'acme/app' },
+          projectCredentials: [],
+        };
+      },
+      remove: async () => undefined,
+      save: async ({ name }) => ({ name, replaced: false }),
+      setAgentCredentials: async (_projectId, agentType) => ({
+        agentType,
+        available: [],
+        entries: [],
+      }),
+    };
+    const storage = new Map<string, string>([['cerebra.project', 'project-9']]);
+
+    render(
+      <App
+        authClient={authenticatedAuth}
+        credentialClient={credentialClient}
+        mediaQuery={new FakeMediaQuery(false)}
+        queueClient={emptyQueue}
+        storage={{
+          getItem: (key) => storage.get(key) ?? null,
+          setItem: (key, value) => void storage.set(key, value),
+        }}
+      />,
+    );
+
+    await user.click(await screen.findByRole('link', { name: 'Settings' }));
+
+    expect(
+      await screen.findByRole('heading', { level: 1, name: 'Credentials' }),
+    ).toBeTruthy();
+    expect(window.location.hash).toBe('#/settings/credentials');
+    expect(
+      await screen.findByText('No credentials saved for this project'),
+    ).toBeTruthy();
+    expect(projects).toEqual(['project-9']);
+
+    await user.click(screen.getByRole('link', { name: 'Agent types' }));
+    await user.click(
+      await screen.findByRole('link', { name: 'Edit Producer' }),
+    );
+
+    expect(
+      await screen.findByRole('heading', { level: 1, name: 'Edit Producer' }),
+    ).toBeTruthy();
+
+    await user.click(screen.getByRole('link', { name: /Navigator queue/ }));
+
+    expect(
+      await screen.findByRole('heading', { name: 'Manage Cerebra' }),
     ).toBeTruthy();
   });
 });
