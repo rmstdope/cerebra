@@ -1226,7 +1226,7 @@ export async function recordForHeldItem(
   runId: string,
   record: Readonly<Record<string, unknown>> & { readonly kind: string },
 ): Promise<
-  | { readonly ok: true }
+  | { readonly ok: true; readonly recordId: number }
   | {
       readonly code: 'nothing_held' | 'refused';
       readonly ok: false;
@@ -1249,7 +1249,7 @@ export async function recordForHeldItem(
         reason: `A ${record.kind} is recorded while building; this item is ${item.state}.`,
       };
     }
-    await transaction
+    const inserted = await transaction
       .insertInto('work_item_records')
       .values({
         kind: record.kind,
@@ -1257,8 +1257,10 @@ export async function recordForHeldItem(
         run_id: runId,
         work_item_id: itemId,
       })
-      .execute();
-    return { ok: true as const };
+      .returning('id')
+      .executeTakeFirstOrThrow();
+    // A bigserial id arrives as a string.
+    return { ok: true as const, recordId: Number(inserted.id) };
   });
 }
 
@@ -1336,7 +1338,9 @@ async function getLockedItem(
       'work_items.return_state',
       'projects.design_enabled',
       'projects.grooming_enabled',
+      'projects.involvement',
       'projects.max_rounds',
+      'projects.review_account',
       'projects.verify_enabled',
     ])
     .where('work_items.id', '=', itemId)
@@ -1372,11 +1376,15 @@ async function getLockedItem(
       },
       maxRounds: row.max_rounds,
       supportsSplitting: false,
+      codeReviewAccount: row.involvement === 'full' ? row.review_account : null,
     },
   };
 }
 
-/** What the holding run has recorded on the item: a plan, and its newest checks report. */
+/**
+ * What the holding run has recorded on the item: a plan, whether the navigator approved it when it
+ * needed approval (spec §4.9), and its newest checks report.
+ */
 async function buildEvidenceOf(
   database: DatabaseExecutor,
   itemId: string,
@@ -1384,12 +1392,24 @@ async function buildEvidenceOf(
 ): Promise<BuildEvidence> {
   const rows = await database
     .selectFrom('work_item_records')
-    .select(['kind', 'payload'])
+    .select(['id', 'kind', 'payload'])
     .where('work_item_id', '=', itemId)
     .where('run_id', '=', runId)
-    .where('kind', 'in', ['plan', 'checks'])
+    .where('kind', 'in', ['plan', 'plan_answer', 'checks'])
     .orderBy('id', 'desc')
     .execute();
+  const plan = rows.find((row) => row.kind === 'plan');
+  const planApproved =
+    plan === undefined ||
+    (plan.payload as { approval?: unknown } | null)?.approval !== 'required' ||
+    rows.some((row) => {
+      const answer = row.payload as { planId?: unknown; verdict?: unknown };
+      return (
+        row.kind === 'plan_answer' &&
+        answer.planId === Number(plan.id) &&
+        answer.verdict === 'approved'
+      );
+    });
   const checks = rows.find((row) => row.kind === 'checks');
   const passed =
     checks === undefined
@@ -1399,7 +1419,8 @@ async function buildEvidenceOf(
         : 'failed';
   return {
     checks: passed,
-    planRecorded: rows.some((row) => row.kind === 'plan'),
+    planApproved,
+    planRecorded: plan !== undefined,
   };
 }
 

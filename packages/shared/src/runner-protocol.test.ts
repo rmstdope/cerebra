@@ -154,6 +154,15 @@ describe('up messages', () => {
     ).toThrow(new RunnerProtocolError('Unknown event kind: usage'));
   });
 
+  test.each([
+    { kind: 'plan_approval', planId: 1, markdown: '## Context' },
+    { kind: 'plan_answer', planId: 1, verdict: 'approved', text: '' },
+  ])('refuses the backend’s own $kind event from a runner', (event) => {
+    expect(() =>
+      parseUpMessage(JSON.stringify({ type: 'event', seq: 1, event })),
+    ).toThrow(new RunnerProtocolError(`Unknown event kind: ${event.kind}`));
+  });
+
   test('refuses a sequence number that is not a positive integer', () => {
     expect(() =>
       parseUpMessage(

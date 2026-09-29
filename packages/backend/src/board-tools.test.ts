@@ -9,6 +9,7 @@ import {
 } from './board-tools.js';
 import type { Database } from './database.js';
 import type { WorkItemState } from './lifecycle.js';
+import { createPlanApprovals, type PlanApprovals } from './plan-approvals.js';
 import { hashRunToken } from './runner-gateway.js';
 import { createRunStore } from './runs.js';
 import {
@@ -55,6 +56,9 @@ const outcomeQuestion = (body = outcome.markdown) => ({
 
 interface Fixture {
   readonly board: Board;
+  /** What the backend wrote into runs' conversations, in order. */
+  readonly notes: { runId: string; event: unknown; state: string }[];
+  readonly plans: PlanApprovals;
   /** Runs whose tool call gave up their held item, in order. */
   readonly released: string[];
   readonly database: Kysely<Database>;
@@ -80,15 +84,26 @@ async function withBoard(run: (fixture: Fixture) => Promise<void>) {
     const projectId = await registerTestProject(database);
     const runs = createRunStore(database);
     const released: string[] = [];
+    const notes: Fixture['notes'] = [];
+    const plans = createPlanApprovals({
+      database,
+      note: async (runId, event, state) => {
+        notes.push({ event, runId, state });
+        await runs.append(runId, event);
+      },
+    });
     await run({
       board,
       database,
+      notes,
+      plans,
       projectId,
       released,
       tools: createBoardTools({
         board,
         database,
         onReleased: (runId) => released.push(runId),
+        plans,
       }),
       async ask(caller, { answer, markdown } = {}) {
         const question = outcomeQuestion(markdown);
@@ -748,6 +763,232 @@ describe('board tools', { concurrent: false }, () => {
             to: 'review_ready',
           }),
         ).toMatchObject({ ok: true, value: { state: 'review_ready' } });
+      });
+    });
+
+    describe('when the navigator approves plans (spec §4.9)', () => {
+      async function approvePlans(
+        database: Kysely<Database>,
+        projectId: string,
+      ) {
+        await database
+          .updateTable('projects')
+          .set({ involvement: 'plan' })
+          .where('id', '=', projectId)
+          .execute();
+      }
+
+      async function shown(notes: Fixture['notes'], count: number) {
+        await expect
+          .poll(
+            () =>
+              notes.filter(
+                (note) =>
+                  (note.event as { kind: string }).kind === 'plan_approval',
+              ).length,
+          )
+          .toBe(count);
+        const plans = notes.filter(
+          (note) => (note.event as { kind: string }).kind === 'plan_approval',
+        );
+        return (plans.at(-1)?.event as { planId: number }).planId;
+      }
+
+      test('waits for the navigator, returns what should change, then the approval', async () => {
+        await withBoard(
+          async ({
+            board,
+            caller,
+            database,
+            item,
+            notes,
+            plans,
+            projectId,
+            tools,
+          }) => {
+            await approvePlans(database, projectId);
+            const wolverine = await caller('Storm', 'builder');
+            const heldId = await building(board, item, wolverine);
+
+            const first = tools.call(wolverine, 'submit_plan', {
+              markdown: plan,
+            });
+            const firstId = await shown(notes, 1);
+            expect(notes[0]).toEqual({
+              event: { kind: 'plan_approval', markdown: plan, planId: firstId },
+              runId: wolverine.runId,
+              state: 'awaiting_input',
+            });
+            await tools.call(wolverine, 'report_checks', { passed: true });
+            expect(
+              await tools.call(wolverine, 'transition', {
+                record: pullRequest(),
+                to: 'review_ready',
+              }),
+            ).toMatchObject({
+              code: 'refused',
+              message: expect.stringContaining(
+                'The navigator has not approved the latest plan',
+              ),
+            });
+
+            await expect(
+              plans.answer(wolverine.runId, {
+                planId: firstId,
+                text: '  ',
+                verdict: 'changes',
+              }),
+            ).rejects.toThrow(
+              'Say what should change so the builder can revise the plan.',
+            );
+            await plans.answer(wolverine.runId, {
+              planId: firstId,
+              text: 'Also handle the empty board.',
+              verdict: 'changes',
+            });
+            expect(await first).toEqual({
+              ok: true,
+              value: {
+                approved: false,
+                changes: 'Also handle the empty board.',
+                id: heldId,
+                message:
+                  'The navigator asked for changes to the plan: Also handle the empty board. Revise the plan and submit it again with submit_plan before writing code.',
+                recorded: 'plan',
+              },
+            });
+            expect(notes[1]).toEqual({
+              event: {
+                kind: 'plan_answer',
+                planId: firstId,
+                text: 'Also handle the empty board.',
+                verdict: 'changes',
+              },
+              runId: wolverine.runId,
+              state: 'active',
+            });
+
+            const second = tools.call(wolverine, 'submit_plan', {
+              markdown: plan,
+            });
+            const secondId = await shown(notes, 2);
+            await expect(
+              plans.answer(wolverine.runId, {
+                planId: firstId,
+                text: '',
+                verdict: 'approved',
+              }),
+            ).rejects.toThrow('This plan is no longer waiting for you.');
+            await plans.answer(wolverine.runId, {
+              planId: secondId,
+              text: 'ignored',
+              verdict: 'approved',
+            });
+            expect(await second).toEqual({
+              ok: true,
+              value: {
+                approved: true,
+                id: heldId,
+                message: 'The navigator approved the plan. Build it.',
+                recorded: 'plan',
+              },
+            });
+            await expect(
+              plans.answer(wolverine.runId, {
+                planId: secondId,
+                text: '',
+                verdict: 'approved',
+              }),
+            ).rejects.toThrow('This plan is no longer waiting for you.');
+
+            expect(
+              await tools.call(wolverine, 'transition', {
+                record: pullRequest(),
+                to: 'review_ready',
+              }),
+            ).toMatchObject({ ok: true, value: { state: 'review_ready' } });
+            expect(await board.listRecords(heldId)).toMatchObject([
+              { kind: 'claim' },
+              { kind: 'plan', record: { approval: 'required' } },
+              { kind: 'checks' },
+              {
+                kind: 'plan_answer',
+                record: { planId: firstId, verdict: 'changes' },
+              },
+              { kind: 'plan', record: { approval: 'required' } },
+              {
+                kind: 'plan_answer',
+                record: { planId: secondId, text: '', verdict: 'approved' },
+              },
+              { kind: 'pull_request' },
+            ]);
+          },
+        );
+      });
+
+      test('stops waiting when the call is abandoned', async () => {
+        await withBoard(
+          async ({
+            board,
+            caller,
+            database,
+            item,
+            notes,
+            projectId,
+            tools,
+          }) => {
+            await approvePlans(database, projectId);
+            const wolverine = await caller('Storm', 'builder');
+            await building(board, item, wolverine);
+            const abandon = new AbortController();
+
+            const call = tools.call(
+              wolverine,
+              'submit_plan',
+              { markdown: plan },
+              abandon.signal,
+            );
+            await shown(notes, 1);
+            abandon.abort(new Error('The runner hung up.'));
+
+            await expect(call).rejects.toThrow('The runner hung up.');
+          },
+        );
+      });
+
+      test('refuses an answer for a run that holds nothing or does not exist', async () => {
+        await withBoard(async ({ caller, plans }) => {
+          const wolverine = await caller('Storm', 'builder');
+
+          await expect(
+            plans.answer(wolverine.runId, { planId: 1, verdict: 'approved' }),
+          ).rejects.toMatchObject({ code: 'not_waiting' });
+          await expect(
+            plans.answer(crypto.randomUUID(), {
+              planId: 1,
+              verdict: 'approved',
+            }),
+          ).rejects.toMatchObject({ code: 'not_found' });
+          await expect(
+            plans.answer(wolverine.runId, { planId: 'x', verdict: 'approved' }),
+          ).rejects.toMatchObject({ code: 'invalid' });
+        });
+      });
+
+      test('records the plan without waiting under Autonomous', async () => {
+        await withBoard(async ({ board, caller, item, notes, tools }) => {
+          const wolverine = await caller('Storm', 'builder');
+          const heldId = await building(board, item, wolverine);
+
+          expect(
+            await tools.call(wolverine, 'submit_plan', { markdown: plan }),
+          ).toEqual({ ok: true, value: { id: heldId, recorded: 'plan' } });
+          expect(notes).toEqual([]);
+          expect(await board.listRecords(heldId)).toMatchObject([
+            { kind: 'claim' },
+            { kind: 'plan', record: { approval: 'none' } },
+          ]);
+        });
       });
     });
   });

@@ -48,6 +48,11 @@ export interface WorkItem {
 export interface BuildEvidence {
   readonly checks: 'failed' | 'passed' | null;
   readonly planRecorded: boolean;
+  /**
+   * Whether the latest plan may be built on (spec §4.9): approved by the navigator, or recorded
+   * when no approval was needed. Absent means it may.
+   */
+  readonly planApproved?: boolean;
 }
 
 export interface LifecycleContext {
@@ -59,6 +64,11 @@ export interface LifecycleContext {
   /** The project's `max_rounds` (spec §4.5): the send-back that reaches it waits instead. */
   readonly maxRounds: number;
   readonly supportsSplitting: boolean;
+  /**
+   * The GitHub account whose review the reviewer's approval waits for, when the project's
+   * involvement includes the `code_review` checkpoint (spec §4.9, D33); absent or null means none.
+   */
+  readonly codeReviewAccount?: string | null;
 }
 
 export interface TransitionRequest {
@@ -95,6 +105,8 @@ export type LifecycleEffect =
 /** What an agent transition must carry before the engine accepts it (spec §4.4, §4.11). */
 export type RequiredEvidence =
   | 'design'
+  | 'navigator_approved'
+  | 'navigator_changes'
   | 'outcome'
   | 'pull_request'
   | 'reason'
@@ -234,6 +246,20 @@ export const transitionTable: readonly TransitionRule[] = [
     role: 'reviewer',
     holderMustMatch: true,
     requires: 'review_changes',
+  },
+  {
+    from: 'waiting',
+    to: 'merging',
+    role: 'backend',
+    holderMustMatch: false,
+    requires: 'navigator_approved',
+  },
+  {
+    from: 'waiting',
+    to: 'build_ready',
+    role: 'backend',
+    holderMustMatch: false,
+    requires: 'navigator_changes',
   },
   {
     from: 'merging',
@@ -389,11 +415,16 @@ export function transition(
 
   const rounds = nextRounds(item, request);
   if (
-    rule.from === 'reviewing' &&
+    (rule.from === 'reviewing' || isCodeReviewExit(item, request)) &&
     rule.to === 'build_ready' &&
     rounds >= context.maxRounds
   ) {
     return tooManyRounds(item, request, rounds);
+  }
+
+  const account = context.codeReviewAccount ?? null;
+  if (rule.from === 'reviewing' && rule.to === 'merging' && account !== null) {
+    return awaitCodeReview(item, request, account);
   }
 
   const next = createWorkItem({
@@ -420,6 +451,49 @@ export function transition(
         : [{ kind: 'record' as const, record: request.record }]),
     ],
   };
+}
+
+/** Why an item waits for the navigator's review on GitHub (spec §4.9). */
+export const codeReviewReason = 'Waiting for your review on GitHub';
+
+/**
+ * Under full involvement the reviewer's approval waits for the navigator's own review on GitHub
+ * (spec §4.9, D33); the account it waits for is recorded when the wait starts, so a later change to
+ * the setting leaves this wait as it is.
+ */
+function awaitCodeReview(
+  item: WorkItem,
+  request: TransitionRequest,
+  account: string,
+): TransitionResult {
+  return {
+    ok: true,
+    item: createWorkItem({
+      ...item,
+      attempts: 0,
+      holderRunId: null,
+      state: 'waiting',
+      waitingKind: 'code_review',
+      waitingReason: codeReviewReason,
+      returnState: 'merging',
+    }),
+    effects: [
+      { kind: 'history', reason: request.reason ?? null },
+      ...(request.record === undefined
+        ? []
+        : [{ kind: 'record' as const, record: request.record }]),
+      { kind: 'record', record: { kind: 'awaiting_code_review', account } },
+    ],
+  };
+}
+
+function isCodeReviewExit(item: WorkItem, request: TransitionRequest): boolean {
+  return (
+    item.state === 'waiting' &&
+    item.waitingKind === 'code_review' &&
+    request.actor.role === 'backend' &&
+    request.record?.kind === 'navigator_review'
+  );
 }
 
 /** The heading a person sees when changes requested reach `max_rounds` (spec §4.5). */
@@ -548,6 +622,11 @@ function findRule(
     };
   }
 
+  // The backend moves an item out of waiting only on the navigator's GitHub review.
+  if (item.state === 'waiting' && item.waitingKind !== 'code_review') {
+    return undefined;
+  }
+
   return transitionTable.find(
     (candidate) =>
       candidate.from === item.state &&
@@ -588,6 +667,8 @@ function refusalForMissingRule(
 
 const evidenceNames: Record<RequiredEvidence, string> = {
   design: 'a design record',
+  navigator_approved: 'the navigator’s approving review',
+  navigator_changes: 'the navigator’s review requesting changes',
   outcome: 'an outcome record',
   pull_request: 'a pull_request record',
   reason: 'a reason',
@@ -607,6 +688,13 @@ function missingEvidence(
       : undefined;
   }
   const record = request.record;
+  if (requires === 'navigator_approved' || requires === 'navigator_changes') {
+    const verdict =
+      requires === 'navigator_approved' ? 'approved' : 'changes_requested';
+    return record?.kind === 'navigator_review' && record.verdict === verdict
+      ? undefined
+      : `${needs} ${evidenceNames[requires]}.`;
+  }
   const kind = requires.startsWith('review') ? 'review' : requires;
   if (record?.kind !== kind) {
     return `${needs} ${evidenceNames[requires]}.`;
@@ -627,6 +715,9 @@ function buildProblem(build: BuildEvidence | undefined): string | undefined {
   const handOver = 'before handing the item to review.';
   if (build?.planRecorded !== true) {
     return `Record the plan with submit_plan ${handOver}`;
+  }
+  if (build.planApproved === false) {
+    return `The navigator has not approved the latest plan; wait for the answer to submit_plan, or revise the plan, ${handOver}`;
   }
   if (build.checks === null) {
     return `Report passing checks with report_checks ${handOver}`;
@@ -837,6 +928,9 @@ function nextPriority(
 }
 
 function nextRounds(item: WorkItem, request: TransitionRequest): number {
+  if (isCodeReviewExit(item, request)) {
+    return request.to === 'build_ready' ? item.rounds + 1 : item.rounds;
+  }
   if (item.state === 'waiting') {
     return 0;
   }

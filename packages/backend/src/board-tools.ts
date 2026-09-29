@@ -24,6 +24,7 @@ import {
   type Priority,
   type WorkItemState,
 } from './lifecycle.js';
+import type { PlanApprovals } from './plan-approvals.js';
 import { isUuid } from './runs.js';
 
 type RunRole = Database['runs']['role'];
@@ -66,7 +67,13 @@ export type ToolOutcome =
 
 export interface BoardTools {
   list(caller: ToolCaller): readonly ToolDescriptor[];
-  call(caller: ToolCaller, name: string, args: unknown): Promise<ToolOutcome>;
+  /** `signal` is aborted when the caller gives up on the call, so a waiting tool can stop. */
+  call(
+    caller: ToolCaller,
+    name: string,
+    args: unknown,
+    signal?: AbortSignal,
+  ): Promise<ToolOutcome>;
 }
 
 /** Answers the live run a token hash belongs to, or `null` for an ended or unknown one. */
@@ -125,7 +132,11 @@ type Arguments = Readonly<Record<string, unknown>>;
 
 interface Tool {
   readonly descriptor: ToolDescriptor;
-  run(caller: ToolCaller, args: Arguments): Promise<unknown>;
+  run(
+    caller: ToolCaller,
+    args: Arguments,
+    signal?: AbortSignal,
+  ): Promise<unknown>;
 }
 
 const priorities: readonly Priority[] = ['P0', 'P1', 'P2', 'P3'];
@@ -139,11 +150,14 @@ export function createBoardTools({
   board,
   database,
   onReleased,
+  plans,
 }: {
   readonly board: Board;
   readonly database: Kysely<Database>;
   /** Told when a call leaves the calling run holding nothing, so it can finish (architecture §5.3). */
   readonly onReleased?: (runId: string) => void;
+  /** Where a plan waits for the navigator's approval; without it no plan waits (spec §4.9). */
+  readonly plans?: PlanApprovals;
 }): BoardTools {
   async function itemInProject(
     caller: ToolCaller,
@@ -293,7 +307,11 @@ export function createBoardTools({
   async function recordHeld(
     caller: ToolCaller,
     record: Readonly<Record<string, unknown>> & { readonly kind: string },
-  ): Promise<{ readonly id: string; readonly recorded: string }> {
+  ): Promise<{
+    readonly id: string;
+    readonly recorded: string;
+    readonly recordId: number;
+  }> {
     const itemId = await requireHeld(caller);
     const result = await recordForHeldItem(
       database,
@@ -304,7 +322,18 @@ export function createBoardTools({
     if (!result.ok) {
       throw new Refusal(result.code, result.reason);
     }
-    return { id: itemId, recorded: record.kind };
+    return { id: itemId, recordId: result.recordId, recorded: record.kind };
+  }
+
+  /** Whether the caller's project has the navigator approve plans (spec §4.9). */
+  async function plansNeedApproval(caller: ToolCaller): Promise<boolean> {
+    if (plans === undefined) return false;
+    const project = await database
+      .selectFrom('projects')
+      .select('involvement')
+      .where('id', '=', caller.projectId)
+      .executeTakeFirst();
+    return project?.involvement === 'plan' || project?.involvement === 'full';
   }
 
   /**
@@ -537,20 +566,49 @@ export function createBoardTools({
       descriptor: {
         name: 'submit_plan',
         description:
-          'Record the plan for the item this run is building, before writing any code: Markdown under the plan record’s ## headings (Context; Files to change, and what to reuse; Increments; The test plan; User-facing decisions; Out of scope; Validation; Known traps).',
+          'Record the plan for the item this run is building, before writing any code: Markdown under the plan record’s ## headings (Context; Files to change, and what to reuse; Increments; The test plan; User-facing decisions; Out of scope; Validation; Known traps). When the project has the navigator approve plans, the call waits for their answer: build on approved; when they ask for changes, revise the plan and submit it again.',
         inputSchema: {
           type: 'object',
           properties: { markdown: { type: 'string', minLength: 1 } },
           required: ['markdown'],
         },
       },
-      async run(caller, args) {
+      async run(caller, args, signal) {
         const markdown = text(args, 'markdown');
         const problem = recordProblem('plan', markdown);
         if (problem !== undefined) {
           throw invalid(problem);
         }
-        return recordHeld(caller, { kind: 'plan', markdown });
+        const approval = (await plansNeedApproval(caller))
+          ? 'required'
+          : 'none';
+        const { id, recordId } = await recordHeld(caller, {
+          approval,
+          kind: 'plan',
+          markdown,
+        });
+        if (approval === 'none' || plans === undefined) {
+          return { id, recorded: 'plan' };
+        }
+        const answer = await plans.await(
+          caller.runId,
+          { id: recordId, markdown },
+          signal,
+        );
+        return answer.verdict === 'approved'
+          ? {
+              approved: true,
+              id,
+              message: 'The navigator approved the plan. Build it.',
+              recorded: 'plan',
+            }
+          : {
+              approved: false,
+              changes: answer.text,
+              id,
+              message: `The navigator asked for changes to the plan: ${answer.text} Revise the plan and submit it again with submit_plan before writing code.`,
+              recorded: 'plan',
+            };
       },
     },
     report_checks: {
@@ -572,11 +630,12 @@ export function createBoardTools({
           throw invalid('passed must be a boolean.');
         }
         const summary = optionalText(args, 'summary')?.trim() ?? '';
-        return recordHeld(caller, {
+        const { id, recorded } = await recordHeld(caller, {
           kind: 'checks',
           passed: args.passed,
           summary,
         });
+        return { id, recorded };
       },
     },
     wait_for_navigator: {
@@ -615,7 +674,7 @@ export function createBoardTools({
         .map((name) => (tools[name] as Tool).descriptor);
     },
 
-    async call(caller, name, args) {
+    async call(caller, name, args, signal) {
       const tool = Object.hasOwn(tools, name) ? tools[name] : undefined;
       if (tool === undefined) {
         return refusal('unknown_tool', `There is no tool named ${name}.`);
@@ -630,7 +689,10 @@ export function createBoardTools({
         return refusal('invalid_arguments', 'Arguments must be an object.');
       }
       try {
-        return { ok: true, value: await tool.run(caller, args as Arguments) };
+        return {
+          ok: true,
+          value: await tool.run(caller, args as Arguments, signal),
+        };
       } catch (error) {
         if (error instanceof Refusal) {
           return refusal(error.code, error.message);
