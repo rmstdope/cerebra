@@ -24,6 +24,19 @@ export interface StartMessage {
   readonly skills: readonly string[];
 }
 
+/** The most files one `fetch_files` may name, and the most bytes its answer may carry. */
+export const maxFetchPaths = 64;
+export const maxFetchBytes = 8 * 1024 * 1024;
+
+/** One file of a run's checkout, as the runner read it. */
+export interface RunFile {
+  /** The path as it was asked for, relative to the checkout. */
+  readonly path: string;
+  readonly contentType: string;
+  /** The bytes, base64-encoded. */
+  readonly content: string;
+}
+
 /** Question text to the answer; a multi-select answer is its labels joined by ", ". */
 export type Answers = Readonly<Record<string, string>>;
 
@@ -36,7 +49,13 @@ export type DownMessage =
       readonly answers: Answers;
     }
   | { readonly type: 'interrupt' }
-  | { readonly type: 'stop' };
+  | { readonly type: 'stop' }
+  | {
+      /** Asks for named files of the checkout; the runner refuses a path outside `/work`. */
+      readonly type: 'fetch_files';
+      readonly requestId: string;
+      readonly paths: readonly string[];
+    };
 
 export interface QuestionOption {
   readonly label: string;
@@ -124,12 +143,28 @@ export type AgentEvent = Nested &
 
 export type AgentEventKind = AgentEvent['kind'];
 
-/** Everything the runner sends: one ordered, numbered stream the chat replays and the supervisor acts on. */
-export interface UpMessage {
+/** One ordered, numbered stream the chat replays and the supervisor acts on. */
+export interface EventMessage {
   readonly type: 'event';
   readonly seq: number;
   readonly event: AgentEvent;
 }
+
+/** The answer to one `fetch_files`: every file asked for, or why none is given. */
+export type FilesMessage =
+  | {
+      readonly type: 'files';
+      readonly requestId: string;
+      readonly files: readonly RunFile[];
+    }
+  | {
+      readonly type: 'files';
+      readonly requestId: string;
+      readonly error: string;
+    };
+
+/** Everything the runner sends. */
+export type UpMessage = EventMessage | FilesMessage;
 
 export class RunnerProtocolError extends Error {
   public constructor(message: string) {
@@ -265,6 +300,19 @@ export function parseDownMessage(raw: string): DownMessage {
     case 'interrupt':
     case 'stop':
       return { type: fields.type };
+    case 'fetch_files': {
+      const paths = textList(fields.paths, 'fetch_files.paths');
+      if (paths.length < 1 || paths.length > maxFetchPaths) {
+        fail(
+          `fetch_files.paths must name between 1 and ${maxFetchPaths} files`,
+        );
+      }
+      return {
+        type: 'fetch_files',
+        requestId: text(fields, 'requestId', 'fetch_files'),
+        paths,
+      };
+    }
     default:
       return fail(`Unknown message type: ${String(fields.type)}`);
   }
@@ -420,8 +468,40 @@ function parseEvent(value: unknown): AgentEvent {
   return parent === undefined ? event : { ...event, parentToolCallId: parent };
 }
 
+const base64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+
+function parseFiles(fields: Fields): FilesMessage {
+  const requestId = text(fields, 'requestId', 'files');
+  if (fields.error !== undefined) {
+    return { type: 'files', requestId, error: text(fields, 'error', 'files') };
+  }
+  if (!Array.isArray(fields.files)) {
+    fail('files.files must be a list');
+  }
+  return {
+    type: 'files',
+    requestId,
+    files: fields.files.map((entry, index) => {
+      const label = `files.files.${index}`;
+      const file = object(entry, label);
+      const content = text(file, 'content', label);
+      if (!base64.test(content)) {
+        fail(`${label}.content must be base64`);
+      }
+      return {
+        path: text(file, 'path', label),
+        contentType: text(file, 'contentType', label),
+        content,
+      };
+    }),
+  };
+}
+
 export function parseUpMessage(raw: string): UpMessage {
   const fields = parseJson(raw);
+  if (fields.type === 'files') {
+    return parseFiles(fields);
+  }
   if (fields.type !== 'event') {
     fail(`Unknown message type: ${String(fields.type)}`);
   }

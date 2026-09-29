@@ -1,4 +1,4 @@
-import type { DownMessage, UpMessage } from '@cerebra/shared';
+import type { DownMessage, EventMessage } from '@cerebra/shared';
 import type { Kysely } from 'kysely';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -118,7 +118,7 @@ function containerOf(engine: FakeEngine, runId: string) {
 }
 
 let seq = 0;
-function up(event: UpMessage['event']): UpMessage {
+function up(event: EventMessage['event']): EventMessage {
   seq += 1;
   return { event, seq, type: 'event' };
 }

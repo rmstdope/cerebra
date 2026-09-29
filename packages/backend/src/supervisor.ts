@@ -365,6 +365,7 @@ export function createSupervisor({
   }
 
   async function handle(runId: string, message: UpMessage): Promise<void> {
+    if (message.type !== 'event') return;
     const event: AgentEvent = message.event;
     const record = await runs.append(runId, event);
     publish(runId, { type: 'event', ...record });
