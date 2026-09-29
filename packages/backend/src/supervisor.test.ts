@@ -859,10 +859,12 @@ describe('fetching files from a run’s checkout', { concurrent: false }, () => 
       const runner = await connect(runId);
 
       const fetching = supervisor.fetchFiles(runId, ['mockups/home.html']);
-      runner.listener.closed({ code: 1006 });
       await settle();
+      fetchRequest(runner.sent);
+      const ending = expect(fetching).rejects.toBeInstanceOf(RunEndedError);
+      runner.listener.closed({ code: 1006 });
 
-      await expect(fetching).rejects.toBeInstanceOf(RunEndedError);
+      await ending;
       await expect(
         supervisor.fetchFiles(runId, ['mockups/home.html']),
       ).rejects.toBeInstanceOf(RunEndedError);
