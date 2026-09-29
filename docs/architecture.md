@@ -168,9 +168,12 @@ fields are typed once, in `packages/shared/src/runner-protocol.ts`, and both sid
   events too, so the chat and the supervisor read one ordered stream.
 
 `fetch_files` asks the runner for named files of its checkout, and `files` returns them, each with
-its path, content type and bytes, within a size limit per call. It is how anything leaves an
-agent's checkout for the backend (mockups, §11), since the backend never reads the checkout itself
-(§7). The runner refuses a path outside `/work`. Both arrive with the mockups (roadmap step 8).
+its path, content type and bytes (base64), at most 64 paths and 8 MiB per call. It is how
+anything leaves an agent's checkout for the backend (mockups, §11), since the backend never reads
+the checkout itself (§7). The runner refuses the whole request if any path is outside `/work`
+(absolute, through `..`, or through a link), missing or not a file; the supervisor refuses an
+answer that is not exactly the files asked for, and gives up after thirty seconds. Both arrived
+with per-run checkouts (roadmap step 6); the mockups use them at step 8.
 
 **Usage.** The runner reports usage in every `result` it sends: what that turn spent, as tokens
 by kind and model, the cost in dollars when the backend gives one (the Claude Agent SDK's
@@ -198,8 +201,10 @@ not connect within a minute) ends `failed` with the reason, and nothing the navi
 kept waiting on it. A runner that disconnects without a final result fails its run; a run the
 navigator stops is sent `stop` and is ended `finished` once the runner reports its result, or
 after thirty seconds. Every ending closes the connection, releases any held item through the
-lifecycle, and stops and removes the container (an ending the database refuses is retried, and
-one it keeps refusing is left to the next startup's recovery). A named agent has at most one live run, which the
+lifecycle, stops and removes the container, and then deletes the run's checkout (an ending the
+database refuses is retried, and one it keeps refusing is left to the next startup's recovery).
+A checkout that cannot be made (GitHub unreachable, a branch that is not there) fails the start
+with that reason, before any container exists. A named agent has at most one live run, which the
 database enforces. Its containers are held to the same rule: before a run's container is created,
 every earlier container labelled with the same agent is stopped and removed, and a start that cannot
 prove them gone fails, so the agent's home and CLI state are never mounted by two containers (D17).
@@ -209,6 +214,8 @@ containers: a container still running is left to its runner, which reconnects; a
 container is gone is failed, and the item it held goes back to its queue (`spec.md` §4.5). In the
 MVP (D1) no runner reconnects: every live run is failed on startup ("Cerebra restarted while the
 run was live."), its item goes back to its queue, and a new conversation begins separately.
+Recovery deletes each failed run's checkout, then sweeps `/data/runs/` of every run directory
+whose run is not live, so a crash between making a checkout and ending its run leaves nothing.
 
 ### 5.4 The agents' tools
 
@@ -254,11 +261,17 @@ ticks missed while the instance was down are not replayed.
 
 ## 7. Git model
 
-- **Mirror.** The main container keeps one bare mirror per project under `/data/projects/<id>/`,
-  fetched from GitHub on a timer and before every checkout. Only the backend writes it.
+- **Mirror.** The main container keeps one bare mirror per project at
+  `/data/projects/<id>/mirror.git`, fetched from GitHub before every checkout (and, from later
+  steps, on a timer), one fetch at a time per project. Only the backend writes it; a mirror that
+  is missing is cloned again. The backend runs git with no global or system configuration and
+  the project's token passed only for that command, never stored in the mirror.
 - **Checkout.** Each run gets a clone of the mirror at the base it needs (the default branch, or
-  the item's pull-request branch for a reviewer or for rework), under `/data/runs/<id>/work`,
-  with `origin` pointing at GitHub. The mirror is used only to make the clone fast.
+  the item's pull-request branch for a reviewer or for rework), under `/data/runs/<id>/checkout`,
+  owned by the agent user. It is cloned with `--no-hardlinks`, so it shares no file with the
+  mirror, and before the run starts its `origin` is pointed at GitHub — the one git command the
+  backend runs inside it, before any agent has touched it. The mirror is used only to make the
+  clone fast.
 - **Pushing.** The agent pushes to GitHub and opens its pull request with its own GitHub token
   (D10). The backend does not relay pushes.
 - **Never inside an agent's checkout.** Once a run has started, the backend runs no git command
