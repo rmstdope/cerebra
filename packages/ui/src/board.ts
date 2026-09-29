@@ -21,9 +21,20 @@ export const workItemStates = [
   'cancelled',
 ] as const;
 
+export interface FiledBy {
+  readonly agentName: string | null;
+  readonly discoveredFrom: {
+    readonly id: string;
+    readonly title: string;
+  } | null;
+  readonly role: string;
+}
+
 export interface WorkItem {
   readonly createdAt: string;
   readonly description: string;
+  /** Present on board list rows; null when the navigator filed the item. */
+  readonly filedBy?: FiledBy | null;
   readonly id: string;
   readonly priority: Priority | null;
   readonly state: string;

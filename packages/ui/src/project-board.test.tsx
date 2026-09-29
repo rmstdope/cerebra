@@ -971,3 +971,59 @@ test('shows no chips when nothing waits and follows conditions as they change', 
     await screen.findByText('Waiting — project limit reached (3 of 3 running)'),
   ).toBeTruthy();
 });
+
+test('says under each title who filed it and links to the item it came from', async () => {
+  const opened: string[] = [];
+  const items: WorkItem[] = [
+    {
+      ...workItem,
+      filedBy: {
+        agentName: 'Gale',
+        discoveredFrom: { id: 'item-9', title: 'Export invoices as CSV' },
+        role: 'groomer',
+      },
+      id: 'item-2',
+      title: 'Bulk export for credit notes',
+    },
+    {
+      ...workItem,
+      filedBy: { agentName: 'Astra', discoveredFrom: null, role: 'assistant' },
+      id: 'item-3',
+      title: 'Dark mode for printed invoices',
+    },
+    { ...workItem, filedBy: null, id: 'item-4', title: 'Fix VAT rounding' },
+  ];
+  renderBoard(
+    createClient({
+      item: async (itemId) => {
+        opened.push(itemId);
+        return { ...workItem, id: itemId, title: 'Export invoices as CSV' };
+      },
+      list: async () => page(items),
+    }),
+  );
+
+  expect(
+    await screen.findByRole('button', {
+      description: 'Filed by Gale while grooming Export invoices as CSV',
+      name: /Bulk export for credit notes/,
+    }),
+  ).toBeTruthy();
+  expect(
+    screen.getByRole('button', {
+      description: 'Filed by Astra in a conversation with you',
+      name: /Dark mode for printed invoices/,
+    }),
+  ).toBeTruthy();
+  expect(
+    screen.getByRole('button', {
+      description: 'Filed by you',
+      name: /Fix VAT rounding/,
+    }),
+  ).toBeTruthy();
+
+  await userEvent.click(
+    screen.getByRole('button', { name: 'Export invoices as CSV' }),
+  );
+  await waitFor(() => expect(opened).toContain('item-9'));
+});

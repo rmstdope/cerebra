@@ -15,6 +15,7 @@ import {
   type BoardComment,
   type BoardFilters,
   type BoardRoute,
+  type FiledBy,
   type HistoryEntry,
   type Priority,
   type WorkItem,
@@ -138,6 +139,53 @@ function browserStorage(): BoardStorage {
 
 function isReady(state: string): boolean {
   return state.endsWith('_ready');
+}
+
+function FiledByLine({
+  filedBy,
+  id,
+  onOpen,
+}: {
+  readonly filedBy: FiledBy | null;
+  readonly id: string;
+  readonly onOpen: (itemId: string) => void;
+}) {
+  const className = 'm-0 px-2 pb-1 text-sm break-words text-[var(--muted)]';
+  if (filedBy === null) {
+    return (
+      <p className={className} id={id}>
+        Filed by you
+      </p>
+    );
+  }
+  const who = `Filed by ${filedBy.agentName ?? 'an agent'}`;
+  if (filedBy.role === 'assistant') {
+    return (
+      <p className={className} id={id}>
+        {who} in a conversation with you
+      </p>
+    );
+  }
+  const from = filedBy.discoveredFrom;
+  if (from === null) {
+    return (
+      <p className={className} id={id}>
+        {who}
+      </p>
+    );
+  }
+  return (
+    <p className={className} id={id}>
+      {who} {filedBy.role === 'groomer' ? 'while grooming' : 'while working on'}{' '}
+      <button
+        className="rounded p-0 text-left text-[var(--accent)] underline outline-none focus-visible:ring-3 focus-visible:ring-[var(--focus)]"
+        onClick={() => onOpen(from.id)}
+        type="button"
+      >
+        {from.title}
+      </button>
+    </p>
+  );
 }
 
 function WaitingChip({
@@ -837,32 +885,53 @@ export function ProjectBoard({
                 const chipShown =
                   isReady(item.state) && (startStatusError || reason !== null);
                 const chipId = `waiting-${item.id}`;
+                const filedId = `filed-${item.id}`;
+                const filed = item.filedBy === undefined ? null : item.filedBy;
+                const describedBy = [
+                  item.filedBy === undefined ? null : filedId,
+                  chipShown ? chipId : null,
+                ]
+                  .filter((id) => id !== null)
+                  .join(' ');
                 return (
                   <div
                     className={`flex flex-col gap-2 border-b border-[var(--border)] p-2 last:border-0 sm:flex-row sm:items-center ${selectedId === item.id ? 'bg-[var(--accent-muted)]' : ''}`}
                     key={item.id}
                   >
-                    <button
-                      aria-current={selectedId === item.id ? 'true' : undefined}
-                      aria-describedby={chipShown ? chipId : undefined}
-                      className="flex min-w-0 flex-1 items-center gap-3 rounded-lg p-2 text-left outline-none focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-[var(--focus)]"
-                      onClick={() => openItem(item.id)}
-                      ref={(element) => {
-                        if (element === null) rows.current.delete(item.id);
-                        else rows.current.set(item.id, element);
-                      }}
-                      type="button"
-                    >
-                      <span className="rounded bg-amber-100 px-2 py-1 text-xs font-bold text-amber-950 dark:bg-amber-900 dark:text-amber-50">
-                        {item.priority ?? '—'}
-                      </span>
-                      <strong className="min-w-0 flex-1 break-words">
-                        {item.title}
-                      </strong>
-                      <span className="rounded-full bg-[var(--accent-muted)] px-2 py-1 text-xs font-bold">
-                        {stateLabel(item.state)}
-                      </span>
-                    </button>
+                    <div className="flex min-w-0 flex-1 flex-col">
+                      <button
+                        aria-current={
+                          selectedId === item.id ? 'true' : undefined
+                        }
+                        aria-describedby={
+                          describedBy === '' ? undefined : describedBy
+                        }
+                        className="flex min-w-0 flex-1 items-center gap-3 rounded-lg p-2 text-left outline-none focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-[var(--focus)]"
+                        onClick={() => openItem(item.id)}
+                        ref={(element) => {
+                          if (element === null) rows.current.delete(item.id);
+                          else rows.current.set(item.id, element);
+                        }}
+                        type="button"
+                      >
+                        <span className="rounded bg-amber-100 px-2 py-1 text-xs font-bold text-amber-950 dark:bg-amber-900 dark:text-amber-50">
+                          {item.priority ?? '—'}
+                        </span>
+                        <strong className="min-w-0 flex-1 break-words">
+                          {item.title}
+                        </strong>
+                        <span className="rounded-full bg-[var(--accent-muted)] px-2 py-1 text-xs font-bold">
+                          {stateLabel(item.state)}
+                        </span>
+                      </button>
+                      {item.filedBy === undefined ? null : (
+                        <FiledByLine
+                          filedBy={filed}
+                          id={filedId}
+                          onOpen={openItem}
+                        />
+                      )}
+                    </div>
                     {chipShown ? (
                       <WaitingChip
                         error={startStatusError}
