@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 
 import {
   createWorkItem,
+  runEndedRequest,
   transition,
   type LifecycleContext,
   type WorkItemState,
@@ -435,6 +436,65 @@ describe('lifecycle transitions', () => {
     ).toEqual({
       ok: false,
       reason: 'Verification is unavailable in the MVP.',
+    });
+  });
+});
+
+describe('when the holding run ends', () => {
+  const held = createWorkItem({
+    attempts: 0,
+    holderRunId: 'run-1',
+    priority: 'P1',
+    state: 'building',
+  });
+
+  test('the item goes back to its queue with one more attempt', () => {
+    const request = runEndedRequest(held, {
+      maxAttempts: 3,
+      reason: 'The run failed.',
+    });
+
+    expect(transition(held, request, context)).toMatchObject({
+      ok: true,
+      item: {
+        attempts: 1,
+        holderRunId: null,
+        state: 'build_ready',
+        waitingKind: null,
+      },
+    });
+  });
+
+  test('the attempt that reaches max_attempts escalates to the navigator', () => {
+    const item = { ...held, attempts: 2 };
+    const request = runEndedRequest(item, {
+      maxAttempts: 3,
+      reason: 'The run failed.',
+    });
+
+    expect(transition(item, request, context)).toMatchObject({
+      ok: true,
+      item: {
+        attempts: 3,
+        holderRunId: null,
+        returnState: 'build_ready',
+        state: 'waiting',
+        waitingKind: 'escalation',
+        waitingReason: 'The run failed.',
+      },
+    });
+  });
+
+  test('an escalation keeps the item’s attempts once it is past the limit', () => {
+    const item = { ...held, attempts: 5, state: 'reviewing' as const };
+    const request = runEndedRequest(item, {
+      maxAttempts: 3,
+      reason: 'Stopped by the navigator.',
+    });
+
+    expect(transition(item, request, context)).toMatchObject({
+      ok: true,
+      item: { attempts: 6, returnState: 'review_ready', state: 'waiting' },
     });
   });
 });

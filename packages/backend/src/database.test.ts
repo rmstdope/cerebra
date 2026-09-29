@@ -3,7 +3,7 @@ import { Pool } from 'pg';
 import { describe, expect, test } from 'vitest';
 
 import { createDatabase } from './database.js';
-import { migrateToLatest } from './migrations/index.js';
+import { migrateTo, migrateToLatest } from './migrations/index.js';
 
 const databaseUrl = process.env.DATABASE_URL;
 
@@ -92,6 +92,10 @@ describe('database migrations', { concurrent: false }, () => {
           migrationName: '20260929040000_create_fleet',
           status: 'Success',
         }),
+        expect.objectContaining({
+          migrationName: '20261001000000_supervise_runs',
+          status: 'Success',
+        }),
       ]);
       expect(
         await database.introspection.getTables({
@@ -109,6 +113,7 @@ describe('database migrations', { concurrent: false }, () => {
           expect.objectContaining({ name: 'lifecycle_events' }),
           expect.objectContaining({ name: 'projects' }),
           expect.objectContaining({ name: 'runs' }),
+          expect.objectContaining({ name: 'run_events' }),
           expect.objectContaining({ name: 'sessions' }),
           expect.objectContaining({ name: 'work_item_comments' }),
           expect.objectContaining({ name: 'users' }),
@@ -199,6 +204,62 @@ describe('database migrations', { concurrent: false }, () => {
         sql`
           INSERT INTO work_items (id, project_id, state, priority)
           VALUES (${crypto.randomUUID()}, ${projectId}, 'not_a_state', 'P1')
+        `.execute(database),
+      ).rejects.toThrow();
+    } finally {
+      await database.destroy();
+      await dropSchema(schema);
+    }
+  });
+
+  test('turns an ended run into a finished one and checks run states', async () => {
+    const schema = await createSchema();
+    const database = createDatabase(databaseUrl, schema);
+    const ended = crypto.randomUUID();
+
+    try {
+      await migrateTo(database, '20260929040000_create_fleet', schema);
+      await sql`
+        INSERT INTO runs (id, role, status) VALUES (${ended}, 'builder', 'ended')
+      `.execute(database);
+
+      await migrateToLatest(database, schema);
+
+      const run = await database
+        .selectFrom('runs')
+        .select(['status', 'start_failed', 'cost_usd'])
+        .where('id', '=', ended)
+        .executeTakeFirstOrThrow();
+      expect(run).toEqual({
+        cost_usd: 0,
+        start_failed: false,
+        status: 'finished',
+      });
+      await expect(
+        sql`
+          INSERT INTO runs (id, role, status)
+          VALUES (${crypto.randomUUID()}, 'assistant', 'parked')
+        `.execute(database),
+      ).rejects.toThrow();
+      await expect(
+        sql`
+          INSERT INTO runs (id, role, status)
+          VALUES (${crypto.randomUUID()}, 'painter', 'starting')
+        `.execute(database),
+      ).rejects.toThrow();
+      const assistant = crypto.randomUUID();
+      await sql`
+        INSERT INTO runs (id, role, status)
+        VALUES (${assistant}, 'assistant', 'starting')
+      `.execute(database);
+      await sql`
+        INSERT INTO run_events (run_id, position, event)
+        VALUES (${assistant}, 1, '{"kind":"message","text":"Hello"}')
+      `.execute(database);
+      await expect(
+        sql`
+          INSERT INTO run_events (run_id, position, event)
+          VALUES (${assistant}, 1, '{"kind":"message","text":"Again"}')
         `.execute(database),
       ).rejects.toThrow();
     } finally {

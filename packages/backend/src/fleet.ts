@@ -8,7 +8,12 @@ import {
   type AgentTypeDefinition,
 } from './agent-types.js';
 import { ProjectNotFoundError } from './board.js';
-import type { AgentTypeOverrideFields, Database } from './database.js';
+import {
+  liveRunStates,
+  type AgentTypeOverrideFields,
+  type Database,
+  type LiveRunState,
+} from './database.js';
 
 export type StartMode = 'ready' | 'manual';
 
@@ -37,6 +42,13 @@ export interface FleetPerson {
   readonly role: AgentRole;
   /** True while the person has a live run, whether or not it holds work. */
   readonly running: boolean;
+  /** The live run the navigator can open, or `null` when there is none. */
+  readonly conversation: {
+    readonly runId: string;
+    readonly state: LiveRunState;
+  } | null;
+  /** True when the person's latest run failed before it started; cleared by the next start. */
+  readonly startFailed: boolean;
   readonly typeId: string;
 }
 
@@ -87,9 +99,9 @@ export interface Fleet {
   ): Promise<FleetPerson>;
 }
 
-/** Starts and stops a person's run; supplied once run supervision exists (cr-edk.5). */
+/** Starts and stops a person's run (architecture §5.3). */
 export interface RunControl {
-  start(agentId: string): Promise<void>;
+  start(agentId: string): Promise<{ readonly runId: string }>;
   stop(agentId: string): Promise<void>;
 }
 
@@ -289,7 +301,7 @@ export function createFleet(database: Kysely<Database>): Fleet {
       .leftJoin('runs', (join) =>
         join
           .onRef('runs.agent_id', '=', 'agents.id')
-          .on('runs.status', '=', 'active'),
+          .on('runs.status', 'in', liveRunStates),
       )
       .leftJoin('work_items', 'work_items.holder_run_id', 'runs.id')
       .select([
@@ -299,6 +311,7 @@ export function createFleet(database: Kysely<Database>): Fleet {
         'agents.agent_type_id',
         'agent_types.role',
         'runs.id as run_id',
+        'runs.status as run_status',
         'work_items.id as item_id',
         'work_items.title as item_title',
       ])
@@ -309,6 +322,20 @@ export function createFleet(database: Kysely<Database>): Fleet {
       query = query.where('agents.id', '=', agentId);
     }
     const rows = await query.execute();
+    const latestFailedStarts = await database
+      .selectFrom('runs')
+      .select(['agent_id', 'start_failed'])
+      .distinctOn('agent_id')
+      .where('project_id', '=', projectId)
+      .where('agent_id', 'is not', null)
+      .orderBy('agent_id')
+      .orderBy('created_at', 'desc')
+      .execute();
+    const failedToStart = new Set(
+      latestFailedStarts
+        .filter((run) => run.start_failed)
+        .map((run) => run.agent_id),
+    );
     const people = new Map<string, FleetPerson>();
     for (const row of rows) {
       const existing = people.get(row.id);
@@ -328,6 +355,11 @@ export function createFleet(database: Kysely<Database>): Fleet {
         name: row.name,
         role: row.role,
         running: row.run_id !== null || existing?.running === true,
+        conversation:
+          row.run_id !== null && row.run_status !== null
+            ? { runId: row.run_id, state: row.run_status as LiveRunState }
+            : (existing?.conversation ?? null),
+        startFailed: failedToStart.has(row.id),
         typeId: row.agent_type_id,
       });
     }
@@ -437,7 +469,7 @@ export function createFleet(database: Kysely<Database>): Fleet {
           .selectFrom('runs')
           .select('id')
           .where('agent_id', '=', agentId)
-          .where('status', '=', 'active')
+          .where('status', 'in', liveRunStates)
           .executeTakeFirst();
         if (live) {
           throw new AgentHoldsWorkError(agent.name);

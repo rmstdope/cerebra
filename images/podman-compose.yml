@@ -6,6 +6,11 @@ services:
     environment:
       CEREBRA_ADDRESS: http://localhost:4317
       CEREBRA_DATA_DIR: /data
+      CEREBRA_DATA_VOLUME: cerebra-data
+      CEREBRA_EGRESS_NETWORK: cerebro-egress
+      CEREBRA_GATEWAY_URL: ws://main:4317/runner
+      CEREBRA_INTERNAL_NETWORK: cerebro-internal
+      CEREBRA_PODMAN_SOCKET: /run/podman/podman.sock
       DATABASE_URL: postgresql://cerebra:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/cerebra
     ports:
       - '127.0.0.1:4317:4317'
@@ -13,6 +18,7 @@ services:
       - cerebra-data:/data
       - ${XDG_RUNTIME_DIR}/podman/podman.sock:/run/podman/podman.sock
     networks:
+      - database
       - internal
     depends_on:
       postgres:
@@ -26,10 +32,16 @@ services:
     volumes:
       - cerebra-postgres:/var/lib/postgresql
     networks:
-      - internal
+      - database
+# Agent containers join cerebro-internal and cerebro-egress by name (architecture §2); the database
+# network keeps Postgres off the network agents share.
 networks:
+  database:
+    internal: true
   internal:
+    name: cerebro-internal
     internal: true
 volumes:
   cerebra-data:
+    name: cerebra-data
   cerebra-postgres:

@@ -218,6 +218,39 @@ describe('a Claude run', () => {
     expect(fake.close).toHaveBeenCalled();
   });
 
+  test('with no first message, waits for the navigator before Claude hears anything', async () => {
+    const [first] = turns(recording('tools'));
+    const prompts: unknown[] = [];
+    const fake = fakeQuery(async ({ prompt, emit }) => {
+      prompts.push(textOf((await prompt.next()).value));
+      emit(...(first ?? []));
+      await prompt.next();
+    });
+    const record = recorder();
+
+    const run = runClaude({
+      start: start({ firstMessage: '' }),
+      query: fake.query,
+      env: {},
+      emit: record.emit,
+    });
+    await record.waitFor((event) => event.kind === 'status');
+    expect(prompts).toEqual([]);
+    expect(kinds(record.events)).toEqual(['status:awaiting_input']);
+
+    run.send('What changed this week?');
+    await record.waitFor((event) => event.kind === 'result');
+    run.stop();
+
+    await expect(run.done).resolves.toBe('stopped');
+    expect(prompts).toEqual(['What changed this week?']);
+    expect(kinds(record.events).slice(0, 3)).toEqual([
+      'status:awaiting_input',
+      'user_message',
+      'status:active',
+    ]);
+  });
+
   test('ends a non-interactive run after its first turn', async () => {
     const [first] = turns(recording('tools'));
     let promptEnded = false;

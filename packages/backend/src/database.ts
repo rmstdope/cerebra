@@ -70,10 +70,32 @@ export interface Database {
   };
   runs: {
     agent_id: Generated<string | null>;
+    agent_name: Generated<string | null>;
+    container_id: Generated<string | null>;
+    cost_usd: Generated<number>;
     created_at: Generated<Date>;
+    ended_at: Generated<Date | null>;
+    failure: Generated<string | null>;
     id: string;
-    role: 'groomer' | 'designer' | 'builder' | 'reviewer' | 'verifier';
-    status: 'active' | 'ended';
+    project_id: Generated<string | null>;
+    role:
+      | 'assistant'
+      | 'groomer'
+      | 'designer'
+      | 'builder'
+      | 'reviewer'
+      | 'verifier';
+    session_id: Generated<string | null>;
+    start_failed: Generated<boolean>;
+    status: Generated<RunState>;
+    token_hash: Generated<string | null>;
+  };
+  run_events: {
+    created_at: Generated<Date>;
+    event: unknown;
+    id: Generated<string>;
+    position: number;
+    run_id: string;
   };
   sessions: {
     created_at: Generated<Date>;
@@ -146,6 +168,24 @@ export interface Database {
     verify_enabled: Generated<boolean>;
   };
 }
+
+export type RunState =
+  | 'starting'
+  | 'active'
+  | 'awaiting_input'
+  | 'finished'
+  | 'failed';
+
+export type LiveRunState = Extract<
+  RunState,
+  'starting' | 'active' | 'awaiting_input'
+>;
+
+export const liveRunStates: readonly LiveRunState[] = [
+  'starting',
+  'active',
+  'awaiting_input',
+];
 
 export interface AgentTypeOverrideFields {
   readonly model?: AgentModel;
