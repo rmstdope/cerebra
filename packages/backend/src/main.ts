@@ -3,6 +3,7 @@ import {
   readAgentTypeDefinitions,
 } from './agent-types.js';
 import { createAuthService } from './auth.js';
+import { createBackups, createPgDump, parseBackupConfig } from './backups.js';
 import { createBoard } from './board.js';
 import { createBoardTools, resolveCaller } from './board-tools.js';
 import { createRunCheckouts, projectGitAccess } from './checkouts.js';
@@ -32,6 +33,8 @@ const dataDirectory = process.env.CEREBRA_DATA_DIR ?? '/data';
 const podmanSocket = process.env.CEREBRA_PODMAN_SOCKET;
 
 try {
+  // A malformed backup setting stops the start rather than quietly never backing up.
+  const backupConfig = parseBackupConfig(process.env);
   const projectTokenKey = await loadMasterKey();
   await migrateToLatest(database);
   const fleet = createFleet(database);
@@ -91,9 +94,32 @@ try {
   nudge.current();
   // A backstop for anything that changes without passing a request or a run's end.
   const dispatchTimer = setInterval(() => nudge.current(), 30_000).unref();
+  const backups =
+    backupConfig === undefined
+      ? undefined
+      : createBackups({
+          config: backupConfig,
+          database,
+          dump: createPgDump({
+            command: ['pg_dump'],
+            databaseUrl: process.env.DATABASE_URL ?? '',
+          }),
+          log: (message) => console.error(message),
+        });
+  await backups?.recover();
+  const backupTick = () => {
+    backups
+      ?.tick()
+      .catch((error: unknown) =>
+        console.error(`Could not check the backup schedule: ${String(error)}`),
+      );
+  };
+  backupTick();
+  const backupTimer = setInterval(backupTick, 60_000).unref();
   const board = createBoard(database);
   const server = await createServer({
     auth: createAuthService(database),
+    backups,
     board,
     conversations: supervisor,
     credentials,
@@ -135,7 +161,9 @@ try {
   });
   server.addHook('onClose', async () => {
     clearInterval(dispatchTimer);
+    clearInterval(backupTimer);
     await dispatcher?.idle();
+    await backups?.idle();
     await database.destroy();
   });
   await server.listen({ host: '0.0.0.0', port });

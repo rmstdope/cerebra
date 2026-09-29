@@ -34,8 +34,18 @@ export interface QueueEntry {
   readonly waitingReason: string | null;
 }
 
+/** Something about the instance itself that needs the navigator, outside any project. */
+export interface InstanceNotice {
+  /** When the failed backup attempt started. */
+  readonly at: Date;
+  readonly cause: string;
+  readonly kind: 'backup_failed';
+}
+
 export interface NavigatorQueuePage {
   readonly entries: readonly QueueEntry[];
+  readonly notices: readonly InstanceNotice[];
+  /** How many entries; notices are not counted. */
   readonly total: number;
 }
 
@@ -206,6 +216,29 @@ async function runQuestions(database: Kysely<Database>): Promise<QueueEntry[]> {
   return [...newest.values()];
 }
 
+/** A failed backup stays in the queue until a later one completes; there is no dismissing it. */
+async function backupNotices(
+  database: Kysely<Database>,
+): Promise<InstanceNotice[]> {
+  const latest = await database
+    .selectFrom('backups')
+    .select(['status', 'started_at', 'cause'])
+    .where('status', '<>', 'running')
+    .orderBy('started_at', 'desc')
+    .orderBy('id', 'desc')
+    .limit(1)
+    .executeTakeFirst();
+  return latest?.status === 'failed'
+    ? [
+        {
+          at: latest.started_at,
+          cause: latest.cause ?? '',
+          kind: 'backup_failed',
+        },
+      ]
+    : [];
+}
+
 export function createNavigatorQueue(
   database: Kysely<Database>,
 ): NavigatorQueue {
@@ -270,7 +303,11 @@ export function createNavigatorQueue(
       });
 
       entries.push(...(await runQuestions(database)));
-      return { entries: orderQueue(entries), total: entries.length };
+      return {
+        entries: orderQueue(entries),
+        notices: await backupNotices(database),
+        total: entries.length,
+      };
     },
 
     async answer(itemId, answer) {
