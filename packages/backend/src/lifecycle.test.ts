@@ -229,6 +229,96 @@ describe('lifecycle transitions', () => {
     });
   });
 
+  test.each([
+    'grooming_ready',
+    'design_ready',
+    'build_ready',
+    'review_ready',
+    'merging',
+    'done',
+    'cancelled',
+  ] satisfies readonly WorkItemState[])(
+    'lets the navigator move a waiting item to %s, which it picks',
+    (to) => {
+      const result = transition(
+        createWorkItem({
+          priority: 'P2',
+          returnState: 'merging',
+          state: 'waiting',
+          waitingKind: 'code_review',
+          waitingReason: 'Ready for your review.',
+        }),
+        { actor: { role: 'navigator' }, reason: 'Changed course.', to },
+        context,
+      );
+
+      expect(result).toMatchObject({
+        ok: true,
+        item: {
+          priority: 'P2',
+          returnState: null,
+          state: to,
+          waitingKind: null,
+          waitingReason: null,
+        },
+      });
+    },
+  );
+
+  test('clears the priority when the navigator returns a waiting item to new', () => {
+    expect(
+      transition(
+        createWorkItem({
+          priority: 'P1',
+          returnState: 'build_ready',
+          state: 'waiting',
+          waitingKind: 'escalation',
+          waitingReason: 'Attempts ran out.',
+        }),
+        { actor: { role: 'navigator' }, reason: 'Triage again.', to: 'new' },
+        context,
+      ),
+    ).toMatchObject({ ok: true, item: { priority: null, state: 'new' } });
+  });
+
+  test.each(['building', 'grooming', 'waiting'] satisfies WorkItemState[])(
+    'refuses a navigator move from waiting to %s',
+    (to) => {
+      const result = transition(
+        createWorkItem({
+          priority: 'P1',
+          returnState: 'build_ready',
+          state: 'waiting',
+          waitingKind: 'escalation',
+          waitingReason: 'Attempts ran out.',
+        }),
+        { actor: { role: 'navigator' }, to },
+        context,
+      );
+
+      expect(result.ok).toBe(false);
+    },
+  );
+
+  test('refuses a navigator move from waiting to a stage that is off', () => {
+    expect(
+      transition(
+        createWorkItem({
+          priority: 'P1',
+          returnState: 'build_ready',
+          state: 'waiting',
+          waitingKind: 'escalation',
+          waitingReason: 'Attempts ran out.',
+        }),
+        { actor: { role: 'navigator' }, to: 'design_ready' },
+        { ...context, stages: { ...context.stages, design: false } },
+      ),
+    ).toEqual({
+      ok: false,
+      reason: 'The design stage is disabled for this project.',
+    });
+  });
+
   test('refuses a wait whose return state bypasses the lifecycle', () => {
     const result = transition(
       createWorkItem({

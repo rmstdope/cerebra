@@ -339,10 +339,14 @@ function findRule(
     };
   }
 
+  // Spec §4.4: the navigator answers a wait by returning it, or by picking
+  // any state a navigator can put an item in (never one that needs a run or
+  // another wait).
   if (
     request.actor.role === 'navigator' &&
     item.state === 'waiting' &&
-    request.to === item.returnState
+    request.to !== 'waiting' &&
+    !isWorkingState(request.to)
   ) {
     return {
       from: item.state,
@@ -458,6 +462,10 @@ function nextPriority(
 ): Priority | null {
   if (item.state === 'new' && request.to !== 'cancelled') {
     return request.priority ?? null;
+  }
+
+  if (request.to === 'new') {
+    return null;
   }
 
   if (

@@ -129,7 +129,7 @@ const stageForRoute: Record<
 export interface Board {
   claim(itemId: string, role: RunRole): Promise<TransitionResult>;
   addComment(itemId: string, body: string): Promise<BoardComment>;
-  cancel(itemId: string): Promise<TransitionResult>;
+  cancel(itemId: string, reason?: string): Promise<TransitionResult>;
   countArrivals(
     projectId: string,
     query: BoardFilters & { readonly snapshot: string },
@@ -144,6 +144,7 @@ export interface Board {
     itemId: string,
     priority: Priority,
     route: BoardRoute,
+    reason?: string,
   ): Promise<TriageResult>;
   transition(
     itemId: string,
@@ -361,40 +362,29 @@ export function createBoard(database: Kysely<Database>): Board {
       });
     },
 
-    async triage(itemId, priority, route) {
-      return database.transaction().execute(async (transactionDatabase) => {
-        const current = await getLockedItem(transactionDatabase, itemId);
-        const stage = stageForRoute[route];
-        if (stage !== null && !current.context.stages[stage]) {
+    async triage(itemId, priority, route, reason) {
+      return transitionLocked<typeof routeUnavailable>(
+        database,
+        itemId,
+        (current) => {
+          if (!isRouteAvailable(route, current.context.stages)) {
+            return routeUnavailable;
+          }
           return {
-            code: 'route_unavailable' as const,
-            ok: false as const,
-            reason: 'That next step is not available for this project.',
+            actor: { role: 'navigator' },
+            priority,
+            record: { kind: 'triage' },
+            ...(reason === undefined ? {} : { reason }),
+            to: route,
           };
-        }
-        const request: TransitionRequest = {
-          actor: { role: 'navigator' },
-          priority,
-          record: { kind: 'triage' },
-          to: route,
-        };
-        const result = transition(current.item, request, current.context);
-        if (result.ok) {
-          await persistTransition(
-            transactionDatabase,
-            itemId,
-            current.item,
-            result,
-            request,
-          );
-        }
-        return result;
-      });
+        },
+      );
     },
 
-    async cancel(itemId) {
+    async cancel(itemId, reason) {
       return this.transition(itemId, {
         actor: { role: 'navigator' },
+        ...(reason === undefined ? {} : { reason }),
         to: 'cancelled',
       });
     },
@@ -432,6 +422,55 @@ export function createBoard(database: Kysely<Database>): Board {
       });
     },
   };
+}
+
+export const routeUnavailable = {
+  code: 'route_unavailable' as const,
+  ok: false as const,
+  reason: 'That next step is not available for this project.',
+};
+
+export function isRouteAvailable(
+  route: BoardRoute,
+  stages: LifecycleContext['stages'],
+): boolean {
+  const stage = stageForRoute[route];
+  return stage === null || stages[stage];
+}
+
+export interface LockedWorkItem {
+  readonly context: LifecycleContext;
+  readonly item: WorkItem;
+}
+
+/**
+ * Applies one lifecycle transition inside a transaction that locks the item,
+ * so a caller's precondition and the write see the same row. `decide` returns
+ * the request to apply, or a refusal to return unchanged.
+ */
+export async function transitionLocked<R extends { readonly ok: false }>(
+  database: Kysely<Database>,
+  itemId: string,
+  decide: (current: LockedWorkItem) => TransitionRequest | R,
+): Promise<TransitionResult | R> {
+  return database.transaction().execute(async (transactionDatabase) => {
+    const current = await getLockedItem(transactionDatabase, itemId);
+    const request = decide(current);
+    if ('ok' in request) {
+      return request;
+    }
+    const result = transition(current.item, request, current.context);
+    if (result.ok) {
+      await persistTransition(
+        transactionDatabase,
+        itemId,
+        current.item,
+        result,
+        request,
+      );
+    }
+    return result;
+  });
 }
 
 const boardColumns = [

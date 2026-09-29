@@ -5,6 +5,7 @@ import {
   GitHubAccessError,
   startServer,
   type InstanceService,
+  type NavigatorQueue,
   type ProjectRegistration,
 } from '@cerebra/backend';
 import { createServer as createNodeServer } from 'node:net';
@@ -457,5 +458,188 @@ test('answers every board read with 503 when no board is wired', async () => {
   expect(response.statusCode).toBe(503);
   expect(response.json()).toEqual({
     error: 'The project board is unavailable.',
+  });
+});
+
+function fakeQueue(overrides: Partial<NavigatorQueue> = {}): NavigatorQueue {
+  const unused = async () => {
+    throw new Error('Not exercised');
+  };
+  return { answer: unused, decide: unused, list: unused, ...overrides };
+}
+
+test('lists what waits on the navigator across projects', async () => {
+  const server = await createServer({
+    auth: authenticatedAuth,
+    queue: fakeQueue({
+      list: async () => ({
+        entries: [
+          {
+            askedBy: 'Groomer',
+            availableRoutes: ['build_ready'],
+            description: '',
+            id: 'item-1',
+            kind: 'question',
+            priority: 'P1',
+            projectId: 'project-1',
+            projectName: 'acme/alpha',
+            since: new Date('2026-09-29T00:00:00.000Z'),
+            title: 'Show the queue',
+            waitingReason: 'Which release?',
+          },
+        ],
+        total: 1,
+      }),
+    }),
+  });
+  servers.push(server);
+
+  const response = await server.inject('/api/navigator-queue');
+
+  expect(response.statusCode).toBe(200);
+  expect(response.json()).toMatchObject({
+    entries: [{ id: 'item-1', since: '2026-09-29T00:00:00.000Z' }],
+    total: 1,
+  });
+});
+
+test('answers a question and refuses an empty answer', async () => {
+  const answers: unknown[] = [];
+  const server = await createServer({
+    auth: authenticatedAuth,
+    queue: fakeQueue({
+      answer: async (itemId, answer) => {
+        answers.push({ answer, itemId });
+        return { ok: true };
+      },
+    }),
+  });
+  servers.push(server);
+
+  const empty = await server.inject({
+    method: 'POST',
+    payload: { answer: '  ' },
+    url: '/api/navigator-queue/item-1/answer',
+  });
+  const answered = await server.inject({
+    method: 'POST',
+    payload: { answer: 'The next one.' },
+    url: '/api/navigator-queue/item-1/answer',
+  });
+
+  expect(empty.statusCode).toBe(400);
+  expect(answered.statusCode).toBe(200);
+  expect(answered.json()).toEqual({ ok: true });
+  expect(answers).toEqual([{ answer: 'The next one.', itemId: 'item-1' }]);
+});
+
+test('passes a decision through and requires a reason to cancel or redirect', async () => {
+  const decisions: unknown[] = [];
+  const server = await createServer({
+    auth: authenticatedAuth,
+    queue: fakeQueue({
+      decide: async (itemId, decision) => {
+        decisions.push({ decision, itemId });
+        return { ok: true };
+      },
+    }),
+  });
+  servers.push(server);
+
+  for (const payload of [
+    { direction: 'cancel' },
+    { direction: 'redirect', reason: ' ', to: 'build_ready' },
+    { direction: 'redirect', reason: 'Why', to: 'merging' },
+    { direction: 'redirect', priority: 'P9', reason: 'Why', to: 'build_ready' },
+    { direction: 'sideways' },
+  ]) {
+    const response = await server.inject({
+      method: 'POST',
+      payload,
+      url: '/api/navigator-queue/item-1/decision',
+    });
+    expect(response.statusCode).toBe(400);
+  }
+
+  for (const payload of [
+    { direction: 'reopen' },
+    { direction: 'cancel', reason: 'Not needed' },
+    {
+      direction: 'redirect',
+      priority: 'P2',
+      reason: 'Build it',
+      to: 'build_ready',
+    },
+  ]) {
+    const response = await server.inject({
+      method: 'POST',
+      payload,
+      url: '/api/navigator-queue/item-1/decision',
+    });
+    expect(response.statusCode).toBe(200);
+  }
+
+  expect(decisions).toEqual([
+    { decision: { direction: 'reopen' }, itemId: 'item-1' },
+    {
+      decision: { direction: 'cancel', reason: 'Not needed' },
+      itemId: 'item-1',
+    },
+    {
+      decision: {
+        direction: 'redirect',
+        priority: 'P2',
+        reason: 'Build it',
+        to: 'build_ready',
+      },
+      itemId: 'item-1',
+    },
+  ]);
+});
+
+test('returns a queue refusal as a conflict and an unknown item as 404', async () => {
+  const server = await createServer({
+    auth: authenticatedAuth,
+    queue: fakeQueue({
+      answer: async () => {
+        throw new WorkItemNotFoundError('item-9');
+      },
+      decide: async () => ({
+        code: 'not_waiting',
+        ok: false,
+        reason: 'This work no longer waits on the navigator.',
+      }),
+    }),
+  });
+  servers.push(server);
+
+  const refused = await server.inject({
+    method: 'POST',
+    payload: { direction: 'reopen' },
+    url: '/api/navigator-queue/item-1/decision',
+  });
+  const missing = await server.inject({
+    method: 'POST',
+    payload: { answer: 'Yes' },
+    url: '/api/navigator-queue/item-9/answer',
+  });
+
+  expect(refused.statusCode).toBe(409);
+  expect(refused.json()).toEqual({
+    code: 'not_waiting',
+    error: 'This work no longer waits on the navigator.',
+  });
+  expect(missing.statusCode).toBe(404);
+});
+
+test('answers the queue with 503 when no queue is wired', async () => {
+  const server = await createServer({ auth: authenticatedAuth });
+  servers.push(server);
+
+  const response = await server.inject('/api/navigator-queue');
+
+  expect(response.statusCode).toBe(503);
+  expect(response.json()).toEqual({
+    error: 'The navigator queue is unavailable.',
   });
 });

@@ -44,6 +44,18 @@ export {
   type WorkItem,
   type WorkItemState,
 } from './lifecycle.js';
+export {
+  compareQueueEntries,
+  createNavigatorQueue,
+  type NavigatorQueue,
+  type NavigatorQueuePage,
+  type QueueActionResult,
+  type QueueDecision,
+  type QueueEntry,
+  type QueueEntryKind,
+  type QueueRefusal,
+  type QueueRefusalCode,
+} from './navigator-queue.js';
 export { migrateToLatest } from './migrations/index.js';
 export { createProjectRegistrationService } from './project-registration.js';
 export {

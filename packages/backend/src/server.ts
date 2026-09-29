@@ -19,6 +19,11 @@ import {
 } from './board.js';
 import { createInstanceService, type InstanceService } from './instance.js';
 import { workItemStates, type Priority } from './lifecycle.js';
+import type {
+  NavigatorQueue,
+  QueueActionResult,
+  QueueDecision,
+} from './navigator-queue.js';
 import {
   GitHubAccessError,
   InvalidProjectPrefixError,
@@ -32,6 +37,7 @@ export interface ServerOptions {
   readonly board?: Board;
   readonly instance?: InstanceService;
   readonly projects?: ProjectRegistration;
+  readonly queue?: NavigatorQueue;
   readonly uiDirectory?: string;
 }
 
@@ -134,11 +140,47 @@ function workItemBody(
   };
 }
 
+const priorities: readonly string[] = ['P0', 'P1', 'P2', 'P3'];
+
+function queueDecision(value: unknown): QueueDecision | null {
+  const body = objectBody(value);
+  if (body === null) {
+    return null;
+  }
+  if (body.direction === 'reopen') {
+    return { direction: 'reopen' };
+  }
+  if (typeof body.reason !== 'string' || body.reason.trim().length === 0) {
+    return null;
+  }
+  const reason = body.reason.trim();
+  if (body.direction === 'cancel') {
+    return { direction: 'cancel', reason };
+  }
+  if (
+    body.direction !== 'redirect' ||
+    !boardRoutes.includes(body.to as BoardRoute) ||
+    (body.priority !== undefined &&
+      !priorities.includes(body.priority as string))
+  ) {
+    return null;
+  }
+  return {
+    direction: 'redirect',
+    ...(body.priority === undefined
+      ? {}
+      : { priority: body.priority as Priority }),
+    reason,
+    to: body.to as BoardRoute,
+  };
+}
+
 export const createServer = async ({
   auth,
   board,
   instance = createInstanceService(),
   projects,
+  queue,
   uiDirectory = process.env.CEREBRA_UI_DIR,
 }: ServerOptions): Promise<FastifyInstance> => {
   const server = Fastify();
@@ -424,6 +466,73 @@ export const createServer = async ({
           : reply.status(409).send({ error: result.reason });
       },
     ),
+  );
+
+  const queueRoute =
+    (
+      handler: (
+        queue: NavigatorQueue,
+        itemId: string,
+        request: FastifyRequest,
+        reply: FastifyReply,
+      ) => Promise<unknown>,
+    ) =>
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      if (queue === undefined) {
+        return reply
+          .status(503)
+          .send({ error: 'The navigator queue is unavailable.' });
+      }
+      try {
+        return await handler(
+          queue,
+          (request.params as { itemId?: string }).itemId ?? '',
+          request,
+          reply,
+        );
+      } catch (error) {
+        if (error instanceof WorkItemNotFoundError) {
+          return reply.status(404).send({ error: error.message });
+        }
+        throw error;
+      }
+    };
+  const queueResult = (reply: FastifyReply, result: QueueActionResult) =>
+    result.ok
+      ? { ok: true }
+      : reply.status(409).send({ code: result.code, error: result.reason });
+
+  server.get(
+    '/api/navigator-queue',
+    queueRoute(async (queue) => queue.list()),
+  );
+
+  server.post(
+    '/api/navigator-queue/:itemId/answer',
+    queueRoute(async (queue, itemId, request, reply) => {
+      const body = objectBody(request.body);
+      if (
+        body === null ||
+        typeof body.answer !== 'string' ||
+        body.answer.trim().length === 0
+      ) {
+        return reply.status(400).send({ error: 'Enter an answer.' });
+      }
+      return queueResult(reply, await queue.answer(itemId, body.answer.trim()));
+    }),
+  );
+
+  server.post(
+    '/api/navigator-queue/:itemId/decision',
+    queueRoute(async (queue, itemId, request, reply) => {
+      const decision = queueDecision(request.body);
+      if (decision === null) {
+        return reply
+          .status(400)
+          .send({ error: 'Choose a direction and give a reason.' });
+      }
+      return queueResult(reply, await queue.decide(itemId, decision));
+    }),
   );
 
   if (uiDirectory !== undefined) {
