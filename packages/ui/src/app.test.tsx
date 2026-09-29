@@ -844,6 +844,7 @@ describe('App', () => {
               failure: null,
               id,
               item: null,
+              projectId: 'project-1',
               startedAt: '2026-10-01T09:30:00.000Z',
               state: 'starting',
             },
@@ -926,6 +927,7 @@ describe('App', () => {
           failure: null,
           id,
           item: null,
+          projectId: 'project-1',
           startedAt: '2026-10-01T09:30:00.000Z',
           state: 'awaiting_input',
         },
@@ -975,6 +977,101 @@ describe('App', () => {
     });
     await waitFor(() => expect(document.activeElement).toBe(form));
     window.location.hash = '';
+  });
+
+  test('an item filed in a conversation opens on its project board', async () => {
+    const user = userEvent.setup();
+    const runId = '8d4d5b9f-9f1f-4d8b-8e68-2a3b4c5d6e7f';
+    const filed: WorkItem = {
+      createdAt: '2026-10-01T09:32:00.000Z',
+      description: '',
+      id: 'item-7',
+      priority: null,
+      state: 'new',
+      title: 'Bulk export for credit notes',
+      updatedAt: '2026-10-01T09:32:00.000Z',
+    };
+    const unused = async () => {
+      throw new Error('Not exercised');
+    };
+    const boardClient: BoardClient = {
+      addComment: unused,
+      arrivals: async () => 0,
+      cancel: unused,
+      comments: async () => [],
+      create: unused,
+      history: async () => [],
+      item: async () => filed,
+      list: async () => ({
+        items: [filed],
+        nextCursor: null,
+        snapshot: '1',
+        total: 1,
+      }),
+      triage: unused,
+    };
+    const conversationClient: ConversationClient = {
+      answer: async () => undefined,
+      read: async (id) => ({
+        events: [
+          {
+            createdAt: '2026-10-01T09:32:00.000Z',
+            event: {
+              input: { description: '', title: filed.title },
+              kind: 'tool_call',
+              name: 'mcp__cerebra__create_item',
+              toolCallId: 'c1',
+            },
+            position: 1,
+          },
+          {
+            createdAt: '2026-10-01T09:32:00.000Z',
+            event: {
+              content: '{"id":"item-7","priority":null,"state":"new"}',
+              isError: false,
+              kind: 'tool_result',
+              toolCallId: 'c1',
+            },
+            position: 2,
+          },
+        ],
+        run: {
+          agentId: 'agent-gale',
+          agentName: 'Gale',
+          agentRole: 'groomer',
+          endedAt: null,
+          failure: null,
+          id,
+          item: { id: 'item-1', title: 'Export invoices as CSV' },
+          projectId: 'project-1',
+          startedAt: '2026-10-01T09:30:00.000Z',
+          state: 'active',
+        },
+      }),
+      send: async () => undefined,
+      stop: async () => undefined,
+      subscribe: () => () => undefined,
+    };
+    window.location.hash = `#/conversations/${runId}`;
+
+    render(
+      <App
+        authClient={authenticatedAuth}
+        boardClient={boardClient}
+        conversationClient={conversationClient}
+        mediaQuery={new FakeMediaQuery(false)}
+        queueClient={emptyQueue}
+        storage={{ getItem: () => null, setItem: () => undefined }}
+      />,
+    );
+
+    await user.click(await screen.findByRole('button', { name: filed.title }));
+
+    const board = await screen.findByRole('region', { name: 'Project board' });
+    expect(
+      await within(board).findByRole('heading', { name: filed.title }),
+    ).toBeTruthy();
+    expect(window.location.hash).toBe('');
   });
 
   test('switching projects discards a previous project’s delayed credential response', async () => {

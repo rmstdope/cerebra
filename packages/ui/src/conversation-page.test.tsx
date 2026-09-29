@@ -30,6 +30,7 @@ function conversation(
       failure: null,
       id: 'run-1',
       item: null,
+      projectId: 'project-1',
       startedAt,
       state: 'starting',
       ...run,
@@ -788,4 +789,197 @@ test('a conversation with an open question focuses the question form when it ope
     name: 'Which export format comes first?',
   });
   await waitFor(() => expect(document.activeElement).toBe(form));
+});
+
+const outcomeText = [
+  'Confirm the outcome and where it goes next',
+  '## Problem',
+  'Accountants re-type invoices into their ledger each month.',
+  '## Who benefits',
+  'Finance staff.',
+  '## Outcome',
+  'Any filtered invoice list downloads as a CSV.',
+  '## Out of scope',
+  'Credit notes.',
+  '## How we will know',
+  'A month of invoices imports with no edits.',
+].join('\n');
+
+const outcomeQuestion: RunEvent = {
+  kind: 'question',
+  questionId: 'q-o',
+  questions: [
+    {
+      header: 'Outcome',
+      multiSelect: false,
+      options: [
+        {
+          description: 'agree what people will see first',
+          label: 'Design next (Recommended)',
+        },
+        {
+          description: 'nothing new to see; go straight to building',
+          label: 'Build next',
+        },
+      ],
+      question: outcomeText,
+    },
+  ],
+};
+
+const groomer: Partial<Conversation['run']> = {
+  agentId: 'agent-gale',
+  agentName: 'Gale',
+  agentRole: 'groomer',
+  item: { id: 'item-1', title: 'Export invoices as CSV' },
+};
+
+function outcomeMove(id: string, isError: boolean): RunEvent[] {
+  return [
+    {
+      input: { record: { kind: 'outcome', markdown: 'x' }, to: 'design_ready' },
+      kind: 'tool_call',
+      name: 'mcp__cerebra__transition',
+      toolCallId: id,
+    },
+    {
+      content: isError ? '{"error":"refused"}' : '{"state":"design_ready"}',
+      isError,
+      kind: 'tool_result',
+      toolCallId: id,
+    },
+  ];
+}
+
+test('the groomer asks for the outcome as one focused form; a route answers it', async () => {
+  const client = fakeClient(
+    conversation([outcomeQuestion], { ...groomer, state: 'awaiting_input' }),
+  );
+  renderPage(client);
+
+  const form = await screen.findByRole('form', {
+    name: 'Confirm the outcome and where it goes next',
+  });
+  await waitFor(() => expect(document.activeElement).toBe(form));
+  expect(screen.getByText('Groomer · Export invoices as CSV')).toBeTruthy();
+  expect(
+    within(form).getByText('Gale needs one answer before it can continue.'),
+  ).toBeTruthy();
+  for (const heading of [
+    'Problem',
+    'Who benefits',
+    'Outcome',
+    'Out of scope',
+    'How we will know',
+  ]) {
+    expect(within(form).getByRole('heading', { name: heading })).toBeTruthy();
+  }
+  expect(
+    within(form).getByText(
+      'Accountants re-type invoices into their ledger each month.',
+    ),
+  ).toBeTruthy();
+  expect(
+    within(form).getByRole('button', {
+      name: 'Design next — agree what people will see first (recommended by Gale)',
+    }),
+  ).toBeTruthy();
+  expect(within(form).getByLabelText('Or write your own answer')).toBeTruthy();
+
+  await userEvent.click(
+    within(form).getByRole('button', {
+      name: 'Build next — nothing new to see; go straight to building',
+    }),
+  );
+  expect(client.answers).toEqual([
+    { answers: { [outcomeText]: 'Build next' }, questionId: 'q-o' },
+  ]);
+});
+
+test('an answered outcome stays readable in the thread', async () => {
+  renderPage(
+    fakeClient(
+      conversation(
+        [
+          outcomeQuestion,
+          {
+            answers: { [outcomeText]: 'Design next (Recommended)' },
+            kind: 'answer',
+            questionId: 'q-o',
+          },
+        ],
+        { ...groomer, state: 'active' },
+      ),
+    ),
+  );
+
+  const block = await screen.findByRole('region', {
+    name: 'Confirm the outcome and where it goes next',
+  });
+  expect(
+    within(block).getByRole('heading', { name: 'Out of scope' }),
+  ).toBeTruthy();
+  expect(within(block).queryByRole('button')).toBeNull();
+  expect(screen.getByText('Design next')).toBeTruthy();
+  expect(screen.queryByRole('form')).toBeNull();
+});
+
+test('a refused outcome says nothing moved and Try again asks the groomer to retry', async () => {
+  const client = fakeClient(
+    conversation([...outcomeMove('t1', true), ...outcomeMove('t2', true)], {
+      ...groomer,
+      state: 'active',
+    }),
+  );
+  renderPage(client);
+
+  expect(
+    await screen.findAllByText('Gale couldn’t record the outcome.'),
+  ).toHaveLength(2);
+  expect(
+    screen.getAllByText('Nothing was moved. Your answer is kept; try again.'),
+  ).toHaveLength(2);
+  const retry = screen.getAllByRole('button', { name: 'Try again' });
+  expect(retry).toHaveLength(1);
+
+  await userEvent.click(retry[0]!);
+  expect(client.sent).toEqual(['Try again.']);
+
+  client.push({ type: 'event', ...record(5, outcomeMove('t3', false)[0]!) });
+  client.push({ type: 'event', ...record(6, outcomeMove('t3', false)[1]!) });
+  expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+});
+
+test('an item the groomer filed is a link that opens it on its board', async () => {
+  const opened: [string, string][] = [];
+  renderPage(
+    fakeClient(
+      conversation(
+        [
+          {
+            input: { description: 'd', title: 'Bulk export for credit notes' },
+            kind: 'tool_call',
+            name: 'mcp__cerebra__create_item',
+            toolCallId: 'c1',
+          },
+          {
+            content: '{"id":"item-7","priority":null,"state":"new"}',
+            isError: false,
+            kind: 'tool_result',
+            toolCallId: 'c1',
+          },
+        ],
+        { ...groomer, state: 'active' },
+      ),
+    ),
+    { onOpenItem: (projectId, itemId) => opened.push([projectId, itemId]) },
+  );
+
+  await userEvent.click(
+    await screen.findByRole('button', { name: 'Bulk export for credit notes' }),
+  );
+  expect(opened).toEqual([['project-1', 'item-7']]);
+  expect(
+    screen.getAllByText('Filed “Bulk export for credit notes”').length,
+  ).toBeGreaterThan(0);
 });

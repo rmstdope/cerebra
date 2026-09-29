@@ -204,8 +204,9 @@ after thirty seconds. Every ending closes the connection, releases any held item
 lifecycle, stops and removes the container, and then deletes the run's checkout (an ending the
 database refuses is retried, and one it keeps refusing is left to the next startup's recovery).
 A checkout that cannot be made (GitHub unreachable, a branch that is not there) fails the start
-with that reason, before any container exists. A named agent has at most one live run, which the
-database enforces. Its containers are held to the same rule: before a run's container is created,
+with that reason, before any container exists. A run whose `transition` or `wait_for_navigator` leaves it holding nothing ends `finished` when
+its current turn ends, so a groomer's conversation finishes once the item has left grooming.
+A named agent has at most one live run, which the database enforces. Its containers are held to the same rule: before a run's container is created,
 every earlier container labelled with the same agent is stopped and removed, and a start that cannot
 prove them gone fails, so the agent's home and CLI state are never mounted by two containers (D17).
 
@@ -241,7 +242,12 @@ agent can read why; an unexpected failure is a JSON-RPC internal error that name
 `transition` and `wait_for_navigator` act only on the item the run holds, re-checked under the
 item's row lock. `create_item` always files into `new` with no priority, whatever the agent
 passes, and records the filing run (`work_items.filed_by_run_id`) and the item it held
-(`work_items.discovered_from_id`) as the item's provenance (`spec.md` §4.10, D35).
+(`work_items.discovered_from_id`) as the item's provenance (`spec.md` §4.10, D35); the board
+shows it as the row's "Filed by" line. A groomer's `transition` out of grooming is also checked
+against the run's recorded events: the newest outcome question it asked (the shape shared with the
+UI in `@cerebra/shared`) must have an answer naming the route of `to`, and the record's five sections
+must equal the ones the navigator confirmed, whitespace aside. A refusal says what to do next and
+that nothing was moved.
 
 ## 6. Dispatcher and scheduler
 

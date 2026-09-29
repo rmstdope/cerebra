@@ -57,6 +57,8 @@ export interface Supervisor extends RunControl {
   send(runId: string, text: string): Promise<void>;
   answer(runId: string, questionId: string, answers: Answers): Promise<void>;
   stopRun(runId: string): Promise<void>;
+  /** Ends a live run as finished once its current turn ends: its item has left it (architecture §5.3). */
+  finishAfterTurn(runId: string): void;
   subscribe(runId: string, listener: (update: RunUpdate) => void): () => void;
   /** Reads files from a live run's checkout, through its runner (architecture §5.2). */
   fetchFiles(
@@ -151,6 +153,8 @@ interface LiveRun {
   /** File requests waiting for the runner's answer, by request id. */
   readonly fileRequests: Map<string, FileRequest>;
   start: StartMessage;
+  /** Set once the run's item has left it; the run ends when its turn does. */
+  finishAfterTurn: boolean;
   /** Serialises the handling of one run's messages so events keep their order. */
   work: Promise<void>;
 }
@@ -468,6 +472,7 @@ export function createSupervisor({
       connection: null,
       connectTimer: null,
       fileRequests: new Map(),
+      finishAfterTurn: false,
       pending: [],
       start: {
         backend: 'claude',
@@ -577,7 +582,11 @@ export function createSupervisor({
           ? {}
           : { sessionId: event.sessionId }),
       });
-      if (event.end === 'completed' || event.end === 'stopped') {
+      if (
+        event.end === 'completed' ||
+        event.end === 'stopped' ||
+        (event.end === 'turn' && live.get(runId)?.finishAfterTurn === true)
+      ) {
         await end(runId, {
           reason: event.end === 'stopped' ? stoppedReason : 'The run finished.',
           state: 'finished',
@@ -738,6 +747,11 @@ export function createSupervisor({
           });
         }, stopTimeoutMs);
       }
+    },
+
+    finishAfterTurn(runId) {
+      const entry = live.get(runId);
+      if (entry !== undefined) entry.finishAfterTurn = true;
     },
 
     read: (runId) => (isUuid(runId) ? runs.read(runId) : Promise.resolve(null)),

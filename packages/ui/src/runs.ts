@@ -68,6 +68,7 @@ export interface ConversationRun {
   readonly failure: string | null;
   readonly id: string;
   readonly item: { readonly id: string; readonly title: string } | null;
+  readonly projectId: string | null;
   readonly startedAt: string;
   readonly state: RunState;
 }

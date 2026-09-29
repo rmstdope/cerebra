@@ -476,6 +476,33 @@ describe('the run supervisor', { concurrent: false }, () => {
     );
   });
 
+  test('a run told to finish ends finished when its turn ends, not before', async () => {
+    await withSupervisor(
+      async ({ agent, connect, engine, runs, supervisor }) => {
+        const { runId } = await supervisor.start(await agent('Cerebro'));
+        const runner = await connect(runId);
+
+        supervisor.finishAfterTurn(runId);
+        runner.listener.message(
+          up({
+            kind: 'message',
+            text: 'Recorded. Export now waits for build.',
+          }),
+        );
+        await settle();
+        expect((await runs.get(runId))?.state).not.toBe('finished');
+
+        runner.listener.message(up({ end: 'turn', kind: 'result', usage }));
+        await settle();
+
+        expect((await runs.get(runId))?.state).toBe('finished');
+        expect(runner.closed()).toBe(true);
+        expect(containerOf(engine, runId)).toBeUndefined();
+        supervisor.finishAfterTurn(runId);
+      },
+    );
+  });
+
   test('a failed result or a runner that goes away without one fails the run', async () => {
     await withSupervisor(async ({ agent, connect, runs, supervisor }) => {
       const first = await supervisor.start(await agent('Cerebro'));

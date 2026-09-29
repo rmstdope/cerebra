@@ -254,6 +254,22 @@ export function createRunStore(database: Kysely<Database>): RunStore {
       if (row === undefined) {
         return null;
       }
+      // Once released, the item is the one this run's history names first: its claim.
+      const item =
+        row.item_id !== null && row.item_title !== null
+          ? { id: row.item_id, title: row.item_title }
+          : ((await database
+              .selectFrom('work_item_history')
+              .innerJoin(
+                'work_items',
+                'work_items.id',
+                'work_item_history.work_item_id',
+              )
+              .select(['work_items.id', 'work_items.title'])
+              .where('work_item_history.actor_run_id', '=', runId)
+              .orderBy('work_item_history.id')
+              .limit(1)
+              .executeTakeFirst()) ?? null);
       const events = await database
         .selectFrom('run_events')
         .select(['created_at', 'event', 'position'])
@@ -270,10 +286,7 @@ export function createRunStore(database: Kysely<Database>): RunStore {
           ...toRun(row),
           agentRole:
             row.agent_role ?? (row.role === 'assistant' ? 'assistant' : null),
-          item:
-            row.item_id === null || row.item_title === null
-              ? null
-              : { id: row.item_id, title: row.item_title },
+          item,
         },
       };
     },

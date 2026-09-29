@@ -1,3 +1,9 @@
+import {
+  parseOutcomeQuestion,
+  stripRecommended,
+  type OutcomeQuestion,
+} from '@cerebra/shared';
+
 import type { Question, RecordedEvent } from './runs';
 
 export interface DiffLine {
@@ -18,7 +24,51 @@ export type ThreadItem =
       readonly at: string;
     }
   | StepItem
-  | HelperItem;
+  | HelperItem
+  | {
+      /** The groomer's outcome, as the navigator answered it. */
+      readonly kind: 'outcome';
+      readonly key: string;
+      readonly at: string;
+      readonly outcome: OutcomeQuestion;
+    }
+  | {
+      /** An item an agent filed, from a create_item that succeeded. */
+      readonly kind: 'filed';
+      readonly key: string;
+      readonly itemId: string;
+      readonly title: string;
+    }
+  | {
+      /** A groomer's move out of grooming that the backend refused. */
+      readonly kind: 'outcome_failed';
+      readonly key: string;
+    };
+
+const createItem = 'mcp__cerebra__create_item';
+const transition = 'mcp__cerebra__transition';
+
+function isOutcomeMove(step: StepItem): boolean {
+  if (step.name !== transition) return false;
+  const to = field(step.input, 'to');
+  return to === 'design_ready' || to === 'build_ready';
+}
+
+function filedIdOf(content: string): string | null {
+  try {
+    const parsed: unknown = JSON.parse(content);
+    return field(parsed, 'id');
+  } catch {
+    return null;
+  }
+}
+
+/** Whether a step is an outcome move; its success is the result it settled with, null while running. */
+export function outcomeMoveOf(item: ThreadItem): boolean | null {
+  if (item.kind === 'outcome_failed') return false;
+  if (item.kind !== 'step' || !isOutcomeMove(item)) return null;
+  return item.result === null ? null : !item.result.isError;
+}
 
 export interface StepItem {
   readonly kind: 'step';
@@ -42,7 +92,7 @@ export interface HelperItem {
 export function buildThread(events: readonly RecordedEvent[]): ThreadItem[] {
   const root: ThreadItem[] = [];
   const helpers = new Map<string, HelperItem>();
-  const steps = new Map<string, StepItem>();
+  const steps = new Map<string, { step: StepItem; in: ThreadItem[] }>();
   const questions = new Map<string, readonly Question[]>();
 
   for (const record of events) {
@@ -68,14 +118,18 @@ export function buildThread(events: readonly RecordedEvent[]): ThreadItem[] {
           result: null,
           toolCallId: event.toolCallId,
         };
-        steps.set(event.toolCallId, step);
+        steps.set(event.toolCallId, { in: target, step });
         target.push(step);
         break;
       }
       case 'tool_result': {
-        const step = steps.get(event.toolCallId);
-        if (step !== undefined) {
-          step.result = { content: event.content, isError: event.isError };
+        const found = steps.get(event.toolCallId);
+        if (found === undefined) break;
+        const { step } = found;
+        step.result = { content: event.content, isError: event.isError };
+        const replacement = settled(step);
+        if (replacement !== null) {
+          found.in.splice(found.in.indexOf(step), 1, replacement);
         }
         break;
       }
@@ -100,8 +154,23 @@ export function buildThread(events: readonly RecordedEvent[]): ThreadItem[] {
       case 'question':
         questions.set(event.questionId, event.questions);
         break;
-      case 'answer':
-        for (const question of questions.get(event.questionId) ?? []) {
+      case 'answer': {
+        const asked = questions.get(event.questionId) ?? [];
+        const outcome =
+          asked.length === 1 && asked[0] !== undefined
+            ? parseOutcomeQuestion(asked[0])
+            : null;
+        if (outcome !== null) {
+          target.push({ at, key: `${key}-outcome`, kind: 'outcome', outcome });
+          target.push({
+            at,
+            key,
+            kind: 'navigator',
+            text: stripRecommended(Object.values(event.answers).join(', ')),
+          });
+          break;
+        }
+        for (const question of asked) {
           target.push({
             at,
             key: `${key}-q-${question.question}`,
@@ -116,6 +185,7 @@ export function buildThread(events: readonly RecordedEvent[]): ThreadItem[] {
           text: Object.values(event.answers).join(', '),
         });
         break;
+      }
       default:
         break;
     }
@@ -123,10 +193,29 @@ export function buildThread(events: readonly RecordedEvent[]): ThreadItem[] {
   return root;
 }
 
+function settled(step: StepItem): ThreadItem | null {
+  if (step.result === null) return null;
+  if (step.name === createItem && !step.result.isError) {
+    const itemId = filedIdOf(step.result.content);
+    const title = field(step.input, 'title');
+    return itemId === null || title === null
+      ? null
+      : { itemId, key: step.key, kind: 'filed', title };
+  }
+  if (isOutcomeMove(step) && step.result.isError) {
+    return { key: step.key, kind: 'outcome_failed' };
+  }
+  return null;
+}
+
 /** How many steps a helper took itself; a helper it started counts as one. */
 export function stepCountOf(helper: HelperItem): number {
   return helper.items.filter(
-    (item) => item.kind === 'step' || item.kind === 'helper',
+    (item) =>
+      item.kind === 'step' ||
+      item.kind === 'helper' ||
+      item.kind === 'filed' ||
+      item.kind === 'outcome_failed',
   ).length;
 }
 
@@ -166,6 +255,10 @@ export function describeStep(name: string, input: unknown): string {
       return query === null
         ? `Used ${name}`
         : `Searched the web for “${query}”`;
+    }
+    case createItem: {
+      const title = field(input, 'title');
+      return title === null ? `Used ${name}` : `Filed “${title}”`;
     }
     case 'TodoWrite':
       return 'Updated the to-do list';

@@ -462,6 +462,7 @@ test('reads a conversation, and answers 404 for one that does not exist', async 
       failure: null,
       id: 'run-1',
       item: null,
+      projectId: 'project-1',
       startedAt: '2026-10-01T10:14:00.000Z',
       state: 'active',
     },

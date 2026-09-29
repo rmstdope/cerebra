@@ -9,7 +9,12 @@ import {
 } from './board.js';
 import { createDatabase } from './database.js';
 import { migrateToLatest } from './migrations/index.js';
-import { withTestDatabase } from './test-support.js';
+import { createRunStore } from './runs.js';
+import {
+  agentNamed,
+  registerTestProject,
+  withTestDatabase,
+} from './test-support.js';
 
 const databaseUrl = process.env.DATABASE_URL;
 
@@ -498,6 +503,68 @@ describe('provenance and records', { concurrent: false }, () => {
       await expect(
         board.listRecords(crypto.randomUUID()),
       ).rejects.toBeInstanceOf(WorkItemNotFoundError);
+    });
+  });
+
+  test('lists who filed each item, and what it was discovered from', async () => {
+    await withTestDatabase(async (database) => {
+      const board = createBoard(database);
+      const projectId = await registerTestProject(database);
+      const runs = createRunStore(database);
+      const run = async (name: string, role: 'groomer' | 'assistant') =>
+        (
+          await runs.create({
+            agentId: await agentNamed(database, projectId, name),
+            agentName: name,
+            projectId,
+            role,
+            tokenHash: crypto.randomUUID(),
+          })
+        ).id;
+      const groomer = await run('Jubilee', 'groomer');
+      const assistant = await run('Cerebro', 'assistant');
+      const originalId = crypto.randomUUID();
+      await board.createWorkItem({
+        id: originalId,
+        projectId,
+        title: 'Export invoices as CSV',
+      });
+      const narrowedId = crypto.randomUUID();
+      await board.createWorkItem({
+        discoveredFromId: originalId,
+        filedByRunId: groomer,
+        id: narrowedId,
+        projectId,
+        title: 'Bulk export for credit notes',
+      });
+      const chattedId = crypto.randomUUID();
+      await board.createWorkItem({
+        filedByRunId: assistant,
+        id: chattedId,
+        projectId,
+        title: 'Dark mode',
+      });
+
+      const filedBy = Object.fromEntries(
+        (await board.listWorkItems(projectId)).items.map((item) => [
+          item.id,
+          item.filedBy,
+        ]),
+      );
+
+      expect(filedBy).toEqual({
+        [chattedId]: {
+          agentName: 'Cerebro',
+          discoveredFrom: null,
+          role: 'assistant',
+        },
+        [narrowedId]: {
+          agentName: 'Jubilee',
+          discoveredFrom: { id: originalId, title: 'Export invoices as CSV' },
+          role: 'groomer',
+        },
+        [originalId]: null,
+      });
     });
   });
 });

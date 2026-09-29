@@ -10,10 +10,27 @@ import {
   type ReactNode,
 } from 'react';
 
+import {
+  parseOutcomeQuestion,
+  routeChoices,
+  type OutcomeQuestion,
+  type OutcomeRoute,
+} from '@cerebra/shared';
+
 import type { AgentRole } from './fleet';
 import { roleNames } from './fleet-page';
-import { ThreadView, timeOf } from './conversation-activity';
-import { buildThread, describeStep } from './conversation-thread';
+import {
+  OutcomeSectionsView,
+  ThreadView,
+  outcomeTitle,
+  timeOf,
+} from './conversation-activity';
+import {
+  buildThread,
+  describeStep,
+  outcomeMoveOf,
+  type ThreadItem,
+} from './conversation-thread';
 import { trapFocus } from './focus-trap';
 import {
   browserConversationClient,
@@ -155,6 +172,24 @@ function QuestionForm({
     );
   };
 
+  const outcome =
+    question.questions.length === 1 && question.questions[0] !== undefined
+      ? parseOutcomeQuestion(question.questions[0])
+      : null;
+  if (outcome !== null && question.questions[0] !== undefined) {
+    return (
+      <OutcomeForm
+        name={name}
+        onAnswer={(answer) =>
+          submit({ [question.questions[0]!.question]: answer })
+        }
+        outcome={outcome}
+        questionId={question.questionId}
+        sending={sending}
+      />
+    );
+  }
+
   return (
     <form
       aria-labelledby={`${id}-title`}
@@ -232,16 +267,118 @@ function QuestionForm({
   );
 }
 
+const routeOrder: readonly OutcomeRoute[] = ['design', 'build'];
+
+/** The groomer's outcome and the two ways out of grooming (spec §6.3). */
+function OutcomeForm({
+  name,
+  onAnswer,
+  outcome,
+  questionId,
+  sending,
+}: {
+  readonly name: string;
+  readonly onAnswer: (answer: string) => Promise<void>;
+  readonly outcome: OutcomeQuestion;
+  readonly questionId: string;
+  readonly sending: boolean;
+}): ReactNode {
+  const form = useRef<HTMLFormElement>(null);
+  const id = useId();
+  const [own, setOwn] = useState('');
+
+  useEffect(() => {
+    form.current?.focus();
+  }, [questionId]);
+
+  return (
+    <form
+      aria-labelledby={`${id}-title`}
+      className="rounded-2xl border border-[var(--accent)] bg-[var(--surface)] p-4 shadow-sm outline-none focus-visible:ring-3 focus-visible:ring-[var(--focus)]"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (own.trim() === '' || sending) return;
+        void onAnswer(own.trim());
+      }}
+      ref={form}
+      tabIndex={-1}
+    >
+      <h2 className="font-bold" id={`${id}-title`}>
+        {outcome.title || outcomeTitle}
+      </h2>
+      <p className="mt-1 text-sm text-[var(--muted)]">
+        {`${name} needs one answer before it can continue.`}
+      </p>
+      <OutcomeSectionsView sections={outcome.sections} />
+      <div className="mt-3 flex flex-col gap-2">
+        {routeOrder.map((route) => {
+          const choice = routeChoices[route];
+          return (
+            <button
+              className="secondary-button w-full text-left text-sm"
+              disabled={sending}
+              key={route}
+              onClick={() => void onAnswer(choice.label)}
+              type="button"
+            >
+              <b>{choice.label}</b>
+              {` — ${choice.description}`}
+              {outcome.recommended === route
+                ? ` (recommended by ${name})`
+                : null}
+            </button>
+          );
+        })}
+      </div>
+      <label className="auth-label" htmlFor={`${id}-own`}>
+        Or write your own answer
+      </label>
+      <div className="flex gap-2">
+        <input
+          className="auth-input min-w-0 flex-1"
+          id={`${id}-own`}
+          onChange={(event) => setOwn(event.target.value)}
+          value={own}
+        />
+        <button
+          className="primary-button self-end"
+          disabled={own.trim() === '' || sending}
+          type="submit"
+        >
+          Send
+        </button>
+      </div>
+    </form>
+  );
+}
+
+/** The newest refused outcome, while nothing has moved since and the run can still act on Try again. */
+function retryKeyOf(
+  items: readonly ThreadItem[],
+  live: boolean,
+): string | null {
+  if (!live) return null;
+  for (const item of [...items].reverse()) {
+    const moved = outcomeMoveOf(item);
+    if (moved === null) continue;
+    return moved ? null : item.key;
+  }
+  return null;
+}
+
 export function ConversationPage({
   client = browserConversationClient,
   now = () => new Date(),
   onBack,
+  onOpenItem,
   onTryAgain,
   runId,
 }: {
   readonly client?: ConversationClient;
   readonly now?: () => Date;
   readonly onBack: () => void;
+  /** Opens an item an agent filed, on its project's board. */
+  readonly onOpenItem?: (projectId: string, itemId: string) => void;
   /** Starts a new conversation with the same assistant. */
   readonly onTryAgain: (agentId: string) => Promise<void>;
   readonly runId: string;
@@ -368,6 +505,7 @@ export function ConversationPage({
     run.agentRole !== null && run.agentRole in roleNames
       ? roleNames[run.agentRole as AgentRole]
       : 'Assistant';
+  const roleLine = run.item === null ? role : `${role} · ${run.item.title}`;
   const items = buildThread(events);
   const hasMessages = items.length > 0 || pending.length > 0;
   const question = openQuestionOf(events);
@@ -382,18 +520,33 @@ export function ConversationPage({
       ? newestAssistant.key
       : null;
 
+  const retryKey = retryKeyOf(items, live);
+  const { projectId } = run;
+  const threadActions = {
+    onOpenItem:
+      onOpenItem === undefined || projectId === null
+        ? undefined
+        : (itemId: string) => onOpenItem(projectId, itemId),
+    onRetryOutcome: () => void sendText('Try again.', false),
+    retryKey,
+  };
+
   const sendDraft = async () => {
     const text = draft;
     if (text.trim() === '') return;
-    setProblem(null);
     setDraft('');
+    await sendText(text, true);
+  };
+
+  const sendText = async (text: string, restoreDraft: boolean) => {
+    setProblem(null);
     setPending((previous) => [...previous, text]);
     following.current = true;
     try {
       await client.send(runId, text);
     } catch {
       setPending((previous) => previous.filter((entry) => entry !== text));
-      setDraft(text);
+      if (restoreDraft) setDraft(text);
       setProblem('Cerebra couldn’t send that message. Try again.');
     }
   };
@@ -462,7 +615,9 @@ export function ConversationPage({
               <h1 className="break-words font-extrabold" id={`${id}-name`}>
                 {name}
               </h1>
-              <p className="text-sm text-[var(--muted)]">{role}</p>
+              <p className="break-words text-sm text-[var(--muted)]">
+                {roleLine}
+              </p>
             </div>
             <p
               className={`rounded-full px-3 py-1 text-sm font-bold ${
@@ -497,6 +652,7 @@ export function ConversationPage({
               </div>
             ) : null}
             <ThreadView
+              actions={threadActions}
               items={items}
               live={live}
               name={name}

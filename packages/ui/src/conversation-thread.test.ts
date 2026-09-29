@@ -234,3 +234,106 @@ test('an exit code is read from a failed command’s output', () => {
   expect(exitCodeOf('Error: Exit code 127\nnot found')).toBe(127);
   expect(exitCodeOf('String to replace not found')).toBeNull();
 });
+
+const outcomeText = [
+  'Confirm the outcome and where it goes next',
+  '## Problem',
+  'Accountants re-type invoices.',
+  '## Who benefits',
+  'Finance staff.',
+  '## Outcome',
+  'Invoices download as CSV.',
+  '## Out of scope',
+  'Credit notes.',
+  '## How we will know',
+  'A month imports with no edits.',
+].join('\n');
+
+const outcomeQuestion: RunEvent = {
+  kind: 'question',
+  questionId: 'q-o',
+  questions: [
+    {
+      header: 'Outcome',
+      multiSelect: false,
+      options: [
+        {
+          description: 'agree what people will see first',
+          label: 'Design next (Recommended)',
+        },
+        {
+          description: 'nothing new to see; go straight to building',
+          label: 'Build next',
+        },
+      ],
+      question: outcomeText,
+    },
+  ],
+};
+
+test('an answered outcome stays as its sections, and the answer drops the recommendation mark', () => {
+  const items = buildThread(
+    records([
+      outcomeQuestion,
+      {
+        answers: { [outcomeText]: 'Design next (Recommended)' },
+        kind: 'answer',
+        questionId: 'q-o',
+      },
+    ]),
+  );
+
+  expect(kinds(items)).toEqual(['outcome', 'navigator']);
+  expect(items[0]).toMatchObject({
+    outcome: {
+      sections: { Problem: 'Accountants re-type invoices.' },
+      title: 'Confirm the outcome and where it goes next',
+    },
+  });
+  expect(items[1]).toMatchObject({ text: 'Design next' });
+});
+
+test('a filed item is a line naming it, and a refused outcome move is a failure', () => {
+  const items = buildThread(
+    records([
+      {
+        input: { description: 'd', title: 'Bulk export for credit notes' },
+        kind: 'tool_call',
+        name: 'mcp__cerebra__create_item',
+        toolCallId: 'c1',
+      },
+      {
+        content: '{"id":"item-7","priority":null,"state":"new"}',
+        isError: false,
+        kind: 'tool_result',
+        toolCallId: 'c1',
+      },
+      {
+        input: {
+          record: { kind: 'outcome', markdown: 'x' },
+          to: 'design_ready',
+        },
+        kind: 'tool_call',
+        name: 'mcp__cerebra__transition',
+        toolCallId: 't1',
+      },
+      {
+        content: '{"error":"refused","message":"Nothing was moved."}',
+        isError: true,
+        kind: 'tool_result',
+        toolCallId: 't1',
+      },
+    ]),
+  );
+
+  expect(kinds(items)).toEqual(['filed', 'outcome_failed']);
+  expect(items[0]).toMatchObject({
+    itemId: 'item-7',
+    title: 'Bulk export for credit notes',
+  });
+  expect(
+    describeStep('mcp__cerebra__create_item', {
+      title: 'Bulk export for credit notes',
+    }),
+  ).toBe('Filed “Bulk export for credit notes”');
+});

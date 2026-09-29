@@ -152,6 +152,11 @@ describe('the run store', { concurrent: false }, () => {
           .where('id', '=', itemId)
           .executeTakeFirstOrThrow(),
       ).toEqual({ attempts: 1, holder_run_id: null, state: 'build_ready' });
+      // A run that no longer holds its item still names it, and its project.
+      expect((await runs.read(run.id))?.run).toMatchObject({
+        item: { id: itemId, title: 'Share reports' },
+        projectId,
+      });
       expect(
         await database
           .selectFrom('work_item_comments')

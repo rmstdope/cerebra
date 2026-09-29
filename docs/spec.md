@@ -521,8 +521,8 @@ against the lifecycle and the calling run's type:
 
 | Tool | Does |
 |---|---|
-| `get_item`, `list_items` | Read items, their records and comments. |
-| `transition` | Move the held item along a transition its role may make (§4.4), with the record that transition requires. |
+| `get_item`, `list_items` | Read items, their records and comments. `get_item` without an id reads the held item. |
+| `transition` | Move the held item along a transition its role may make (§4.4), with the record that transition requires. A groomer's move to `design_ready` or `build_ready` is also checked against the outcome question the navigator answered in its conversation: the route must be the one they chose and the record's five sections the ones they confirmed, or nothing moves. |
 | `wait_for_navigator` | Move the held item to `waiting` with a reason. |
 | `comment` | Comment on an item. |
 | `create_item` | File a new item into `new` (§4.10). A groomer files the children of its split through `transition` instead. |

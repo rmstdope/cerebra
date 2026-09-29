@@ -817,6 +817,10 @@ export function App({
               setProjectView('fleet');
               window.location.hash = '';
             }}
+            onOpenItem={(nextProject, id) => {
+              openProject(nextProject);
+              setBoardRequest({ id, tab: 'overview' });
+            }}
             onTryAgain={async (agentId) => {
               const { runId } = await (fleetClient ?? browserFleetClient).start(
                 agentId,
