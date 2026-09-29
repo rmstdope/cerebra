@@ -1,8 +1,9 @@
-import { type Generated, Kysely, PostgresDialect } from 'kysely';
+import { type Generated, Kysely } from 'kysely';
 import { Pool } from 'pg';
 
 import type { AgentModel, AgentRole, AgentTrigger } from './agent-types.js';
 import type { Priority, WaitingKind, WorkItemState } from './lifecycle.js';
+import { SchemaScopedPostgresDialect } from './schema-introspection.js';
 
 export interface Database {
   agent_type_overrides: {
@@ -209,7 +210,7 @@ export function createDatabase(
   }
 
   return new Kysely<Database>({
-    dialect: new PostgresDialect({
+    dialect: new SchemaScopedPostgresDialect({
       pool: new Pool({
         connectionString: databaseUrl,
         options: searchPathOption(schema),

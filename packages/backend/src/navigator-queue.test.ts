@@ -46,8 +46,7 @@ describe('navigator queue', { concurrent: false }, () => {
   const alpha = crypto.randomUUID();
   const beta = crypto.randomUUID();
 
-  // One schema per file: dropping a schema while another file migrates races
-  // Kysely's all-schema introspection, so tests truncate rather than drop.
+  // One schema per file, migrated once; tests truncate rather than re-migrate.
   beforeAll(async () => {
     schema = `cerebra_queue_test_${crypto.randomUUID().replaceAll('-', '')}`;
     await withPool(`CREATE SCHEMA "${schema}"`);
