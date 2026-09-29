@@ -11,6 +11,7 @@ import {
   type ContainerStatus,
   type EngineOperation,
   type EngineSettings,
+  stopTimeoutSeconds,
 } from './engine.js';
 
 export interface FakeEngine extends ContainerEngine {
@@ -113,7 +114,8 @@ export function createFakeEngine(
       };
     },
 
-    async stop(id) {
+    async stop(id, options) {
+      stopTimeoutSeconds(options);
       injected('stop');
       const container = existing('stop', id);
       if (container.status === 'running' || container.status === 'paused') {

@@ -153,7 +153,21 @@ export interface AgentContainerRequest {
 
 const safeId = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 const environmentName = /^[A-Za-z_][A-Za-z0-9_]*$/;
-const rootUser = /^(?:root|0+)(?::.*)?$/;
+const validUser = /^[^\s:]*(?::[^\s:]*)?$/;
+const rootUser = /^(?:root|0+)$/;
+
+export const defaultStopTimeoutSeconds = 10;
+
+/** The grace period a stop gives the container before it is killed. */
+export function stopTimeoutSeconds(options: StopOptions = {}): number {
+  const seconds = options.timeoutSeconds ?? defaultStopTimeoutSeconds;
+  if (!Number.isSafeInteger(seconds) || seconds < 0) {
+    throw new RangeError(
+      'A stop timeout must be a whole number of seconds, zero or more.',
+    );
+  }
+  return seconds;
+}
 
 export function agentContainerName(runId: string): string {
   requireSafeId('run id', runId);
@@ -177,7 +191,8 @@ export function agentContainerRequest(
   }
 
   const user = settings.user ?? defaultAgentUser;
-  if (user.trim() === '' || rootUser.test(user)) {
+  const uid = user.split(':')[0] ?? '';
+  if (!validUser.test(user) || uid === '' || rootUser.test(uid)) {
     throw new InvalidContainerSpecError(
       'Agent containers must run as a non-root user.',
     );

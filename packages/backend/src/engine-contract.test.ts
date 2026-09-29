@@ -121,6 +121,40 @@ function engineContract(
     );
 
     test(
+      'stopping a container that never started leaves it created',
+      async () => {
+        const { engine } = subject;
+        const runId = await newRun();
+        const { id } = await engine.create(subject.spec(runId));
+
+        await engine.stop(id, { timeoutSeconds: 1 });
+
+        expect(await engine.inspect(id)).toMatchObject({
+          exitCode: null,
+          status: 'created',
+        });
+        await engine.remove(id);
+      },
+      options.timeout,
+    );
+
+    test.each([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+      'a stop timeout of %s seconds is refused before anything stops',
+      { timeout: options.timeout },
+      async (timeoutSeconds) => {
+        const { engine } = subject;
+        const runId = await newRun();
+        const { id } = await engine.create(subject.spec(runId));
+        await engine.start(id);
+
+        await expect(
+          engine.stop(id, { timeoutSeconds }),
+        ).rejects.toBeInstanceOf(RangeError);
+        expect((await engine.inspect(id))?.status).toBe('running');
+      },
+    );
+
+    test(
       'a running container is not removed',
       async () => {
         const { engine } = subject;

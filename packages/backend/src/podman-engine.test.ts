@@ -307,4 +307,20 @@ describe('an unavailable engine', () => {
     expect(error).toBeInstanceOf(EngineError);
     expect(error.message).toContain('did not answer');
   });
+
+  test('an answer that keeps trickling in is still cut off at the time limit', async () => {
+    const trickles: NodeJS.Timeout[] = [];
+    reply = (response) => {
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      trickles.push(setInterval(() => response.write(' '), 20));
+    };
+
+    const started = Date.now();
+    const error = await failure(engine(150).inspect('abc'));
+    trickles.forEach(clearInterval);
+
+    expect(error).toBeInstanceOf(EngineError);
+    expect(error.message).toContain('did not answer');
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
 });

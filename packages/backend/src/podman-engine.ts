@@ -11,6 +11,7 @@ import {
   type ContainerStatus,
   type EngineOperation,
   type EngineSettings,
+  stopTimeoutSeconds,
 } from './engine.js';
 
 export interface PodmanEngineSettings extends EngineSettings {
@@ -26,7 +27,6 @@ interface EngineReply {
 
 const apiPrefix = '/v1.44';
 const defaultRequestTimeoutMs = 30_000;
-const defaultStopTimeoutSeconds = 10;
 
 /** The container engine over rootless Podman's Docker-compatible REST API. */
 export function createPodmanEngine(
@@ -45,6 +45,26 @@ export function createPodmanEngine(
     const timeoutMs = options.timeoutMs ?? requestTimeoutMs;
 
     return new Promise((resolve, reject) => {
+      let settled = false;
+      const settle = (outcome: () => void) => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(deadline);
+          outcome();
+        }
+      };
+      const deadline = setTimeout(() => {
+        settle(() =>
+          reject(
+            new EngineError(
+              operation,
+              `The container engine at ${settings.socketPath} did not answer ${operation} within ${timeoutMs} ms.`,
+            ),
+          ),
+        );
+        outgoing.destroy();
+      }, timeoutMs);
+
       const outgoing = httpRequest(
         {
           // A pooled keep-alive socket the engine has since closed fails the next call.
@@ -66,41 +86,37 @@ export function createPodmanEngine(
           const chunks: Buffer[] = [];
           incoming.on('data', (chunk: Buffer) => chunks.push(chunk));
           incoming.on('error', (cause) =>
-            reject(
-              new EngineError(
-                operation,
-                `The container engine's answer to ${operation} was cut off.`,
-                { cause },
+            settle(() =>
+              reject(
+                new EngineError(
+                  operation,
+                  `The container engine's answer to ${operation} was cut off.`,
+                  { cause },
+                ),
               ),
             ),
           );
           incoming.on('end', () =>
-            resolve({
-              body: Buffer.concat(chunks).toString('utf8'),
-              status: incoming.statusCode ?? 0,
-            }),
+            settle(() =>
+              resolve({
+                body: Buffer.concat(chunks).toString('utf8'),
+                status: incoming.statusCode ?? 0,
+              }),
+            ),
           );
         },
       );
-      outgoing.setTimeout(timeoutMs, () => {
-        outgoing.destroy(
-          new EngineError(
-            operation,
-            `The container engine at ${settings.socketPath} did not answer ${operation} within ${timeoutMs} ms.`,
+      outgoing.on('error', (cause) =>
+        settle(() =>
+          reject(
+            new EngineError(
+              operation,
+              `The container engine is unreachable at ${settings.socketPath}: ${describe(cause)}.`,
+              { cause },
+            ),
           ),
-        );
-      });
-      outgoing.on('error', (cause) => {
-        reject(
-          cause instanceof EngineError
-            ? cause
-            : new EngineError(
-                operation,
-                `The container engine is unreachable at ${settings.socketPath}: ${describe(cause)}.`,
-                { cause },
-              ),
-        );
-      });
+        ),
+      );
       outgoing.end(payload);
     });
   }
@@ -177,8 +193,8 @@ export function createPodmanEngine(
       return parse('inspect', reply.body, containerInfo);
     },
 
-    stop(id, options = {}) {
-      const seconds = options.timeoutSeconds ?? defaultStopTimeoutSeconds;
+    async stop(id, options) {
+      const seconds = stopTimeoutSeconds(options);
       return command(
         'stop',
         id,

@@ -95,14 +95,24 @@ describe('the emitted agent container', () => {
 });
 
 describe('refusals', () => {
-  test.each(['', '0', 'root', '0:0', 'root:1000', '0:1000', '00:5'])(
-    'refuses the user %j',
-    (user) => {
-      expect(() => agentContainerRequest(spec, { ...settings, user })).toThrow(
-        InvalidContainerSpecError,
-      );
-    },
-  );
+  test.each([
+    '',
+    '0',
+    'root',
+    '0:0',
+    'root:1000',
+    '0:1000',
+    '00:5',
+    ' 0',
+    '0 ',
+    ':0',
+    ':1000',
+    '1000 ',
+  ])('refuses the user %j', (user) => {
+    expect(() => agentContainerRequest(spec, { ...settings, user })).toThrow(
+      InvalidContainerSpecError,
+    );
+  });
 
   test.each(['', '../x', 'a/b', '.hidden', 'x y', '-flag'])(
     'refuses the run or agent id %j',
