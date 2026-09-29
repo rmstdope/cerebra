@@ -65,12 +65,17 @@ test('every response carries a strict Content-Security-Policy', async () => {
           return [name, sources.join(' ')] as const;
         }),
       );
-      expect(directives.get('default-src'), url).toBe("'self'");
-      expect(directives.get('script-src'), url).toBe("'self'");
-      expect(directives.get('style-src'), url).toBe("'self' 'unsafe-inline'");
-      expect(directives.get('object-src'), url).toBe("'none'");
-      expect(directives.get('base-uri'), url).toBe("'none'");
-      expect(directives.get('frame-ancestors'), url).toBe("'none'");
+      expect(Object.fromEntries(directives), url).toEqual({
+        'default-src': "'self'",
+        'script-src': "'self'",
+        'style-src': "'self' 'unsafe-inline'",
+        'img-src': "'self' data:",
+        'connect-src': "'self'",
+        'object-src': "'none'",
+        'base-uri': "'none'",
+        'frame-ancestors': "'none'",
+        'form-action': "'self'",
+      });
     }
   } finally {
     await rm(uiDirectory, { force: true, recursive: true });
