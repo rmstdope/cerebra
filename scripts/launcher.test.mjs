@@ -27,6 +27,9 @@ if (args[0] === 'secret' && args[1] === 'create') {
   writeFileSync('secret', readFileSync(0));
 }
 if (args.includes('psql')) process.exit(Number(process.env.DATABASE_CHECK_EXIT ?? 0));
+if (args[0] === 'compose' && !process.env.CEREBRA_BACKUP_DIR) {
+  appendFileSync('unprepared', JSON.stringify(args) + '\\n');
+}
 if (args.includes('--build')) {
   appendFileSync('environment', JSON.stringify({
     directory: process.env.CEREBRA_BACKUP_DIR,
@@ -235,4 +238,16 @@ test('refuses to start when the backup folder cannot be created', async () => {
   expect(
     (await calls(directory)).some((args) => args.includes('--build')),
   ).toBe(false);
+});
+
+test('prepares the backup folder before Compose first runs', async () => {
+  const directory = await fixture();
+  const result = launch(directory, 'start', { CEREBRA_BACKUP_DIR: '' });
+  expect(result.status).toBe(0);
+  expect((await calls(directory)).some((args) => args.includes('psql'))).toBe(
+    true,
+  );
+  await expect(
+    readFile(join(directory, 'unprepared'), 'utf8'),
+  ).rejects.toThrow();
 });

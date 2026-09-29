@@ -9,7 +9,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Writable } from 'node:stream';
-import type { Kysely } from 'kysely';
+import { sql, type Kysely } from 'kysely';
 import { afterEach, describe, expect, test } from 'vitest';
 
 import {
@@ -187,6 +187,62 @@ describe('a backup', () => {
       }
 
       expect(await readdir(directory)).toEqual([]);
+    });
+  });
+
+  test('that cannot be recorded as completed leaves no file behind', async () => {
+    await withTestDatabase(async (database) => {
+      await sql`
+        CREATE FUNCTION refuse_completion() RETURNS trigger AS $$
+        BEGIN
+          RAISE EXCEPTION 'refused';
+        END $$ LANGUAGE plpgsql
+      `.execute(database);
+      await sql`
+        CREATE TRIGGER refuse_completion BEFORE UPDATE ON backups
+        FOR EACH ROW WHEN (NEW.status = 'completed')
+        EXECUTE FUNCTION refuse_completion()
+      `.execute(database);
+      const directory = await folder();
+      const backups = createBackups({
+        config: config(directory),
+        database,
+        dump: writes('dump'),
+        log: quiet,
+      });
+
+      await backups.start('manual');
+      await backups.idle();
+
+      expect(await readdir(directory)).toEqual([]);
+      expect((await backups.status()).backups).toMatchObject([
+        { status: 'failed' },
+      ]);
+    });
+  });
+
+  test('names its file from the moment it starts', async () => {
+    await withTestDatabase(async (database) => {
+      const directory = await folder();
+      const { dump, release } = held();
+      const backups = createBackups({
+        config: config(directory),
+        database,
+        dump,
+        log: quiet,
+      });
+
+      await backups.start('manual');
+      const running = await database
+        .selectFrom('backups')
+        .select(['id', 'file_name'])
+        .executeTakeFirstOrThrow();
+      release();
+      await backups.idle();
+
+      expect(running.file_name).toMatch(
+        new RegExp(`^cerebra-\\d{8}T\\d{6}Z-${running.id}\\.dump$`),
+      );
     });
   });
 

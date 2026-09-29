@@ -4,7 +4,7 @@ import { open, rename, rm, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Writable } from 'node:stream';
 import { finished, pipeline } from 'node:stream/promises';
-import type { Kysely } from 'kysely';
+import { sql, type Kysely } from 'kysely';
 
 import type { Database } from './database.js';
 
@@ -343,6 +343,9 @@ export function createBackups({
     } catch (error) {
       log(`Backup ${fileName} failed: ${describeError(error)}`);
       await rm(partial, { force: true }).catch(() => {});
+      await rm(join(config.directory, fileName), { force: true }).catch(
+        () => {},
+      );
       await fail(id, failureCause(error));
     }
     try {
@@ -354,25 +357,29 @@ export function createBackups({
 
   const start = async (trigger: BackupTrigger): Promise<StartResult> => {
     const startedAt = now();
-    let id: string;
+    const { id } = await sql<{ id: string }>`
+      SELECT nextval(pg_get_serial_sequence('backups', 'id'))::text AS id
+    `
+      .execute(database)
+      .then(({ rows }) => rows[0]!);
+    const fileName = `cerebra-${stamp(startedAt)}-${id}.dump`;
     try {
-      ({ id } = await database
+      await database
         .insertInto('backups')
-        .values({ started_at: startedAt, status: 'running', trigger })
-        .returning('id')
-        .executeTakeFirstOrThrow());
+        .values({
+          file_name: fileName,
+          id,
+          started_at: startedAt,
+          status: 'running',
+          trigger,
+        })
+        .execute();
     } catch (error) {
       if (errorCode(error) === '23505') {
         return { reason: 'already_running', started: false };
       }
       throw error;
     }
-    const fileName = `cerebra-${stamp(startedAt)}-${id}.dump`;
-    await database
-      .updateTable('backups')
-      .set({ file_name: fileName })
-      .where('id', '=', id)
-      .execute();
     const work = run(id, fileName).catch((error: unknown) =>
       log(`Backup ${fileName} could not be recorded: ${describeError(error)}`),
     );

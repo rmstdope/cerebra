@@ -138,14 +138,15 @@ case "${1:-}" in
     require_podman
     [ -f .env ] || fail "Missing .env. Set a local POSTGRES_PASSWORD before starting Cerebra."
     ensure_egress_network
-    ensure_key
     prepare_backups
+    ensure_key
     run_compose up --build --detach || fail "Cerebra could not start. Read the Podman output above, then try again."
     wait_for_main
     printf 'Cerebra is ready at http://localhost:4317.\n'
     ;;
   status)
     require_podman
+    prepare_backups
     run_compose ps
     has_key || fail "The master-key secret is missing. Run ./cerebra start; existing encrypted data requires its original key."
     main_ready || fail "Cerebra is not healthy. Check main's startup logs."
@@ -155,8 +156,8 @@ case "${1:-}" in
     [ -f .env ] || fail "Missing .env. Set a local POSTGRES_PASSWORD before updating Cerebra."
     ensure_egress_network
     printf 'Running work will stop. Updating restarts Cerebra; unfinished work returns to its queue.\n'
-    ensure_key
     prepare_backups
+    ensure_key
     run_compose up --build --detach --force-recreate || fail "Cerebra could not restart. Your data is still safe; read the Podman output above, then try again."
     wait_for_main
     printf 'Cerebra is ready at http://localhost:4317.\n'
