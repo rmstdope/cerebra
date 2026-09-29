@@ -99,7 +99,7 @@ test('discovers a GitHub project without returning its credential', async () => 
       throw new Error('Not exercised');
     },
   };
-  const server = await createServer({ projects });
+  const server = await createServer({ auth: authenticatedAuth, projects });
   servers.push(server);
 
   const response = await server.inject({
@@ -131,7 +131,7 @@ test('reports inaccessible GitHub projects explicitly', async () => {
       throw new Error('Not exercised');
     },
   };
-  const server = await createServer({ projects });
+  const server = await createServer({ auth: authenticatedAuth, projects });
   servers.push(server);
 
   const response = await server.inject({
