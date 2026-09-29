@@ -117,7 +117,15 @@ try {
         ? undefined
         : createMcpEndpoint({
             authenticate: (tokenHash) => resolveCaller(database, tokenHash),
-            tools: createBoardTools({ board, database }),
+            tools: createBoardTools({
+              board,
+              database,
+              // The item left its run: the run finishes with its turn, and the item's new queue may start work.
+              onReleased: (runId) => {
+                supervisor.finishAfterTurn(runId);
+                nudge.current();
+              },
+            }),
           }),
     runs: supervisor,
     dispatcher,
