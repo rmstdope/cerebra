@@ -39,6 +39,52 @@ async function dropSchema(schema: string): Promise<void> {
 }
 
 describe('board lifecycle mutations', { concurrent: false }, () => {
+  test('files, reads and triages work without treating its history as empty', async () => {
+    const schema = await createSchema();
+    const database = createDatabase(databaseUrl, schema);
+    const board = createBoard(database);
+    const projectId = crypto.randomUUID();
+    const itemId = crypto.randomUUID();
+
+    try {
+      await migrateToLatest(database, schema);
+      await board.createProject({ id: projectId, name: 'Test project' });
+      await board.createWorkItem({
+        description: 'Make the board useful for navigating project work.',
+        id: itemId,
+        projectId,
+        title: 'Show the project board',
+      });
+
+      expect(await board.listWorkItems(projectId)).toEqual([
+        expect.objectContaining({
+          description: 'Make the board useful for navigating project work.',
+          id: itemId,
+          priority: null,
+          state: 'new',
+          title: 'Show the project board',
+        }),
+      ]);
+
+      const result = await board.transition(itemId, {
+        actor: { role: 'navigator' },
+        priority: 'P1',
+        record: { kind: 'triage' },
+        to: 'build_ready',
+      });
+      expect(result).toMatchObject({ ok: true });
+      expect(await board.getHistory(itemId)).toEqual([
+        expect.objectContaining({
+          fromState: 'new',
+          toState: 'build_ready',
+        }),
+      ]);
+    } finally {
+      await database.destroy();
+      await dropSchema(schema);
+    }
+  });
+
   test('writes an allowed transition with its history and lifecycle event', async () => {
     const schema = await createSchema();
     const database = createDatabase(databaseUrl, schema);

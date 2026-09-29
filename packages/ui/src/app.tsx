@@ -21,6 +21,7 @@ import {
   type AuthStatus,
 } from './auth';
 import { ProjectRegistration } from './project-registration';
+import { ProjectBoard } from './project-board';
 
 export interface ThemeMediaQuery {
   readonly matches: boolean;
@@ -97,6 +98,13 @@ export function App({
   const [confirmingUpdate, setConfirmingUpdate] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [signOutError, setSignOutError] = useState(false);
+  const [projectId, setProjectId] = useState<string | null>(() => {
+    try {
+      return storage.getItem('cerebra.project');
+    } catch {
+      return null;
+    }
+  });
   const updateButton = useRef<HTMLButtonElement>(null);
   const items = useRef<Record<ThemePreference, HTMLDivElement | null>>({
     light: null,
@@ -520,9 +528,22 @@ export function App({
         <p className="mt-1 text-[var(--muted)]">
           Your private workspace is available only on this computer.
         </p>
-        <div className="mt-7">
-          <ProjectRegistration />
-        </div>
+        {projectId !== null ? (
+          <ProjectBoard projectId={projectId} />
+        ) : (
+          <div className="mt-7">
+            <ProjectRegistration
+              onProjectAdded={(project) => {
+                setProjectId(project.id);
+                try {
+                  storage.setItem('cerebra.project', project.id);
+                } catch {
+                  return;
+                }
+              }}
+            />
+          </div>
+        )}
         {instance === null && instanceError !== 'restart-failed' ? (
           <section className="mt-7 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6 shadow-sm">
             <h2 className="text-lg font-bold">Cerebra isn’t running</h2>

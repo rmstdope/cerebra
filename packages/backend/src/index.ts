@@ -7,7 +7,13 @@ export {
   type AuthStatus,
   type AuthenticationResult,
 } from './auth.js';
-export { createBoard, type Board } from './board.js';
+export {
+  createBoard,
+  type Board,
+  type BoardComment,
+  type BoardHistoryEntry,
+  type BoardWorkItem,
+} from './board.js';
 export {
   createInstanceService,
   type InstanceService,

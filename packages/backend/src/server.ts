@@ -6,7 +6,9 @@ import Fastify, {
 } from 'fastify';
 import { join } from 'node:path';
 import { type AuthService, type AuthenticationResult } from './auth.js';
+import { type Board } from './board.js';
 import { createInstanceService, type InstanceService } from './instance.js';
+import type { Priority, WorkItemState } from './lifecycle.js';
 import {
   GitHubAccessError,
   InvalidProjectPrefixError,
@@ -17,6 +19,7 @@ import {
 
 export interface ServerOptions {
   readonly auth: AuthService;
+  readonly board?: Board;
   readonly instance?: InstanceService;
   readonly projects?: ProjectRegistration;
   readonly uiDirectory?: string;
@@ -58,6 +61,7 @@ function projectError(
   ) {
     return { error: error.message, status: 400 };
   }
+
   if (error instanceof GitHubAccessError) {
     return { error: error.message, status: 401 };
   }
@@ -67,8 +71,28 @@ function projectError(
   return null;
 }
 
+function objectBody(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function workItemBody(
+  value: unknown,
+): { readonly description: string; readonly title: string } | null {
+  const body = objectBody(value);
+  if (body === null || typeof body.title !== 'string') {
+    return null;
+  }
+  return {
+    description: typeof body.description === 'string' ? body.description : '',
+    title: body.title,
+  };
+}
+
 export const createServer = async ({
   auth,
+  board,
   instance = createInstanceService(),
   projects,
   uiDirectory = process.env.CEREBRA_UI_DIR,
@@ -191,6 +215,135 @@ export const createServer = async ({
       }
       throw error;
     }
+  });
+
+  server.get('/api/projects/:projectId/work-items', async (request, reply) => {
+    if (board === undefined) {
+      return reply
+        .status(503)
+        .send({ error: 'The project board is unavailable.' });
+    }
+    return board.listWorkItems(
+      (request.params as { projectId: string }).projectId,
+    );
+  });
+
+  server.post('/api/projects/:projectId/work-items', async (request, reply) => {
+    if (board === undefined) {
+      return reply
+        .status(503)
+        .send({ error: 'The project board is unavailable.' });
+    }
+    const input = workItemBody(request.body);
+    if (input === null || input.title.trim().length === 0) {
+      return reply.status(400).send({ error: 'Enter what needs to change.' });
+    }
+    const id = crypto.randomUUID();
+    await board.createWorkItem({
+      ...input,
+      id,
+      projectId: (request.params as { projectId: string }).projectId,
+      title: input.title.trim(),
+    });
+    return reply.status(201).send(await board.getWorkItem(id));
+  });
+
+  server.get('/api/work-items/:itemId', async (request, reply) => {
+    if (board === undefined) {
+      return reply
+        .status(503)
+        .send({ error: 'The project board is unavailable.' });
+    }
+    return board.getWorkItem((request.params as { itemId: string }).itemId);
+  });
+
+  server.get('/api/work-items/:itemId/history', async (request, reply) => {
+    if (board === undefined) {
+      return reply
+        .status(503)
+        .send({ error: 'The project board is unavailable.' });
+    }
+    return board.getHistory((request.params as { itemId: string }).itemId);
+  });
+
+  server.get('/api/work-items/:itemId/comments', async (request, reply) => {
+    if (board === undefined) {
+      return reply
+        .status(503)
+        .send({ error: 'The project board is unavailable.' });
+    }
+    return board.listComments((request.params as { itemId: string }).itemId);
+  });
+
+  server.post('/api/work-items/:itemId/comments', async (request, reply) => {
+    if (board === undefined) {
+      return reply
+        .status(503)
+        .send({ error: 'The project board is unavailable.' });
+    }
+    const body = objectBody(request.body);
+    if (
+      body === null ||
+      typeof body.body !== 'string' ||
+      body.body.trim().length === 0
+    ) {
+      return reply.status(400).send({ error: 'Enter a comment.' });
+    }
+    return reply
+      .status(201)
+      .send(
+        await board.addComment(
+          (request.params as { itemId: string }).itemId,
+          body.body,
+        ),
+      );
+  });
+
+  server.post('/api/work-items/:itemId/triage', async (request, reply) => {
+    if (board === undefined) {
+      return reply
+        .status(503)
+        .send({ error: 'The project board is unavailable.' });
+    }
+    const body = objectBody(request.body);
+    if (
+      body === null ||
+      !['P0', 'P1', 'P2', 'P3'].includes(body.priority as string) ||
+      !['grooming_ready', 'design_ready', 'build_ready'].includes(
+        body.to as string,
+      )
+    ) {
+      return reply
+        .status(400)
+        .send({ error: 'Choose a priority and next step.' });
+    }
+    const result = await board.transition(
+      (request.params as { itemId: string }).itemId,
+      {
+        actor: { role: 'navigator' },
+        priority: body.priority as Priority,
+        record: { kind: 'triage' },
+        to: body.to as WorkItemState,
+      },
+    );
+    return result.ok
+      ? result.item
+      : reply.status(409).send({ error: result.reason });
+  });
+
+  server.post('/api/work-items/:itemId/cancel', async (request, reply) => {
+    if (board === undefined) {
+      return reply
+        .status(503)
+        .send({ error: 'The project board is unavailable.' });
+    }
+    const result = await board.transition(
+      (request.params as { itemId: string }).itemId,
+      { actor: { role: 'navigator' }, to: 'cancelled' },
+    );
+    return result.ok
+      ? result.item
+      : reply.status(409).send({ error: result.reason });
   });
 
   if (uiDirectory !== undefined) {

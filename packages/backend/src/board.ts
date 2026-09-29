@@ -22,16 +22,47 @@ interface CreateProject {
 }
 
 interface CreateWorkItem {
+  readonly description?: string;
   readonly id: string;
   readonly priority?: WorkItem['priority'];
   readonly projectId: string;
   readonly state?: WorkItemState;
+  readonly title?: string;
+}
+
+export interface BoardWorkItem {
+  readonly createdAt: Date;
+  readonly description: string;
+  readonly id: string;
+  readonly priority: WorkItem['priority'];
+  readonly state: WorkItemState;
+  readonly title: string;
+  readonly updatedAt: Date;
+}
+
+export interface BoardHistoryEntry {
+  readonly actorRole: string;
+  readonly createdAt: Date;
+  readonly fromState: WorkItemState;
+  readonly reason: string | null;
+  readonly toState: WorkItemState;
+}
+
+export interface BoardComment {
+  readonly body: string;
+  readonly createdAt: Date;
+  readonly id: number;
 }
 
 export interface Board {
   claim(itemId: string, role: RunRole): Promise<TransitionResult>;
+  addComment(itemId: string, body: string): Promise<BoardComment>;
   createProject(input: CreateProject): Promise<void>;
   createWorkItem(input: CreateWorkItem): Promise<void>;
+  getHistory(itemId: string): Promise<readonly BoardHistoryEntry[]>;
+  getWorkItem(itemId: string): Promise<BoardWorkItem>;
+  listComments(itemId: string): Promise<readonly BoardComment[]>;
+  listWorkItems(projectId: string): Promise<readonly BoardWorkItem[]>;
   transition(
     itemId: string,
     request: TransitionRequest,
@@ -40,6 +71,22 @@ export interface Board {
 
 export function createBoard(database: Kysely<Database>): Board {
   return {
+    async addComment(itemId, body) {
+      if (body.trim().length === 0) {
+        throw new Error('A comment cannot be empty.');
+      }
+      const comment = await database
+        .insertInto('work_item_comments')
+        .values({ body: body.trim(), work_item_id: itemId })
+        .returning(['body', 'created_at', 'id'])
+        .executeTakeFirstOrThrow();
+      return {
+        body: comment.body,
+        createdAt: comment.created_at,
+        id: comment.id,
+      };
+    },
+
     async createProject({ id, name, stages = {} }) {
       await database
         .insertInto('projects')
@@ -53,7 +100,14 @@ export function createBoard(database: Kysely<Database>): Board {
         .execute();
     },
 
-    async createWorkItem({ id, projectId, priority, state = 'new' }) {
+    async createWorkItem({
+      id,
+      projectId,
+      priority,
+      state = 'new',
+      title = '',
+      description = '',
+    }) {
       const item = createWorkItem({ priority, state });
 
       await database
@@ -62,6 +116,8 @@ export function createBoard(database: Kysely<Database>): Board {
           id,
           project_id: projectId,
           state: item.state,
+          description,
+          title,
           priority: item.priority,
           holder_run_id: item.holderRunId,
           waiting_kind: item.waitingKind,
@@ -71,6 +127,84 @@ export function createBoard(database: Kysely<Database>): Board {
           rounds: item.rounds,
         })
         .execute();
+    },
+
+    async listWorkItems(projectId) {
+      return database
+        .selectFrom('work_items')
+        .select([
+          'created_at',
+          'description',
+          'id',
+          'priority',
+          'state',
+          'title',
+          'updated_at',
+        ])
+        .where('project_id', '=', projectId)
+        .orderBy('created_at asc')
+        .execute()
+        .then((rows) => rows.map(toBoardWorkItem));
+    },
+
+    async getWorkItem(itemId) {
+      const row = await database
+        .selectFrom('work_items')
+        .select([
+          'created_at',
+          'description',
+          'id',
+          'priority',
+          'state',
+          'title',
+          'updated_at',
+        ])
+        .where('id', '=', itemId)
+        .executeTakeFirst();
+      if (row === undefined) {
+        throw new Error(`Work item ${itemId} does not exist.`);
+      }
+      return toBoardWorkItem(row);
+    },
+
+    async getHistory(itemId) {
+      return database
+        .selectFrom('work_item_history')
+        .select([
+          'actor_role',
+          'created_at',
+          'from_state',
+          'reason',
+          'to_state',
+        ])
+        .where('work_item_id', '=', itemId)
+        .orderBy('created_at asc')
+        .execute()
+        .then((rows) =>
+          rows.map((row) => ({
+            actorRole: row.actor_role,
+            createdAt: row.created_at,
+            fromState: row.from_state as WorkItemState,
+            reason: row.reason,
+            toState: row.to_state as WorkItemState,
+          })),
+        );
+    },
+
+    async listComments(itemId) {
+      return database
+        .selectFrom('work_item_comments')
+        .select(['body', 'created_at', 'id'])
+        .where('work_item_id', '=', itemId)
+        .orderBy('created_at asc')
+        .execute()
+        .then((rows) =>
+          rows.map((row) => ({
+            body: row.body,
+            createdAt: row.created_at,
+            id: row.id,
+          })),
+        );
     },
 
     async transition(itemId, request) {
@@ -125,6 +259,26 @@ export function createBoard(database: Kysely<Database>): Board {
         return result;
       });
     },
+  };
+}
+
+function toBoardWorkItem(row: {
+  readonly created_at: Date;
+  readonly description: string;
+  readonly id: string;
+  readonly priority: WorkItem['priority'];
+  readonly state: WorkItemState;
+  readonly title: string;
+  readonly updated_at: Date;
+}): BoardWorkItem {
+  return {
+    createdAt: row.created_at,
+    description: row.description,
+    id: row.id,
+    priority: row.priority,
+    state: row.state,
+    title: row.title,
+    updatedAt: row.updated_at,
   };
 }
 

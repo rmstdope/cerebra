@@ -1,4 +1,5 @@
 import { createAuthService } from './auth.js';
+import { createBoard } from './board.js';
 import { createDatabase } from './database.js';
 import { migrateToLatest } from './migrations/index.js';
 import { createProjectRegistrationService } from './project-registration.js';
@@ -14,6 +15,7 @@ try {
     { host: '0.0.0.0', port },
     {
       auth: createAuthService(database),
+      board: createBoard(database),
       projects:
         projectTokenKey === undefined
           ? undefined
