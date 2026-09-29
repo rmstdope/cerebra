@@ -3,6 +3,7 @@ import { join } from 'node:path';
 
 import {
   maxFetchBytes,
+  maxFetchPaths,
   type AgentEvent,
   type Answers,
   type DownMessage,
@@ -689,6 +690,15 @@ export function createSupervisor({
     },
 
     async fetchFiles(runId, paths) {
+      // A request the runner cannot parse would end its run.
+      if (paths.length === 0) {
+        throw new FileRequestError('Name at least one file to fetch.');
+      }
+      if (paths.length > maxFetchPaths) {
+        throw new FileRequestError(
+          `At most ${maxFetchPaths} files can be fetched at once.`,
+        );
+      }
       const entry = await liveRun(runId);
       const requestId = crypto.randomUUID();
       return new Promise<readonly RunFile[]>((resolve, reject) => {
@@ -726,7 +736,10 @@ export function createSupervisor({
       }
       // Directories a crash left between a checkout and its run's record, or its removal.
       try {
-        await checkouts.sweep(new Set(live.keys()));
+        // A run's record is live before its checkout is made, so the database names every
+        // run a start in progress could be making one for.
+        const stillLive = (await runs.live()).map((run) => run.id);
+        await checkouts.sweep(new Set([...live.keys(), ...stillLive]));
       } catch (error) {
         log(
           `The checkouts of ended runs could not be swept: ${failureText(error)}`,

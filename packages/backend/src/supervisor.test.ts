@@ -1,5 +1,6 @@
 import {
   maxFetchBytes,
+  maxFetchPaths,
   type DownMessage,
   type EventMessage,
   type FilesMessage,
@@ -834,6 +835,30 @@ describe('fetching files from a run’s checkout', { concurrent: false }, () => 
           'The runner answered with more than the files may come to.',
         ),
       );
+    });
+  });
+
+  test('refuses no paths, or more than a request may carry, without asking the runner', async () => {
+    await withSupervisor(async ({ agent, connect, runs, supervisor }) => {
+      const { runId } = await supervisor.start(await agent('Cerebro'));
+      const runner = await connect(runId);
+      const tooMany = Array.from(
+        { length: maxFetchPaths + 1 },
+        (_, index) => `mockups/${index}.html`,
+      );
+
+      await expect(supervisor.fetchFiles(runId, [])).rejects.toThrow(
+        new FileRequestError('Name at least one file to fetch.'),
+      );
+      await expect(supervisor.fetchFiles(runId, tooMany)).rejects.toThrow(
+        new FileRequestError(
+          `At most ${maxFetchPaths} files can be fetched at once.`,
+        ),
+      );
+      expect(
+        runner.sent.some((message) => message.type === 'fetch_files'),
+      ).toBe(false);
+      expect((await runs.get(runId))?.endedAt).toBeNull();
     });
   });
 
