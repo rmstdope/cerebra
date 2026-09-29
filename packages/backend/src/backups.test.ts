@@ -169,6 +169,27 @@ describe('a backup', () => {
     },
   );
 
+  test('that fails before the file is even open leaves no file', async () => {
+    await withTestDatabase(async (database) => {
+      const directory = await folder();
+      const backups = createBackups({
+        config: config(directory),
+        database,
+        dump: async () => {
+          throw Object.assign(new Error('EIO'), { code: 'EIO' });
+        },
+        log: quiet,
+      });
+
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        await backups.start('manual');
+        await backups.idle();
+      }
+
+      expect(await readdir(directory)).toEqual([]);
+    });
+  });
+
   test('to a folder that is not there fails as unavailable', async () => {
     await withTestDatabase(async (database) => {
       const directory = join(await folder(), 'unmounted');

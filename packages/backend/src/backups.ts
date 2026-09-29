@@ -313,7 +313,14 @@ export function createBackups({
         await dump(stream);
         await finished(stream);
       } finally {
-        stream.destroy();
+        // Wait for the file to be closed, so a failure's cleanup cannot run before it exists.
+        if (!stream.closed) {
+          const closed = new Promise((resolve) =>
+            stream.once('close', resolve),
+          );
+          stream.destroy();
+          await closed;
+        }
       }
       const written = await open(partial, 'r+');
       try {
