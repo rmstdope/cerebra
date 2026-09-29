@@ -135,7 +135,7 @@ test('shows every person in stable order with the agreed words for their state',
   renderFleet();
 
   expect(
-    screen.getByRole('heading', { level: 1, name: 'Your fleet' }),
+    screen.getByRole('heading', { level: 2, name: 'Your fleet' }),
   ).toBeTruthy();
   expect(
     await screen.findByText(
@@ -240,7 +240,7 @@ test('loading keeps the heading and shows six placeholders', () => {
   renderFleet(createClient({ read: () => new Promise(() => undefined) }));
 
   expect(
-    screen.getByRole('heading', { level: 1, name: 'Your fleet' }),
+    screen.getByRole('heading', { level: 2, name: 'Your fleet' }),
   ).toBeTruthy();
   expect(screen.getAllByTestId('person-placeholder')).toHaveLength(6);
   expect(screen.queryByText('No people in this fleet yet')).toBeNull();
@@ -575,7 +575,7 @@ test('role settings save, show progress, and return to the roles view', async ()
   );
 
   expect(
-    screen.getByRole('heading', { level: 1, name: 'Role settings' }),
+    screen.getByRole('heading', { level: 2, name: 'Role settings' }),
   ).toBeTruthy();
   expect(screen.getByRole('heading', { name: 'Producer' })).toBeTruthy();
   expect(

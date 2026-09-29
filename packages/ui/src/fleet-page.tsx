@@ -269,10 +269,10 @@ function RoleSettingsPage({
 
   return (
     <section className="mx-auto max-w-3xl">
-      <h1 className="text-3xl font-extrabold tracking-tight sm:text-4xl">
+      <h2 className="text-2xl font-extrabold tracking-tight sm:text-3xl">
         Role settings
-      </h1>
-      <h2 className="mt-6 text-xl font-bold">{roleNames[role.role]}</h2>
+      </h2>
+      <h3 className="mt-6 text-xl font-bold">{roleNames[role.role]}</h3>
       <p className="mt-2 text-[var(--muted)]">
         These choices apply to every {word} in {projectName}. They do not
         interrupt work already under way.
@@ -862,14 +862,14 @@ export function FleetPage({
 
   return (
     <section aria-labelledby={`${id}-heading`}>
-      <h1
-        className="text-3xl font-extrabold tracking-tight outline-none sm:text-4xl"
+      <h2
+        className="text-2xl font-extrabold tracking-tight outline-none sm:text-3xl"
         id={`${id}-heading`}
         ref={heading}
         tabIndex={-1}
       >
         Your fleet
-      </h1>
+      </h2>
       {projectName ? (
         <p className="mt-1.5 text-[var(--muted)]">
           The people working on {projectName}. Start a conversation or see what

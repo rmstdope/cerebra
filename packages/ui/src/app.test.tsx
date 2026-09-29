@@ -1,6 +1,7 @@
 import { App, type ThemeMediaQuery } from './app';
 import type { AuthClient } from './auth';
 import type { BoardClient, WorkItem } from './board';
+import type { FleetClient } from './fleet';
 import type { QueueClient } from './queue';
 import { AuthenticationRequiredError } from './instance';
 import {
@@ -422,6 +423,131 @@ describe('App', () => {
     );
     expect(
       within(board).getByRole('tab', { name: 'Discussion', selected: true }),
+    ).toBeTruthy();
+  });
+
+  test('switches a project between its board and its fleet, and View work returns to the fleet', async () => {
+    const user = userEvent.setup();
+    const storage = new Map<string, string>([['cerebra.project', 'project-1']]);
+    const item: WorkItem = {
+      createdAt: '2026-09-29T00:00:00.000Z',
+      description: '',
+      id: 'item-2',
+      priority: 'P1',
+      state: 'building',
+      title: 'Make sign-in clearer',
+      updatedAt: '2026-09-29T00:00:00.000Z',
+    };
+    const unused = async () => {
+      throw new Error('Not exercised');
+    };
+    const boardClient: BoardClient = {
+      addComment: unused,
+      arrivals: async () => 0,
+      cancel: unused,
+      comments: async () => [],
+      create: unused,
+      history: async () => [],
+      item: async () => item,
+      list: async () => ({
+        items: [item],
+        nextCursor: null,
+        snapshot: '1',
+        total: 1,
+      }),
+      triage: unused,
+    };
+    const fleetClient: FleetClient = {
+      addPerson: unused,
+      read: async () => ({
+        people: [
+          {
+            activity: {
+              item: { id: 'item-2', title: 'Make sign-in clearer' },
+              kind: 'working',
+            },
+            enabled: true,
+            id: 'agent-1',
+            name: 'Magma',
+            role: 'producer',
+            typeId: 'type-producer',
+          },
+        ],
+        project: { id: 'project-1', name: 'admin', owner: 'northstar' },
+        roles: [
+          {
+            interactive: false,
+            model: 'opus',
+            people: ['Magma'],
+            role: 'producer',
+            startMode: 'ready',
+            typeId: 'type-producer',
+          },
+        ],
+      }),
+      removePerson: unused,
+      saveRoleSettings: unused,
+      start: unused,
+      stop: unused,
+      updatePerson: unused,
+    };
+
+    render(
+      <App
+        authClient={authenticatedAuth}
+        boardClient={boardClient}
+        fleetClient={fleetClient}
+        instanceClient={{
+          getStatus: async () => ({
+            address: 'http://localhost:4317',
+            lastUpdatedAt: '2026-09-28T20:00:00.000Z',
+            status: 'running',
+            version: '0.0.0',
+          }),
+          update: async () => undefined,
+        }}
+        mediaQuery={new FakeMediaQuery(false)}
+        queueClient={emptyQueue}
+        storage={{
+          getItem: (key) => storage.get(key) ?? null,
+          setItem: (key, value) => storage.set(key, value),
+        }}
+      />,
+    );
+
+    const project = await screen.findByRole('navigation', { name: 'Project' });
+    expect(
+      within(project)
+        .getByRole('button', { name: 'Board' })
+        .getAttribute('aria-current'),
+    ).toBe('page');
+    await user.click(within(project).getByRole('button', { name: 'Fleet' }));
+    expect(
+      await screen.findByRole('heading', { name: 'Your fleet' }),
+    ).toBeTruthy();
+    expect(screen.queryByRole('region', { name: 'Project board' })).toBeNull();
+
+    await user.click(
+      within(await screen.findByRole('article', { name: 'Magma' })).getByRole(
+        'button',
+        { name: 'View work' },
+      ),
+    );
+    const board = await screen.findByRole('region', { name: 'Project board' });
+    expect(
+      await within(board).findByRole('heading', {
+        name: 'Make sign-in clearer',
+      }),
+    ).toBeTruthy();
+
+    await user.click(
+      within(board).getAllByRole('button', {
+        name: /^(Close|Back to board)$/,
+      })[0],
+    );
+
+    expect(
+      await screen.findByRole('heading', { name: 'Your fleet' }),
     ).toBeTruthy();
   });
 });
