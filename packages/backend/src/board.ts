@@ -1079,6 +1079,17 @@ async function persistTransition(
     .where('id', '=', itemId)
     .execute();
 
+  // A run's cost belongs to the item it held (spec §10): its first claim names it for good.
+  const holder = result.item.holderRunId;
+  if (holder !== null && holder !== current.holderRunId) {
+    await database
+      .updateTable('runs')
+      .set({ work_item_id: itemId })
+      .where('id', '=', holder)
+      .where('work_item_id', 'is', null)
+      .execute();
+  }
+
   await database
     .insertInto('work_item_history')
     .values({

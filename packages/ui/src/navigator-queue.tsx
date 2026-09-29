@@ -147,6 +147,7 @@ export function NavigatorQueue({
   onOpenBackups = () => undefined,
   onOpenConversation = () => undefined,
   onViewWork,
+  openRequest = null,
   pollIntervalMs = 30_000,
   storage: storageOverride,
 }: {
@@ -162,6 +163,8 @@ export function NavigatorQueue({
     itemId: string,
     tab: WorkTab,
   ) => void;
+  /** A fresh object selects that work item after the queue is read again. */
+  readonly openRequest?: { readonly id: string } | null;
   readonly pollIntervalMs?: number;
   readonly storage?: QueueStorage;
 }): ReactNode {
@@ -203,12 +206,12 @@ export function NavigatorQueue({
   const shownIds = useRef<ReadonlySet<string> | null>(null);
   const loadRequest = useRef(0);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (): Promise<QueuePage | null> => {
     const request = ++loadRequest.current;
     setLoading(true);
     try {
       const next = await client.list();
-      if (request !== loadRequest.current) return;
+      if (request !== loadRequest.current) return null;
       shownIds.current = new Set(next.entries.map((entry) => entry.id));
       setShown(next);
       setTotal(next.total);
@@ -221,8 +224,10 @@ export function NavigatorQueue({
           ? current
           : null,
       );
+      return next;
     } catch {
       if (request === loadRequest.current) setRefreshError(true);
+      return null;
     } finally {
       if (request === loadRequest.current) setLoading(false);
     }
@@ -317,6 +322,27 @@ export function NavigatorQueue({
     resetDetail();
     setSelectedId(id);
   };
+
+  useEffect(() => {
+    if (openRequest === null) return;
+    let cancelled = false;
+    resetDetail();
+    setSelectedId(openRequest.id);
+    void load().then((next) => {
+      if (cancelled) return;
+      const project = next?.entries.find(
+        (entry) => entry.id === openRequest.id,
+      )?.projectId;
+      if (project !== undefined) {
+        setCollapsed((current) => current.filter((id) => id !== project));
+      }
+      setFocusTarget({ kind: 'row', id: openRequest.id });
+    });
+    return () => {
+      cancelled = true;
+    };
+    // Only a new request selects; the reader it calls is stable per client.
+  }, [openRequest]);
 
   const back = () => {
     const id = selectedId;

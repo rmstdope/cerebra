@@ -1,5 +1,8 @@
 import { App as CerebraApp, type ThemeMediaQuery } from './app';
+import type { AttentionClient, AttentionEntry } from './attention';
 import type { AuthClient } from './auth';
+import type { CostClient } from './costs';
+import type { ConnectNotificationsOptions } from './notifications';
 import type { BoardClient, WorkItem } from './board';
 import type { CredentialClient, CredentialOverview } from './credentials';
 import type { FleetClient } from './fleet';
@@ -37,8 +40,27 @@ const savedProjects = [
 ];
 const directoryClient = { list: async () => savedProjects };
 
+const noAttention: AttentionClient = { list: async () => [] };
+const noCosts: CostClient = {
+  forItem: async () => ({ runs: [], totalUsd: 0 }),
+  forProject: async () => ({
+    notLinkedUsd: 0,
+    runs: [],
+    totalUsd: 0,
+    workItemsUsd: 0,
+  }),
+};
+
 function App(props: ComponentProps<typeof CerebraApp>) {
-  return <CerebraApp projectDirectoryClient={directoryClient} {...props} />;
+  return (
+    <CerebraApp
+      attentionClient={noAttention}
+      costClient={noCosts}
+      notificationsConnector={() => () => undefined}
+      projectDirectoryClient={directoryClient}
+      {...props}
+    />
+  );
 }
 
 class FakeMediaQuery implements ThemeMediaQuery {
@@ -277,7 +299,7 @@ describe('App', () => {
     expect(screen.getByText('Update Cerebra')).toBeTruthy();
 
     screen.getByRole('button', { name: 'Theme: System' });
-    await user.keyboard('{Tab}{Tab}{Tab}{ArrowDown}');
+    await user.keyboard('{Tab}{Tab}{Tab}{Tab}{ArrowDown}');
 
     expect(screen.getByRole('menu')).toBeTruthy();
     await waitFor(() => {
@@ -1193,5 +1215,162 @@ describe('App', () => {
     await act(async () => finishFirst(overview('project-1')));
     expect(screen.queryByText('Token for project-1')).toBeNull();
     expect(screen.getByText('Token for project-9')).toBeTruthy();
+  });
+
+  test('the attention center opens a question in its conversation and waiting work in the queue', async () => {
+    const user = userEvent.setup();
+    const entries: AttentionEntry[] = [
+      {
+        agentName: 'Storm',
+        id: 'run:run-1',
+        itemId: null,
+        kind: 'question',
+        projectId: 'project-1',
+        projectName: 'acme/website',
+        runId: '11111111-1111-4111-8111-111111111111',
+        since: new Date().toISOString(),
+        title: 'Choose a layout for the project board',
+      },
+      {
+        agentName: null,
+        id: 'item-7',
+        itemId: 'item-7',
+        kind: 'waiting',
+        projectId: 'project-1',
+        projectName: 'acme/website',
+        runId: null,
+        since: new Date().toISOString(),
+        title: 'Review the delivery plan',
+      },
+    ];
+    const queueClient: QueueClient = {
+      ...emptyQueue,
+      list: async () => ({
+        entries: [
+          {
+            askedBy: null,
+            availableRoutes: [],
+            description: '',
+            id: 'item-7',
+            kind: 'review',
+            priority: 'P2',
+            projectId: 'project-1',
+            projectName: 'acme/website',
+            run: null,
+            since: new Date().toISOString(),
+            title: 'Review the delivery plan',
+            waitingReason: null,
+          },
+        ],
+        notices: [],
+        total: 1,
+      }),
+    };
+    render(
+      <App
+        attentionClient={{ list: async () => entries }}
+        authClient={authenticatedAuth}
+        mediaQuery={new FakeMediaQuery(false)}
+        queueClient={queueClient}
+      />,
+    );
+    const control = await screen.findByRole('button', {
+      name: 'Open attention center',
+    });
+    expect(await within(control).findByText('2')).toBeTruthy();
+
+    await user.click(control);
+    await user.click(
+      screen.getByRole('button', {
+        name: /Choose a layout for the project board/,
+      }),
+    );
+    expect(window.location.hash).toBe(
+      '#/conversations/11111111-1111-4111-8111-111111111111',
+    );
+
+    await user.click(control);
+    await user.click(
+      screen.getByRole('button', { name: /WAITING.*Review the delivery plan/ }),
+    );
+    expect(window.location.hash).toBe('');
+    const row = await screen.findByRole('button', {
+      name: /Review the delivery plan/,
+    });
+    await waitFor(() => expect(row.getAttribute('aria-current')).toBe('true'));
+  });
+
+  test('Notification settings opens its own settings tab', async () => {
+    const user = userEvent.setup();
+    render(
+      <App
+        authClient={authenticatedAuth}
+        mediaQuery={new FakeMediaQuery(false)}
+        notificationSettingsClient={{
+          list: async () => [
+            {
+              browserNotifications: true,
+              projectId: 'project-1',
+              projectName: 'acme/website',
+            },
+          ],
+          set: async () => undefined,
+        }}
+        queueClient={emptyQueue}
+      />,
+    );
+    await user.click(
+      await screen.findByRole('button', { name: 'Open attention center' }),
+    );
+    await user.click(
+      screen.getByRole('button', { name: 'Notification settings' }),
+    );
+
+    expect(window.location.hash).toBe('#/settings/notifications');
+    expect(
+      await screen.findByRole('heading', { level: 1, name: 'Notifications' }),
+    ).toBeTruthy();
+    expect(
+      within(screen.getByRole('navigation', { name: 'Settings' }))
+        .getByRole('link', { name: 'Notifications' })
+        .getAttribute('aria-current'),
+    ).toBe('page');
+    expect(
+      await screen.findByRole('switch', { name: 'Browser notifications' }),
+    ).toBeTruthy();
+  });
+
+  test('a push reads the attention list again, and a batch alert opens the panel', async () => {
+    let options: Pick<
+      ConnectNotificationsOptions,
+      'onOpenEntry' | 'onOpenPanel' | 'onPush'
+    > | null = null;
+    const disconnect = vi.fn();
+    const list = vi.fn(async () => [] as AttentionEntry[]);
+    const view = render(
+      <App
+        attentionClient={{ list }}
+        authClient={authenticatedAuth}
+        mediaQuery={new FakeMediaQuery(false)}
+        notificationsConnector={(given) => {
+          options = given;
+          return disconnect;
+        }}
+        queueClient={emptyQueue}
+      />,
+    );
+    await waitFor(() => expect(options).not.toBeNull());
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(1));
+
+    await act(async () => options!.onPush([]));
+    expect(list).toHaveBeenCalledTimes(2);
+
+    await act(async () => options!.onOpenPanel());
+    expect(
+      screen.getByRole('region', { name: 'Needs your attention' }),
+    ).toBeTruthy();
+
+    view.unmount();
+    expect(disconnect).toHaveBeenCalled();
   });
 });

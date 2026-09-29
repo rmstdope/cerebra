@@ -65,6 +65,10 @@ import {
   type Supervisor,
 } from './supervisor.js';
 import type { Conversation } from './runs.js';
+import {
+  registerAttentionRoutes,
+  type AttentionRouteOptions,
+} from './attention-routes.js';
 
 /** What the conversation routes need of the run supervisor. */
 export type ConversationControl = Pick<
@@ -98,6 +102,13 @@ export interface ServerOptions {
   readonly backups?: Backups;
   /** Called after every request that changed something, so waiting work can be looked at again. */
   readonly onMutation?: () => void;
+  /** Reads what runs, items and projects have cost. */
+  readonly costs?: AttentionRouteOptions['costs'];
+  /** What needs the navigator now. */
+  readonly attention?: AttentionRouteOptions['attention'];
+  readonly notificationSettings?: AttentionRouteOptions['notificationSettings'];
+  /** Serves `/ws/notifications`, the browser pushes. */
+  readonly notifications?: AttentionRouteOptions['notifications'];
 }
 
 const sessionCookieName = 'cerebra_session';
@@ -318,6 +329,10 @@ export const createServer = async ({
   startSettings,
   dispatcher,
   onMutation,
+  attention,
+  costs,
+  notificationSettings,
+  notifications,
 }: ServerOptions): Promise<FastifyInstance> => {
   const server = Fastify();
 
@@ -1173,6 +1188,13 @@ export const createServer = async ({
       settings.setInstanceLimit(objectBody(request.body)?.instanceLimit),
     ),
   );
+
+  registerAttentionRoutes(server, {
+    attention,
+    costs,
+    notificationSettings,
+    notifications,
+  });
 
   const backupsUnavailable = (reply: FastifyReply) =>
     reply.status(503).send({ error: 'Backups are unavailable.' });

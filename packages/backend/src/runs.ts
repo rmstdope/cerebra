@@ -1,4 +1,4 @@
-import type { AgentEvent } from '@cerebra/shared';
+import type { AgentEvent, Usage } from '@cerebra/shared';
 import { sql, type Kysely } from 'kysely';
 
 import type { AgentRole } from './agent-types.js';
@@ -60,9 +60,10 @@ export interface RunStore {
     runId: string,
     state: Extract<RunState, 'active' | 'awaiting_input'>,
   ): Promise<boolean>;
+  /** Adds one result's spending to the run as it arrives, so a later failure loses none of it. */
   addUsage(
     runId: string,
-    usage: { readonly costUsd: number; readonly sessionId?: string },
+    usage: Usage & { readonly sessionId?: string },
   ): Promise<void>;
   /** Ends a live run and gives back what it held, in one transaction; `false` if it had ended. */
   end(runId: string, ending: EndRun): Promise<boolean>;
@@ -182,15 +183,38 @@ export function createRunStore(database: Kysely<Database>): RunStore {
       return result.numUpdatedRows > 0n;
     },
 
-    async addUsage(runId, { costUsd, sessionId }) {
-      await database
-        .updateTable('runs')
-        .set({
-          cost_usd: sql`cost_usd + ${costUsd}`,
-          ...(sessionId === undefined ? {} : { session_id: sessionId }),
-        })
-        .where('id', '=', runId)
-        .execute();
+    async addUsage(runId, { costUsd, models, sessionId }) {
+      await database.transaction().execute(async (transaction) => {
+        await transaction
+          .updateTable('runs')
+          .set({
+            cost_usd: sql`cost_usd + ${costUsd}`,
+            ...(sessionId === undefined ? {} : { session_id: sessionId }),
+          })
+          .where('id', '=', runId)
+          .execute();
+        const rows = Object.entries(models).map(([model, tokens]) => ({
+          cache_read_tokens: String(tokens.cacheReadInputTokens),
+          cache_write_tokens: String(tokens.cacheCreationInputTokens),
+          input_tokens: String(tokens.inputTokens),
+          model,
+          output_tokens: String(tokens.outputTokens),
+          run_id: runId,
+        }));
+        if (rows.length === 0) return;
+        await transaction
+          .insertInto('run_model_usage')
+          .values(rows)
+          .onConflict((conflict) =>
+            conflict.columns(['run_id', 'model']).doUpdateSet({
+              cache_read_tokens: sql`run_model_usage.cache_read_tokens + excluded.cache_read_tokens`,
+              cache_write_tokens: sql`run_model_usage.cache_write_tokens + excluded.cache_write_tokens`,
+              input_tokens: sql`run_model_usage.input_tokens + excluded.input_tokens`,
+              output_tokens: sql`run_model_usage.output_tokens + excluded.output_tokens`,
+            }),
+          )
+          .execute();
+      });
     },
 
     async end(runId, ending) {
@@ -243,9 +267,12 @@ export function createRunStore(database: Kysely<Database>): RunStore {
         .leftJoin('agents', 'agents.id', 'runs.agent_id')
         .leftJoin('agent_types', 'agent_types.id', 'agents.agent_type_id')
         .leftJoin('work_items', 'work_items.holder_run_id', 'runs.id')
+        .leftJoin('work_items as claimed', 'claimed.id', 'runs.work_item_id')
         .select([
           ...runColumns,
           'agent_types.role as agent_role',
+          'claimed.id as claimed_id',
+          'claimed.title as claimed_title',
           'work_items.id as item_id',
           'work_items.title as item_title',
         ])
@@ -254,22 +281,25 @@ export function createRunStore(database: Kysely<Database>): RunStore {
       if (row === undefined) {
         return null;
       }
-      // Once released, the item is the one this run's history names first: its claim.
+      // The item it claimed; for a run recorded before claims were stamped, the one it
+      // holds, or once released the one its history names first.
       const item =
-        row.item_id !== null && row.item_title !== null
-          ? { id: row.item_id, title: row.item_title }
-          : ((await database
-              .selectFrom('work_item_history')
-              .innerJoin(
-                'work_items',
-                'work_items.id',
-                'work_item_history.work_item_id',
-              )
-              .select(['work_items.id', 'work_items.title'])
-              .where('work_item_history.actor_run_id', '=', runId)
-              .orderBy('work_item_history.id')
-              .limit(1)
-              .executeTakeFirst()) ?? null);
+        row.claimed_id !== null && row.claimed_title !== null
+          ? { id: row.claimed_id, title: row.claimed_title }
+          : row.item_id !== null && row.item_title !== null
+            ? { id: row.item_id, title: row.item_title }
+            : ((await database
+                .selectFrom('work_item_history')
+                .innerJoin(
+                  'work_items',
+                  'work_items.id',
+                  'work_item_history.work_item_id',
+                )
+                .select(['work_items.id', 'work_items.title'])
+                .where('work_item_history.actor_run_id', '=', runId)
+                .orderBy('work_item_history.id')
+                .limit(1)
+                .executeTakeFirst()) ?? null);
       const events = await database
         .selectFrom('run_events')
         .select(['created_at', 'event', 'position'])

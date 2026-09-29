@@ -738,6 +738,35 @@ test('a remembered selection never opens an assistant’s question', async () =>
   expect(screen.queryByLabelText('Your answer')).toBeNull();
 });
 
+test('an open request from the attention center reads the queue again and selects that work', async () => {
+  const list = vi.fn(async () => page([attention, question, newWork, review]));
+  const client = createClient({ list });
+  const storage = memoryStorage();
+  storage.setItem(
+    'cerebra.queue',
+    JSON.stringify({ collapsed: ['project-1'], count: 4, selected: null }),
+  );
+  const props = {
+    client,
+    now: () => new Date('2026-09-29T00:12:30.000Z'),
+    onViewWork: () => undefined,
+    pollIntervalMs: 60_000,
+    storage,
+  };
+  const view = render(<NavigatorQueue {...props} openRequest={null} />);
+  await screen.findByRole('button', { name: /Sign-in keeps failing/ });
+  expect(list).toHaveBeenCalledTimes(1);
+
+  view.rerender(<NavigatorQueue {...props} openRequest={{ id: 'review' }} />);
+
+  const row = await screen.findByRole('button', {
+    name: /Check the payment reminder change/,
+  });
+  await waitFor(() => expect(document.activeElement).toBe(row));
+  expect(row.getAttribute('aria-current')).toBe('true');
+  expect(list).toHaveBeenCalledTimes(2);
+});
+
 test('shows a failed backup above the projects and counts it until it clears', async () => {
   const counts: number[] = [];
   const opened: string[] = [];

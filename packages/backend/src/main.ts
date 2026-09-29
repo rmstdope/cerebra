@@ -13,7 +13,11 @@ import { createDatabase } from './database.js';
 import { createFleet } from './fleet.js';
 import { loadMasterKey } from './master-key.js';
 import { migrateToLatest } from './migrations/index.js';
+import { createAttention } from './attention.js';
+import { createCostReader } from './costs.js';
 import { createNavigatorQueue } from './navigator-queue.js';
+import { createNotificationSettings } from './notification-settings.js';
+import { createNotifier } from './notifier.js';
 import {
   createProjectRegistrationService,
   listProjects,
@@ -117,11 +121,28 @@ try {
   backupTick();
   const backupTimer = setInterval(backupTick, 60_000).unref();
   const board = createBoard(database);
+  const queue = createNavigatorQueue(database);
+  const attention = createAttention(database, queue);
+  const notificationSettings = createNotificationSettings(database);
+  const notifications = createNotifier({
+    attention,
+    settings: notificationSettings,
+  });
+  // Pushes are found by comparing what needs the navigator every few seconds (architecture §11).
+  const pollNotifications = () => {
+    notifications
+      .poll()
+      .catch(() => console.error('Could not check for notifications.'));
+  };
+  pollNotifications();
+  const notificationTimer = setInterval(pollNotifications, 5_000).unref();
   const server = await createServer({
+    attention,
     auth: createAuthService(database),
     backups,
     board,
     conversations: supervisor,
+    costs: createCostReader(database),
     credentials,
     fleet,
     listProjects: () => listProjects(database),
@@ -133,7 +154,9 @@ try {
             database,
             masterKey: projectTokenKey,
           }),
-    queue: createNavigatorQueue(database),
+    notificationSettings,
+    notifications,
+    queue,
     runnerGateway:
       supervisor === undefined
         ? undefined
@@ -161,6 +184,8 @@ try {
   });
   server.addHook('onClose', async () => {
     clearInterval(dispatchTimer);
+    clearInterval(notificationTimer);
+    notifications.stop();
     clearInterval(backupTimer);
     await dispatcher?.idle();
     await backups?.idle();

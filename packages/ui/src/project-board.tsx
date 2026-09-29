@@ -1,3 +1,5 @@
+import { ProjectCostCard, WorkItemCost } from './cost-summary';
+import { browserCostClient, type CostClient } from './costs';
 import {
   useCallback,
   useEffect,
@@ -256,6 +258,7 @@ export function ProjectBoard({
   boardClient = browserBoardClient,
   deliveryClient = browserDeliveryActivityClient,
   deliveryIntervalMs = 10_000,
+  costClient = browserCostClient,
   onClose,
   openRequest = null,
   projectId,
@@ -267,6 +270,7 @@ export function ProjectBoard({
   readonly boardClient?: BoardClient;
   readonly deliveryClient?: DeliveryActivityClient;
   readonly deliveryIntervalMs?: number;
+  readonly costClient?: CostClient;
   /** Called when an open item or draft is closed, so a caller can return to where it came from. */
   readonly onClose?: () => void;
   /** Opens an item from elsewhere, such as the navigator queue; a new object reopens it. */
@@ -986,104 +990,108 @@ export function ProjectBoard({
             </div>
           )}
         </section>
-        <section
-          aria-label="Selected work item"
-          className={`card ${panelOpen ? 'fixed inset-0 z-20 overflow-y-auto rounded-none lg:static lg:rounded-2xl' : 'hidden min-h-80 lg:block'}`}
-        >
-          {panelOpen ? (
-            <div className="mb-4 flex flex-wrap justify-between gap-3">
-              <button
-                className="secondary-button lg:hidden"
-                onClick={closePanel}
-                type="button"
-              >
-                Back to board
-              </button>
-              <button
-                className="secondary-button ml-auto hidden lg:inline-block"
-                onClick={closePanel}
-                type="button"
-              >
-                Close
-              </button>
-            </div>
-          ) : null}
-          {saveRetry !== null ? (
-            <p className="auth-error mt-0 mb-4" role="alert">
-              Cerebra couldn’t save your changes. Try again.{' '}
-              <button
-                className="font-bold underline"
-                onClick={saveRetry}
-                type="button"
-              >
-                Try again
-              </button>
-            </p>
-          ) : null}
-          {panel.kind === 'draft' ? (
-            <NewWorkItem
-              description={description}
-              onCancel={closePanel}
-              onDescription={setDescription}
-              onSave={() => void save()}
-              onTitle={setTitle}
-              saving={saving}
-              title={title}
-            />
-          ) : selected !== null ? (
-            <ItemDetail
-              cancelControl={cancelControl}
-              comment={comment}
-              comments={comments}
-              confirming={confirming}
-              delivery={
-                deliveryStates.has(selected.state) ? (
-                  <DeliveryActivity
-                    client={deliveryClient}
-                    intervalMs={deliveryIntervalMs}
-                    itemId={selected.id}
-                    key={selected.id}
-                    state={selected.state}
-                  />
-                ) : null
-              }
-              dialogHeading={dialogHeading}
-              history={history}
-              item={selected}
-              itemRead={itemRead}
-              onCancel={() => {
-                setConfirming(true);
-                setFocusTarget({ kind: 'dialog' });
-              }}
-              onComment={setComment}
-              onConfirmCancel={() => void cancel()}
-              onKeep={closeDialog}
-              onPostComment={() => void postComment()}
-              onPriority={setPriority}
-              onRetryComments={() => void readComments(selected.id)}
-              onRetryHistory={() => void readHistory(selected.id)}
-              onRetryItem={() => void readItem(selected.id)}
-              onRoute={(next) => {
-                setRoute(next);
-                setRouteRefused(false);
-              }}
-              onSaveForLater={closePanel}
-              onTab={chooseTab}
-              onTriage={() => void triage()}
-              priority={priority}
-              route={route}
-              routeRefused={routeRefused}
-              saving={saving}
-              tab={tab}
-            />
-          ) : panel.kind === 'item' ? (
-            <p className="text-[var(--muted)]">Loading…</p>
-          ) : (
-            <p className="text-[var(--muted)]">
-              Select a work item to see its details.
-            </p>
-          )}
-        </section>
+        <div className="grid content-start gap-5">
+          <section
+            aria-label="Selected work item"
+            className={`card ${panelOpen ? 'fixed inset-0 z-20 overflow-y-auto rounded-none lg:static lg:rounded-2xl' : 'hidden min-h-80 lg:block'}`}
+          >
+            {panelOpen ? (
+              <div className="mb-4 flex flex-wrap justify-between gap-3">
+                <button
+                  className="secondary-button lg:hidden"
+                  onClick={closePanel}
+                  type="button"
+                >
+                  Back to board
+                </button>
+                <button
+                  className="secondary-button ml-auto hidden lg:inline-block"
+                  onClick={closePanel}
+                  type="button"
+                >
+                  Close
+                </button>
+              </div>
+            ) : null}
+            {saveRetry !== null ? (
+              <p className="auth-error mt-0 mb-4" role="alert">
+                Cerebra couldn’t save your changes. Try again.{' '}
+                <button
+                  className="font-bold underline"
+                  onClick={saveRetry}
+                  type="button"
+                >
+                  Try again
+                </button>
+              </p>
+            ) : null}
+            {panel.kind === 'draft' ? (
+              <NewWorkItem
+                description={description}
+                onCancel={closePanel}
+                onDescription={setDescription}
+                onSave={() => void save()}
+                onTitle={setTitle}
+                saving={saving}
+                title={title}
+              />
+            ) : selected !== null ? (
+              <ItemDetail
+                cancelControl={cancelControl}
+                comment={comment}
+                comments={comments}
+                confirming={confirming}
+                delivery={
+                  deliveryStates.has(selected.state) ? (
+                    <DeliveryActivity
+                      client={deliveryClient}
+                      intervalMs={deliveryIntervalMs}
+                      itemId={selected.id}
+                      key={selected.id}
+                      state={selected.state}
+                    />
+                  ) : null
+                }
+                dialogHeading={dialogHeading}
+                history={history}
+                item={selected}
+                itemRead={itemRead}
+                onCancel={() => {
+                  setConfirming(true);
+                  setFocusTarget({ kind: 'dialog' });
+                }}
+                onComment={setComment}
+                onConfirmCancel={() => void cancel()}
+                onKeep={closeDialog}
+                onPostComment={() => void postComment()}
+                onPriority={setPriority}
+                onRetryComments={() => void readComments(selected.id)}
+                onRetryHistory={() => void readHistory(selected.id)}
+                onRetryItem={() => void readItem(selected.id)}
+                onRoute={(next) => {
+                  setRoute(next);
+                  setRouteRefused(false);
+                }}
+                onSaveForLater={closePanel}
+                onTab={chooseTab}
+                onTriage={() => void triage()}
+                priority={priority}
+                route={route}
+                routeRefused={routeRefused}
+                saving={saving}
+                costClient={costClient}
+                tab={tab}
+              />
+            ) : panel.kind === 'item' ? (
+              <p className="text-[var(--muted)]">Loading…</p>
+            ) : (
+              <p className="text-[var(--muted)]">
+                Select a work item to see its details.
+              </p>
+            )}
+          </section>
+          <ProjectCostCard client={costClient} projectId={projectId} />
+        </div>
       </div>
     </section>
   );
@@ -1178,6 +1186,7 @@ function ReadFailure({
 
 function ItemDetail({
   cancelControl,
+  costClient,
   comment,
   comments,
   confirming,
@@ -1206,6 +1215,7 @@ function ItemDetail({
   tab,
 }: {
   readonly cancelControl: RefObject<HTMLButtonElement | null>;
+  readonly costClient: CostClient;
   readonly comment: string;
   readonly comments: Remote<readonly BoardComment[]>;
   readonly confirming: boolean;
@@ -1289,6 +1299,7 @@ function ItemDetail({
               <span className="font-bold">Priority</span>{' '}
               {item.priority ?? 'Not set'}
             </p>
+            <WorkItemCost client={costClient} itemId={item.id} />
             {delivery}
             {item.state === 'new' ? (
               <div className="mt-6 border-t border-[var(--border)] pt-5">

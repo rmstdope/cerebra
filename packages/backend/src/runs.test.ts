@@ -105,6 +105,60 @@ describe('the run store', { concurrent: false }, () => {
     });
   });
 
+  test('a run names the item it claimed, not one it touched before', async () => {
+    await withTestDatabase(async (database) => {
+      const projectId = await registerTestProject(database);
+      const agentId = await agentNamed(database, projectId, 'Storm');
+      const runs = createRunStore(database);
+      const run = await runs.create({
+        agentId,
+        agentName: 'Storm',
+        projectId,
+        role: 'builder',
+        tokenHash: 'hash-claimed',
+      });
+      const [touched, claimed] = [crypto.randomUUID(), crypto.randomUUID()];
+      await database
+        .insertInto('work_items')
+        .values(
+          [
+            [touched, 'File the follow-up'],
+            [claimed, 'Share reports'],
+          ].map(([id, title]) => ({
+            attempts: 0,
+            description: '',
+            id: id!,
+            priority: 'P1' as const,
+            project_id: projectId,
+            rounds: 0,
+            state: 'build_ready',
+            title: title!,
+          })),
+        )
+        .execute();
+      await database
+        .insertInto('work_item_history')
+        .values({
+          actor_role: 'builder',
+          actor_run_id: run.id,
+          from_state: 'new',
+          to_state: 'build_ready',
+          work_item_id: touched,
+        })
+        .execute();
+      await database
+        .updateTable('runs')
+        .set({ work_item_id: claimed })
+        .where('id', '=', run.id)
+        .execute();
+
+      expect((await runs.read(run.id))?.run.item).toEqual({
+        id: claimed,
+        title: 'Share reports',
+      });
+    });
+  });
+
   test('ending a run that holds an item gives it back with its last message', async () => {
     await withTestDatabase(async (database) => {
       const projectId = await registerTestProject(database);
@@ -246,8 +300,35 @@ describe('the run store', { concurrent: false }, () => {
         role: 'assistant',
         tokenHash: 'hash-6',
       });
-      await runs.addUsage(run.id, { costUsd: 0.25, sessionId: 'session-1' });
-      await runs.addUsage(run.id, { costUsd: 0.5 });
+      await runs.addUsage(run.id, {
+        costUsd: 0.25,
+        models: {
+          'claude-opus': {
+            cacheCreationInputTokens: 4,
+            cacheReadInputTokens: 3,
+            inputTokens: 10,
+            outputTokens: 20,
+          },
+        },
+        sessionId: 'session-1',
+      });
+      await runs.addUsage(run.id, {
+        costUsd: 0.5,
+        models: {
+          'claude-haiku': {
+            cacheCreationInputTokens: 0,
+            cacheReadInputTokens: 0,
+            inputTokens: 1,
+            outputTokens: 2,
+          },
+          'claude-opus': {
+            cacheCreationInputTokens: 1,
+            cacheReadInputTokens: 1,
+            inputTokens: 5,
+            outputTokens: 5,
+          },
+        },
+      });
       await runs.end(run.id, {
         failure: 'No model credential.',
         reason: 'The run could not start.',
@@ -266,6 +347,45 @@ describe('the run store', { concurrent: false }, () => {
         start_failed: true,
       });
       expect((await runs.live()).map((live) => live.id)).toEqual([]);
+      // What each result reported is kept by model, after the run failed.
+      expect(
+        await database
+          .selectFrom('run_model_usage')
+          .select([
+            'model',
+            'input_tokens',
+            'output_tokens',
+            'cache_read_tokens',
+            'cache_write_tokens',
+          ])
+          .where('run_id', '=', run.id)
+          .orderBy('model')
+          .execute()
+          .then((rows) =>
+            rows.map((row) => ({
+              cache_read_tokens: Number(row.cache_read_tokens),
+              cache_write_tokens: Number(row.cache_write_tokens),
+              input_tokens: Number(row.input_tokens),
+              model: row.model,
+              output_tokens: Number(row.output_tokens),
+            })),
+          ),
+      ).toEqual([
+        {
+          cache_read_tokens: 0,
+          cache_write_tokens: 0,
+          input_tokens: 1,
+          model: 'claude-haiku',
+          output_tokens: 2,
+        },
+        {
+          cache_read_tokens: 4,
+          cache_write_tokens: 5,
+          input_tokens: 15,
+          model: 'claude-opus',
+          output_tokens: 25,
+        },
+      ]);
     });
   });
 });

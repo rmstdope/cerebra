@@ -112,6 +112,10 @@ describe('database migrations', { concurrent: false }, () => {
           migrationName: '20261005000000_add_backups',
           status: 'Success',
         }),
+        expect.objectContaining({
+          migrationName: '20261006000000_record_usage',
+          status: 'Success',
+        }),
       ]);
       expect(
         await database.introspection.getTables({
@@ -131,6 +135,7 @@ describe('database migrations', { concurrent: false }, () => {
           expect.objectContaining({ name: 'lifecycle_events' }),
           expect.objectContaining({ name: 'projects' }),
           expect.objectContaining({ name: 'runs' }),
+          expect.objectContaining({ name: 'run_model_usage' }),
           expect.objectContaining({ name: 'run_events' }),
           expect.objectContaining({ name: 'sessions' }),
           expect.objectContaining({ name: 'work_item_comments' }),
@@ -348,6 +353,52 @@ describe('database migrations', { concurrent: false }, () => {
           database,
         ),
       ).rejects.toThrow();
+    } finally {
+      await database.destroy();
+      await dropSchema(schema);
+    }
+  });
+
+  test('links every earlier run to the item it claimed, and none to an item it never held', async () => {
+    const schema = await createSchema();
+    const database = createDatabase(databaseUrl, schema);
+    const projectId = crypto.randomUUID();
+    const itemId = crypto.randomUUID();
+    const [holding, ended, unrelated] = [
+      crypto.randomUUID(),
+      crypto.randomUUID(),
+      crypto.randomUUID(),
+    ];
+
+    try {
+      await migrateTo(database, '20261005000000_add_backups', schema);
+      await sql`INSERT INTO projects (id, name) VALUES (${projectId}, 'Atlas')`.execute(
+        database,
+      );
+      for (const run of [holding, ended, unrelated]) {
+        await sql`
+          INSERT INTO runs (id, role, status, project_id)
+          VALUES (${run}, 'builder', 'finished', ${projectId})
+        `.execute(database);
+      }
+      await sql`
+        INSERT INTO work_items (id, project_id, state, priority, holder_run_id, attempts, rounds)
+        VALUES (${itemId}, ${projectId}, 'building', 'P1', ${holding}, 0, 0)
+      `.execute(database);
+      await sql`
+        INSERT INTO work_item_history (work_item_id, from_state, to_state, actor_role, actor_run_id)
+        VALUES (${itemId}, 'build_ready', 'building', 'backend', ${ended})
+      `.execute(database);
+
+      await migrateToLatest(database, schema);
+
+      const runs = await database
+        .selectFrom('runs')
+        .select(['id', 'work_item_id'])
+        .execute();
+      expect(
+        Object.fromEntries(runs.map((run) => [run.id, run.work_item_id])),
+      ).toEqual({ [ended]: itemId, [holding]: itemId, [unrelated]: null });
     } finally {
       await database.destroy();
       await dropSchema(schema);

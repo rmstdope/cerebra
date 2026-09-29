@@ -387,14 +387,15 @@ the ones the lifecycle depends on are the implementer's.
 | Table | Holds |
 |---|---|
 | `users`, `sessions` | The navigator (one row in v1) and their login sessions. |
-| `projects` | Remote, default branch, settings (§3 of the spec), involvement preset, limits, pause, and whether its default fleet has been created (so an emptied fleet is never refilled). |
+| `projects` | Remote, default branch, settings (§3 of the spec), involvement preset, limits, pause, whether it raises browser notifications, and whether its default fleet has been created (so an emptied fleet is never refilled). |
 | `agent_types`, `agent_type_overrides` | Instance defaults, seeded on start from `packages/backend/agent-types/` without overwriting a stored type, and per-project overrides (only the fields changed). |
 | `agents` | Named agents: project, type, name, enabled. |
 | `items` | `key`, `title`, `description`, `type`, `priority`, `state`, `holder_run_id`, `waiting_reason`, `waiting_kind`, `return_state`, `involvement`, `attempts`, `rounds`, `filed_by`, `source`, `parent_id`. The constraints of §4 live here. |
 | `item_dependencies` | `(item, depends_on, kind)`. |
 | `item_records` | `(item, kind, version, body, created_by_run)`; attachments such as mockups beside them. |
 | `item_comments`, `item_history` | Discussion; every state change with actor, reason, from and to. |
-| `runs` | Project, agent, type revision, item held, state, container id, backend session id, token hash, usage and cost, started and ended. |
+| `runs` | Project, agent, type revision, item held, the item it first claimed (`work_item_id`, kept after the hold ends, so cost stays attributed; null for a run that never held one), state, container id, backend session id, token hash, cost, started and ended. |
+| `run_model_usage` | `(run, model)`: input, output and cache tokens, added to as each result arrives, so a run that later fails keeps what it spent. |
 | `run_events` | `(run, seq, event)`: the normalised event stream the chat view replays. |
 | `secrets` | Name, scope, encrypted value, data key, last use. |
 | `dispatch_log` | Every dispatcher and scheduler decision, with its reason. |
@@ -434,9 +435,13 @@ of their own, with `Content-Security-Policy: sandbox allow-scripts` and no netwo
 sandboxed iframes. A mockup's script can therefore run but can reach neither Cerebra's page, its
 cookies, the API, nor anything else.
 
-**Notifications.** A push is sent to every open tab over its WebSocket, which raises a browser
-notification through the Notifications API unless the tab reports that the chat it concerns is in
-focus. The webhook is posted by the backend, retried a few times, and a delivery that fails for
+**Notifications.** The backend reads the attention list (questions, waiting work and trouble) every
+five seconds and diffs it against the entries it has already seen; the first read after a start
+only seeds, so a restart pushes nothing again. New entries are gathered for 30 seconds and sent as
+one batch to every open tab over `/ws/notifications`, which raises one browser notification through
+the Notifications API. Each tab reports which chat it has in focus, and an entry for a focused chat
+or a project whose browser notifications are off is never pushed; the header count is unaffected
+by either. The webhook is posted by the backend, retried a few times, and a delivery that fails for
 good is shown in the feed. Nothing needs a service worker or a vendor push service.
 
 **Authentication.** v1 has one user, created at first start with a password the navigator

@@ -5,6 +5,7 @@ import {
   waitFor,
   within,
 } from '@testing-library/react';
+import type { CostClient } from './costs';
 import userEvent from '@testing-library/user-event';
 import { afterEach, expect, test } from 'vitest';
 
@@ -106,22 +107,65 @@ function startsClient(
   };
 }
 
+const noCosts: CostClient = {
+  forItem: async () => ({ runs: [], totalUsd: 0 }),
+  forProject: async () => ({
+    notLinkedUsd: 0,
+    runs: [],
+    totalUsd: 0,
+    workItemsUsd: 0,
+  }),
+};
+
 function renderBoard(
   client: BoardClient,
   storage = memoryStorage(),
   arrivalsIntervalMs = 60_000,
   automaticStarts = startsClient(),
+  costClient = noCosts,
 ) {
   return render(
     <ProjectBoard
       arrivalsIntervalMs={arrivalsIntervalMs}
       automaticStartsClient={automaticStarts}
       boardClient={client}
+      costClient={costClient}
       projectId="project-1"
       storage={storage}
     />,
   );
 }
+
+test("shows the project's cost beside its work, and an item's cost in its overview", async () => {
+  const costs: CostClient = {
+    forItem: async (itemId) => ({
+      runs: [
+        {
+          agentName: 'Rogue',
+          costUsd: 1.5,
+          id: 'run-1',
+          role: 'builder',
+          startedAt: '2026-10-01T09:00:00.000Z',
+          state: 'finished',
+        },
+      ],
+      totalUsd: itemId === 'item-1' ? 1.5 : 0,
+    }),
+    forProject: async () => ({
+      notLinkedUsd: 0.25,
+      runs: [],
+      totalUsd: 1.75,
+      workItemsUsd: 1.5,
+    }),
+  };
+  renderBoard(createClient(), memoryStorage(), 60_000, startsClient(), costs);
+
+  expect(await screen.findByText('$1.75')).toBeTruthy();
+  await openItem();
+  const overview = screen.getByRole('tabpanel');
+  const cost = within(overview).getByRole('region', { name: 'Cost so far' });
+  expect(await within(cost).findByText('$1.50')).toBeTruthy();
+});
 
 async function openItem(title = 'Show the board') {
   const row = await screen.findByRole('button', { name: new RegExp(title) });

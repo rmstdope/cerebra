@@ -6,6 +6,7 @@ import {
   filingLockKey,
   ProjectNotFoundError,
   recordForHeldItem,
+  releaseHeldItem,
   WorkItemNotFoundError,
 } from './board.js';
 import { createDatabase } from './database.js';
@@ -391,6 +392,49 @@ describe('board lifecycle mutations', { concurrent: false }, () => {
       await database.destroy();
       await dropSchema(schema);
     }
+  });
+
+  test('a run is linked to the item it claims, and stays linked after giving it back', async () => {
+    await withTestDatabase(async (database) => {
+      const board = createBoard(database);
+      const projectId = await registerTestProject(database);
+      const itemId = crypto.randomUUID();
+      await board.createWorkItem({
+        id: itemId,
+        priority: 'P1',
+        projectId,
+        state: 'build_ready',
+      });
+      const unrelated = crypto.randomUUID();
+      await database
+        .insertInto('runs')
+        .values({ id: unrelated, role: 'assistant', status: 'active' })
+        .execute();
+
+      const first = await board.claim(itemId, 'builder');
+      if (!first.ok) throw new Error(first.reason);
+      const firstRun = first.item.holderRunId ?? '';
+      await database.transaction().execute((transaction) =>
+        releaseHeldItem(transaction, firstRun, {
+          lastMessage: null,
+          reason: 'The run failed.',
+        }),
+      );
+      const second = await board.claim(itemId, 'builder');
+      if (!second.ok) throw new Error(second.reason);
+
+      const linked = await database
+        .selectFrom('runs')
+        .select(['id', 'work_item_id'])
+        .execute();
+      expect(
+        Object.fromEntries(linked.map((row) => [row.id, row.work_item_id])),
+      ).toEqual({
+        [firstRun]: itemId,
+        [second.item.holderRunId ?? '']: itemId,
+        [unrelated]: null,
+      });
+    });
   });
 
   test('serializes competing claims so only one fake run holds the item', async () => {

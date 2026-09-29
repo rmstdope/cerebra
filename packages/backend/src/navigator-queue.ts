@@ -151,7 +151,7 @@ function askerName(role: string | null): string | null {
   return role.charAt(0).toUpperCase() + role.slice(1);
 }
 
-function projectLabel(name: string, owner: string | null): string {
+export function projectLabel(name: string, owner: string | null): string {
   return owner === null ? name : `${owner}/${name}`;
 }
 
