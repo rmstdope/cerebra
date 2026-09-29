@@ -12,6 +12,8 @@ import {
 
 import type { AgentRole } from './fleet';
 import { roleNames } from './fleet-page';
+import { ThreadView, timeOf } from './conversation-activity';
+import { buildThread, describeStep } from './conversation-thread';
 import { trapFocus } from './focus-trap';
 import {
   browserConversationClient,
@@ -24,20 +26,6 @@ import {
 } from './runs';
 
 type Shown = 'ready' | 'working' | 'waiting' | 'finished' | 'failed';
-
-type ThreadEntry =
-  | {
-      readonly kind: 'navigator';
-      readonly key: string;
-      readonly text: string;
-      readonly at: string | null;
-    }
-  | {
-      readonly kind: 'assistant';
-      readonly key: string;
-      readonly text: string;
-      readonly at: string;
-    };
 
 interface OpenQuestion {
   readonly questionId: string;
@@ -65,50 +53,6 @@ function openQuestionOf(events: readonly RecordedEvent[]): OpenQuestion | null {
   return null;
 }
 
-function threadOf(events: readonly RecordedEvent[]): ThreadEntry[] {
-  const entries: ThreadEntry[] = [];
-  const questions = new Map<string, readonly Question[]>();
-  for (const record of events) {
-    if (!isTopLevel(record)) continue;
-    const { event } = record;
-    const key = String(record.position);
-    if (event.kind === 'user_message') {
-      entries.push({
-        at: record.createdAt,
-        key,
-        kind: 'navigator',
-        text: event.text,
-      });
-    } else if (event.kind === 'message') {
-      entries.push({
-        at: record.createdAt,
-        key,
-        kind: 'assistant',
-        text: event.text,
-      });
-    } else if (event.kind === 'question') {
-      questions.set(event.questionId, event.questions);
-    } else if (event.kind === 'answer') {
-      const asked = questions.get(event.questionId) ?? [];
-      for (const question of asked) {
-        entries.push({
-          at: record.createdAt,
-          key: `${key}-q-${question.question}`,
-          kind: 'assistant',
-          text: question.question,
-        });
-      }
-      entries.push({
-        at: record.createdAt,
-        key,
-        kind: 'navigator',
-        text: Object.values(event.answers).join(', '),
-      });
-    }
-  }
-  return entries;
-}
-
 function activityOf(events: readonly RecordedEvent[]): string[] {
   return events
     .filter(isTopLevel)
@@ -116,7 +60,7 @@ function activityOf(events: readonly RecordedEvent[]): string[] {
       event.kind === 'question'
         ? ['Asked a question']
         : event.kind === 'tool_call'
-          ? [`Used ${event.name}`]
+          ? [describeStep(event.name, event.input)]
           : [],
     )
     .slice(-5)
@@ -158,13 +102,6 @@ function sentenceOf(shown: Shown, name: string, hasMessages: boolean): string {
     case 'failed':
       return `${name} stopped unexpectedly.`;
   }
-}
-
-function timeOf(at: string): string {
-  return new Date(at).toLocaleTimeString([], {
-    hour: '2-digit',
-    minute: '2-digit',
-  });
 }
 
 function startedText(at: string, now: Date): string {
@@ -381,8 +318,16 @@ export function ConversationPage({
     );
   }, [client, loaded, runId]);
 
+  // An open question's form takes focus itself; otherwise the composer does.
+  const formShown = useRef(false);
+  formShown.current =
+    conversation !== null &&
+    conversation.run.state !== 'finished' &&
+    conversation.run.state !== 'failed' &&
+    openQuestionOf(conversation.events) !== null;
+
   useEffect(() => {
-    if (loaded) composer.current?.focus();
+    if (loaded && !formShown.current) composer.current?.focus();
   }, [loaded]);
 
   useLayoutEffect(() => {
@@ -399,7 +344,10 @@ export function ConversationPage({
   if (loadFailed) {
     return (
       <section className="card" role="alert">
-        <p className="font-bold">Cerebra couldn’t load this conversation.</p>
+        <p className="font-bold">Couldn’t load this conversation.</p>
+        <p className="mt-1 text-[var(--muted)]">
+          Your messages are safe. Try again in a moment.
+        </p>
         <button
           className="primary-button mt-4"
           onClick={() => void load()}
@@ -420,15 +368,19 @@ export function ConversationPage({
     run.agentRole !== null && run.agentRole in roleNames
       ? roleNames[run.agentRole as AgentRole]
       : 'Assistant';
-  const entries = threadOf(events);
-  const hasMessages = entries.length > 0 || pending.length > 0;
+  const items = buildThread(events);
+  const hasMessages = items.length > 0 || pending.length > 0;
   const question = openQuestionOf(events);
   const shown = shownState(run.state, question, hasMessages);
   const live = shown !== 'finished' && shown !== 'failed';
   const activity = activityOf(events);
-  const newestAssistant = [...entries]
+  const newestAssistant = [...items]
     .reverse()
-    .find((entry) => entry.kind === 'assistant');
+    .find((item) => item.kind === 'assistant');
+  const stillWorkingKey =
+    shown === 'working' && newestAssistant !== undefined
+      ? newestAssistant.key
+      : null;
 
   const sendDraft = async () => {
     const text = draft;
@@ -544,27 +496,12 @@ export function ConversationPage({
                 </p>
               </div>
             ) : null}
-            {entries.map((entry) => (
-              <article
-                className={`max-w-[85%] rounded-2xl p-3 ${
-                  entry.kind === 'navigator'
-                    ? 'self-end bg-[var(--accent-muted)]'
-                    : 'self-start border border-[var(--border)]'
-                }`}
-                key={entry.key}
-              >
-                <p className="whitespace-pre-wrap break-words">{entry.text}</p>
-                <p className="mt-1 text-xs text-[var(--muted)]">
-                  {entry.kind === 'navigator' ? 'You' : name}
-                  {entry.at === null ? '' : ` · ${timeOf(entry.at)}`}
-                  {shown === 'working' && entry === newestAssistant ? (
-                    <span className="ml-2 font-bold text-[var(--accent)]">
-                      Still working…
-                    </span>
-                  ) : null}
-                </p>
-              </article>
-            ))}
+            <ThreadView
+              items={items}
+              live={live}
+              name={name}
+              stillWorkingKey={stillWorkingKey}
+            />
             {pending.map((text, index) => (
               <article
                 className="max-w-[85%] self-end rounded-2xl bg-[var(--accent-muted)] p-3 opacity-80"
