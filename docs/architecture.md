@@ -58,6 +58,14 @@ nested, and it fails differently on each host.
 - CPU and memory limits from the agent type.
 - Never: the container socket, the database, another run's files, the mirror writable.
 
+The `engine` module builds this specification itself from the run and named agent it is given;
+a caller supplies only the image, command, environment and resource limits, never a mount, a
+network, a user or a privilege. Its mounts are subpaths of the `/data` volume: `runs/<run>/checkout`
+at `/work`, `agents/<agent>/home` at `/home/agent` and `agents/<agent>/cli-state` at `/cli-state`,
+plus a `/tmp` tmpfs, which a read-only root filesystem needs. It talks to rootless Podman over
+the API socket's Docker-compatible endpoints; an engine failure is an error, and only the engine's
+own "no such container" reads as a container that is absent.
+
 **Networks.** `cerebro-internal` joins the main container and every agent container and nothing
 else. `cerebro-egress` joins agent containers only. The UI port is published on `127.0.0.1` only
 (D1); a server deployment puts a TLS reverse proxy in front of it.
