@@ -150,6 +150,14 @@ export {
   type QueueRefusal,
   type QueueRefusalCode,
 } from './navigator-queue.js';
+export {
+  createCostReader,
+  type CostReader,
+  type ItemCost,
+  type ProjectCost,
+  type ProjectRunCost,
+  type RunCost,
+} from './costs.js';
 export { migrateToLatest } from './migrations/index.js';
 export {
   createPodmanEngine,

@@ -64,6 +64,10 @@ import {
   type Supervisor,
 } from './supervisor.js';
 import type { Conversation } from './runs.js';
+import {
+  registerAttentionRoutes,
+  type AttentionRouteOptions,
+} from './attention-routes.js';
 
 /** What the conversation routes need of the run supervisor. */
 export type ConversationControl = Pick<
@@ -95,6 +99,8 @@ export interface ServerOptions {
   readonly dispatcher?: Pick<Dispatcher, 'status'>;
   /** Called after every request that changed something, so waiting work can be looked at again. */
   readonly onMutation?: () => void;
+  /** Reads what runs, items and projects have cost. */
+  readonly costs?: AttentionRouteOptions['costs'];
 }
 
 const sessionCookieName = 'cerebra_session';
@@ -314,6 +320,7 @@ export const createServer = async ({
   startSettings,
   dispatcher,
   onMutation,
+  costs,
 }: ServerOptions): Promise<FastifyInstance> => {
   const server = Fastify();
 
@@ -1169,6 +1176,8 @@ export const createServer = async ({
       settings.setInstanceLimit(objectBody(request.body)?.instanceLimit),
     ),
   );
+
+  registerAttentionRoutes(server, { costs });
 
   return server;
 };

@@ -12,6 +12,7 @@ import { createDatabase } from './database.js';
 import { createFleet } from './fleet.js';
 import { loadMasterKey } from './master-key.js';
 import { migrateToLatest } from './migrations/index.js';
+import { createCostReader } from './costs.js';
 import { createNavigatorQueue } from './navigator-queue.js';
 import {
   createProjectRegistrationService,
@@ -96,6 +97,7 @@ try {
     auth: createAuthService(database),
     board,
     conversations: supervisor,
+    costs: createCostReader(database),
     credentials,
     fleet,
     listProjects: () => listProjects(database),
