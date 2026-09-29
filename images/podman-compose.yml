@@ -5,6 +5,11 @@ services:
       dockerfile: images/main.Containerfile
     environment:
       CEREBRA_ADDRESS: http://localhost:4317
+      # ./cerebra resolves the backup folder on the host and exports it (architecture §10).
+      CEREBRA_BACKUP_DIR: /backups
+      CEREBRA_BACKUP_KEEP: ${CEREBRA_BACKUP_KEEP:-7}
+      CEREBRA_BACKUP_LOCATION: ${CEREBRA_BACKUP_LOCATION:-backups}
+      CEREBRA_BACKUP_TIME: ${CEREBRA_BACKUP_TIME:-02:00}
       CEREBRA_DATA_DIR: /data
       CEREBRA_DATA_VOLUME: cerebra-data
       CEREBRA_EGRESS_NETWORK: cerebro-egress
@@ -14,10 +19,12 @@ services:
       CEREBRA_PODMAN_SOCKET: /run/podman/podman.sock
       CEREBRA_PROJECT_TOKEN_KEY_FILE: /run/secrets/cerebra-project-token-key
       DATABASE_URL: postgresql://cerebra:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/cerebra
+      TZ: ${CEREBRA_TIMEZONE:-UTC}
     ports:
       - '127.0.0.1:4317:4317'
     volumes:
       - cerebra-data:/data
+      - ${CEREBRA_BACKUP_DIR:?Start Cerebra with ./cerebra, which prepares the backup folder}:/backups
       - ${XDG_RUNTIME_DIR}/podman/podman.sock:/run/podman/podman.sock
     networks:
       - database

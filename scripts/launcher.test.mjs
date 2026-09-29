@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { afterEach, expect, test } from 'vitest';
 
@@ -27,6 +27,13 @@ if (args[0] === 'secret' && args[1] === 'create') {
   writeFileSync('secret', readFileSync(0));
 }
 if (args.includes('psql')) process.exit(Number(process.env.DATABASE_CHECK_EXIT ?? 0));
+if (args.includes('--build')) {
+  appendFileSync('environment', JSON.stringify({
+    directory: process.env.CEREBRA_BACKUP_DIR,
+    location: process.env.CEREBRA_BACKUP_LOCATION,
+    timezone: process.env.CEREBRA_TIMEZONE,
+  }) + '\\n');
+}
 if (args.includes('up')) process.exit(Number(process.env.COMPOSE_UP_EXIT ?? 0));
 if (args.includes('node')) process.exit(Number(process.env.MAIN_READY_EXIT ?? 0));
 `,
@@ -164,3 +171,68 @@ test('never reports ready when the backend fails to start', async () => {
     'existing-test-secret',
   );
 }, 20_000);
+
+async function composeEnvironment(directory) {
+  return JSON.parse(
+    (await readFile(join(directory, 'environment'), 'utf8')).trim(),
+  );
+}
+
+test('creates the backup folder and exports its absolute path', async () => {
+  const directory = await fixture();
+  await writeFile(join(directory, 'secret'), 'existing-test-secret');
+  const result = launch(directory, 'start', {
+    CEREBRA_BACKUP_DIR: '',
+    CEREBRA_TIMEZONE: '',
+    HOME: directory,
+  });
+  expect(result.status).toBe(0);
+  expect((await stat(join(directory, 'backups'))).isDirectory()).toBe(true);
+  const environment = await composeEnvironment(directory);
+  expect(environment.directory).toBe(join(directory, 'backups'));
+  expect(environment.location).toBe('~/backups');
+  expect(environment.timezone).toMatch(/^[A-Za-z_+-]+(\/[A-Za-z0-9_+-]+)*$/);
+});
+
+test('honours the backup folder and time zone chosen in .env or the environment', async () => {
+  const directory = await fixture();
+  await writeFile(join(directory, 'secret'), 'existing-test-secret');
+  await writeFile(
+    join(directory, '.env'),
+    'POSTGRES_PASSWORD=x\nCEREBRA_BACKUP_DIR="kept/dumps"\n',
+  );
+  expect(
+    launch(directory, 'update', {
+      CEREBRA_BACKUP_DIR: '',
+      CEREBRA_TIMEZONE: 'Europe/Stockholm',
+      HOME: '/nowhere',
+    }).status,
+  ).toBe(0);
+  expect((await stat(join(directory, 'kept/dumps'))).isDirectory()).toBe(true);
+  expect(await composeEnvironment(directory)).toEqual({
+    directory: join(directory, 'kept/dumps'),
+    location: join(directory, 'kept/dumps'),
+    timezone: 'Europe/Stockholm',
+  });
+
+  const elsewhere = join(directory, 'from-environment');
+  await rm(join(directory, 'environment'));
+  expect(
+    launch(directory, 'start', { CEREBRA_BACKUP_DIR: elsewhere }).status,
+  ).toBe(0);
+  expect((await composeEnvironment(directory)).directory).toBe(elsewhere);
+});
+
+test('refuses to start when the backup folder cannot be created', async () => {
+  const directory = await fixture();
+  await writeFile(join(directory, 'secret'), 'existing-test-secret');
+  await writeFile(join(directory, 'blocked'), '');
+  const result = launch(directory, 'start', {
+    CEREBRA_BACKUP_DIR: join(directory, 'blocked/backups'),
+  });
+  expect(result.status).not.toBe(0);
+  expect(result.stderr).toContain('backup folder');
+  expect(
+    (await calls(directory)).some((args) => args.includes('--build')),
+  ).toBe(false);
+});

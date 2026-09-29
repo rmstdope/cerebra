@@ -77,6 +77,48 @@ SQL
   unset key
 }
 
+# The last value .env gives a setting, without its quotes; empty when .env does not set it.
+env_file_value() {
+  local value
+  value="$(sed -n "s/^[[:space:]]*$1=//p" .env | tail -n 1)"
+  value="${value%\"}"; value="${value#\"}"
+  value="${value%\'}"; value="${value#\'}"
+  printf '%s' "$value"
+}
+
+# Backups are written outside Podman's storage, to a host folder (architecture §10).
+prepare_backups() {
+  local directory="${CEREBRA_BACKUP_DIR:-}"
+  [ -n "$directory" ] || directory="$(env_file_value CEREBRA_BACKUP_DIR)"
+  [ -n "$directory" ] || directory="backups"
+  case "$directory" in
+    "~") directory="$HOME" ;;
+    "~/"*) directory="$HOME/${directory#"~/"}" ;;
+  esac
+  mkdir -p "$directory" 2>/dev/null ||
+    fail "Could not create the backup folder $directory. Choose another with CEREBRA_BACKUP_DIR in .env, then try again."
+  CEREBRA_BACKUP_DIR="$(cd "$directory" && pwd)" || fail "Could not open the backup folder $directory."
+  case "$CEREBRA_BACKUP_DIR/" in
+    "$HOME"/*) CEREBRA_BACKUP_LOCATION="~${CEREBRA_BACKUP_DIR#"$HOME"}" ;;
+    *) CEREBRA_BACKUP_LOCATION="$CEREBRA_BACKUP_DIR" ;;
+  esac
+  export CEREBRA_BACKUP_DIR CEREBRA_BACKUP_LOCATION
+
+  # Scheduled backups run at the chosen time in the host's time zone.
+  if [ -z "${CEREBRA_TIMEZONE:-}" ]; then
+    CEREBRA_TIMEZONE="$(env_file_value CEREBRA_TIMEZONE)"
+  fi
+  if [ -z "$CEREBRA_TIMEZONE" ]; then
+    local zone
+    zone="$(readlink /etc/localtime 2>/dev/null || true)"
+    case "$zone" in
+      *zoneinfo/*) CEREBRA_TIMEZONE="${zone##*zoneinfo/}" ;;
+      *) CEREBRA_TIMEZONE="UTC" ;;
+    esac
+  fi
+  export CEREBRA_TIMEZONE
+}
+
 main_ready() {
   run_compose exec -T main node -e \
     'fetch("http://127.0.0.1:4317/health").then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))' \
@@ -97,6 +139,7 @@ case "${1:-}" in
     [ -f .env ] || fail "Missing .env. Set a local POSTGRES_PASSWORD before starting Cerebra."
     ensure_egress_network
     ensure_key
+    prepare_backups
     run_compose up --build --detach || fail "Cerebra could not start. Read the Podman output above, then try again."
     wait_for_main
     printf 'Cerebra is ready at http://localhost:4317.\n'
@@ -113,6 +156,7 @@ case "${1:-}" in
     ensure_egress_network
     printf 'Running work will stop. Updating restarts Cerebra; unfinished work returns to its queue.\n'
     ensure_key
+    prepare_backups
     run_compose up --build --detach --force-recreate || fail "Cerebra could not restart. Your data is still safe; read the Podman output above, then try again."
     wait_for_main
     printf 'Cerebra is ready at http://localhost:4317.\n'

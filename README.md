@@ -127,6 +127,41 @@ if browser storage is cleared. Cerebra remembers the selection when registration
 select a project; returning visits keep the cross-project navigator queue visible. A failed
 project-list request shows an error and retry control, not onboarding.
 
+### Backups
+
+Cerebra dumps its database every night at 02:00 into a folder on your computer, outside Podman's
+storage, so a deleted Podman machine does not take your records with it. By default the folder is
+`backups/` in this checkout; the launcher creates it and it is ignored by Git. The newest seven
+backups are kept and older ones are removed. **Settings → Backups** shows when the next one runs,
+the recent ones, and a **Back up now** button. A backup that fails appears in the navigator queue,
+with its reason, until a later one succeeds.
+
+Change the defaults in `.env`, then run `./cerebra update`. `CEREBRA_BACKUP_DIR` is the folder
+(relative paths are from this checkout), `CEREBRA_BACKUP_TIME` the 24-hour time of the nightly
+backup, `CEREBRA_BACKUP_KEEP` how many successful backups to keep, and `CEREBRA_TIMEZONE` the zone
+the time is read in, which defaults to your computer's:
+
+```bash
+CEREBRA_BACKUP_DIR=~/cerebra-backups
+CEREBRA_BACKUP_TIME=03:30
+CEREBRA_BACKUP_KEEP=14
+CEREBRA_TIMEZONE=Europe/Stockholm
+```
+
+A backup that was due while Cerebra was stopped runs once when it starts again. Each backup is a
+`pg_dump` custom-format file named `cerebra-<UTC time>-<number>.dump`. A dump holds stored
+credentials and project tokens only in encrypted form, so restoring it needs the master key of the
+instance that wrote it: keep that key with your backups, and on a fresh Podman machine import it as
+described above **before** the first `./cerebra start`. Then stop the backend, restore the dump and
+start again:
+
+```bash
+podman compose --file images/podman-compose.yml stop main
+podman compose --file images/podman-compose.yml exec -T postgres \
+  pg_restore --clean --if-exists --no-owner -U cerebra -d cerebra < backups/cerebra-….dump
+./cerebra start
+```
+
 [`images/`](images/) is reserved for Containerfiles and [`spikes/`](spikes/) for throwaway
 experiments.
 
