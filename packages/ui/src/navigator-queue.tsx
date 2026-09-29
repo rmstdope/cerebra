@@ -7,6 +7,7 @@ import {
   type RefObject,
 } from 'react';
 
+import { queueWhen } from './backups';
 import { BoardRequestError, type BoardRoute, type Priority } from './board';
 import { routes } from './project-board';
 import {
@@ -14,6 +15,7 @@ import {
   type QueueClient,
   type QueueEntry,
   type QueueEntryKind,
+  type QueueNotice,
   type QueuePage,
 } from './queue';
 
@@ -142,6 +144,7 @@ export function NavigatorQueue({
   client = browserQueueClient,
   now = () => new Date(),
   onCountChange,
+  onOpenBackups = () => undefined,
   onOpenConversation = () => undefined,
   onViewWork,
   pollIntervalMs = 30_000,
@@ -150,6 +153,8 @@ export function NavigatorQueue({
   readonly client?: QueueClient;
   readonly now?: () => Date;
   readonly onCountChange?: (count: number) => void;
+  /** Opens Settings → Backups from a failed-backup notice. */
+  readonly onOpenBackups?: () => void;
   /** Opens the conversation of the run that asked a question. */
   readonly onOpenConversation?: (runId: string) => void;
   readonly onViewWork: (
@@ -166,6 +171,7 @@ export function NavigatorQueue({
   const [remembered] = useState(() => readRemembered(storage));
   const [shown, setShown] = useState<QueuePage | null>(null);
   const [total, setTotal] = useState(remembered.count);
+  const [notices, setNotices] = useState<readonly QueueNotice[]>([]);
   const [arrivals, setArrivals] = useState(0);
   const [loading, setLoading] = useState(true);
   const [refreshError, setRefreshError] = useState(false);
@@ -206,6 +212,7 @@ export function NavigatorQueue({
       shownIds.current = new Set(next.entries.map((entry) => entry.id));
       setShown(next);
       setTotal(next.total);
+      setNotices(next.notices);
       setArrivals(0);
       setRefreshError(false);
       setSelectedId((current) =>
@@ -236,6 +243,7 @@ export function NavigatorQueue({
             return;
           const known = shownIds.current;
           setTotal(next.total);
+          setNotices(next.notices);
           setArrivals(
             next.entries.filter((entry) => !known.has(entry.id)).length,
           );
@@ -249,8 +257,8 @@ export function NavigatorQueue({
   }, [client, pollIntervalMs]);
 
   useEffect(() => {
-    onCountChange?.(total);
-  }, [onCountChange, total]);
+    onCountChange?.(total + notices.length);
+  }, [notices.length, onCountChange, total]);
 
   useEffect(() => {
     try {
@@ -343,6 +351,7 @@ export function NavigatorQueue({
       current === null
         ? current
         : {
+            ...current,
             entries: current.entries.filter((entry) => entry.id !== id),
             total: Math.max(0, current.total - 1),
           },
@@ -420,7 +429,8 @@ export function NavigatorQueue({
   };
 
   const panelOpen = selected !== null;
-  const empty = shown !== null && entries.length === 0;
+  // While Cerebra itself needs the navigator, the queue is not "all caught up".
+  const empty = shown !== null && entries.length === 0 && notices.length === 0;
   const refreshFailure = refreshError ? (
     <p className="auth-error mt-4" role="alert">
       Cerebra couldn’t refresh what needs you. The requests already shown may be
@@ -477,6 +487,30 @@ export function NavigatorQueue({
         ) : null}
       </div>
       {refreshFailure}
+      {notices.length > 0 ? (
+        <section aria-label="Cerebra" className="card mt-5 grid gap-4 p-5">
+          {notices.map((notice) => (
+            <div
+              className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
+              key={notice.kind}
+            >
+              <div>
+                <p className="font-bold">Backup failed</p>
+                <p className="text-sm text-[var(--muted)]">
+                  {`${queueWhen(new Date(notice.at), now())} · ${notice.cause}`}
+                </p>
+              </div>
+              <button
+                className="secondary-button self-start sm:self-auto"
+                onClick={onOpenBackups}
+                type="button"
+              >
+                Open Backups
+              </button>
+            </div>
+          ))}
+        </section>
+      ) : null}
       {empty ? (
         <div className="card mt-5 py-12 text-center">
           <p className="text-xl font-bold">You’re all caught up.</p>
@@ -492,7 +526,8 @@ export function NavigatorQueue({
             {loading ? 'Loading…' : 'Refresh queue'}
           </button>
         </div>
-      ) : shown === null && refreshError ? null : (
+      ) : (shown === null && refreshError) ||
+        (shown !== null && entries.length === 0) ? null : (
         <div className="mt-5 grid gap-5 lg:grid-cols-[1.25fr_.9fr]">
           <section
             aria-label="Navigator queue"

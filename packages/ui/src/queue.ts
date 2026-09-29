@@ -18,8 +18,18 @@ export interface QueueEntry {
   readonly waitingReason: string | null;
 }
 
+/** Something about the instance itself that needs the navigator, outside any project. */
+export interface QueueNotice {
+  /** When the failed backup started. */
+  readonly at: string;
+  readonly cause: string;
+  readonly kind: 'backup_failed';
+}
+
 export interface QueuePage {
   readonly entries: readonly QueueEntry[];
+  readonly notices: readonly QueueNotice[];
+  /** How many entries; notices are not counted. */
   readonly total: number;
 }
 

@@ -69,7 +69,7 @@ function page(
   entries: readonly QueueEntry[],
   total = entries.length,
 ): QueuePage {
-  return { entries, total };
+  return { entries, notices: [], total };
 }
 
 function memoryStorage(): Pick<Storage, 'getItem' | 'setItem'> {
@@ -93,6 +93,7 @@ function renderQueue(
   client: QueueClient,
   {
     onCountChange = () => undefined,
+    onOpenBackups = () => undefined,
     now = () => new Date('2026-09-29T00:12:30.000Z'),
     onOpenConversation = () => undefined,
     onViewWork = () => undefined,
@@ -102,6 +103,7 @@ function renderQueue(
     now?: () => Date;
     onOpenConversation?: (runId: string) => void;
     onCountChange?: (count: number) => void;
+    onOpenBackups?: () => void;
     onViewWork?: (projectId: string, itemId: string, tab: string) => void;
     pollIntervalMs?: number;
     storage?: Pick<Storage, 'getItem' | 'setItem'>;
@@ -112,6 +114,7 @@ function renderQueue(
       client={client}
       now={now}
       onCountChange={onCountChange}
+      onOpenBackups={onOpenBackups}
       onOpenConversation={onOpenConversation}
       onViewWork={onViewWork}
       pollIntervalMs={pollIntervalMs}
@@ -733,4 +736,54 @@ test('a remembered selection never opens an assistant’s question', async () =>
   });
   await screen.findByText('Astra asks: Which database should the demo use?');
   expect(screen.queryByLabelText('Your answer')).toBeNull();
+});
+
+test('shows a failed backup above the projects and counts it until it clears', async () => {
+  const counts: number[] = [];
+  const opened: string[] = [];
+  const failed: QueuePage = {
+    entries: [],
+    notices: [
+      {
+        at: '2026-09-29T00:02:00.000Z',
+        cause: 'the backup folder is full',
+        kind: 'backup_failed',
+      },
+    ],
+    total: 0,
+  };
+  const pages = [failed, page([])];
+  renderQueue(
+    createClient({
+      list: async () => (pages.length > 1 ? pages.shift()! : pages[0]!),
+    }),
+    {
+      onCountChange: (count) => counts.push(count),
+      onOpenBackups: () => opened.push('backups'),
+    },
+  );
+
+  const notice = await screen.findByRole('region', { name: 'Cerebra' });
+  expect(within(notice).getByText('Backup failed')).toBeTruthy();
+  const when = new Date('2026-09-29T00:02:00.000Z');
+  const clock = `${String(when.getHours()).padStart(2, '0')}:${String(when.getMinutes()).padStart(2, '0')}`;
+  expect(
+    within(notice).getByText(
+      new RegExp(`at ${clock} · the backup folder is full$`),
+    ),
+  ).toBeTruthy();
+  expect(screen.queryByText('You’re all caught up.')).toBeNull();
+  expect(screen.queryByRole('region', { name: 'Navigator queue' })).toBeNull();
+  await waitFor(() => expect(counts.at(-1)).toBe(1));
+
+  await userEvent.click(
+    within(notice).getByRole('button', { name: 'Open Backups' }),
+  );
+  expect(opened).toEqual(['backups']);
+
+  await userEvent.click(screen.getByRole('button', { name: 'Refresh queue' }));
+
+  expect(await screen.findByText('You’re all caught up.')).toBeTruthy();
+  expect(screen.queryByRole('region', { name: 'Cerebra' })).toBeNull();
+  expect(counts.at(-1)).toBe(0);
 });

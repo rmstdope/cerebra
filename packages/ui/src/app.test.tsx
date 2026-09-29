@@ -80,7 +80,7 @@ afterEach(() => {
 const emptyQueue: QueueClient = {
   answer: async () => undefined,
   decide: async () => undefined,
-  list: async () => ({ entries: [], total: 0 }),
+  list: async () => ({ entries: [], notices: [], total: 0 }),
 };
 
 const authenticatedAuth: AuthClient = {
@@ -518,6 +518,7 @@ describe('App', () => {
             waitingReason: 'The build failed twice.',
           },
         ],
+        notices: [],
         total: 2,
       }),
     };
@@ -694,6 +695,67 @@ describe('App', () => {
     expect(
       await screen.findByRole('heading', { name: 'Manage Cerebra' }),
     ).toBeTruthy();
+  });
+
+  test('a failed backup in the queue opens Settings → Backups on its heading', async () => {
+    const user = userEvent.setup();
+    const storage = new Map<string, string>();
+    render(
+      <App
+        authClient={authenticatedAuth}
+        backupsClient={{
+          start: async () => {
+            throw new Error('Not exercised');
+          },
+          status: async () => ({
+            backups: [],
+            kept: 0,
+            running: null,
+            schedule: {
+              keep: 7,
+              location: '/backups',
+              nextAt: '2026-10-02T00:00:00.000Z',
+            },
+          }),
+        }}
+        mediaQuery={new FakeMediaQuery(false)}
+        queueClient={{
+          ...emptyQueue,
+          list: async () => ({
+            entries: [],
+            notices: [
+              {
+                at: '2026-10-01T00:00:00.000Z',
+                cause: 'the backup folder is full',
+                kind: 'backup_failed',
+              },
+            ],
+            total: 0,
+          }),
+        }}
+        storage={{
+          getItem: (key) => storage.get(key) ?? null,
+          setItem: (key, value) => void storage.set(key, value),
+        }}
+      />,
+    );
+
+    await user.click(
+      await screen.findByRole('button', { name: 'Open Backups' }),
+    );
+
+    const heading = await screen.findByRole('heading', {
+      level: 1,
+      name: 'Backups',
+    });
+    expect(window.location.hash).toBe('#/settings/backups');
+    await waitFor(() => expect(document.activeElement).toBe(heading));
+    expect(
+      screen
+        .getByRole('link', { name: 'Backups' })
+        .getAttribute('aria-current'),
+    ).toBe('page');
+    expect(document.title).toBe('(1) Cerebra');
   });
 
   test('switches a project between its board and its fleet, and View work returns to the fleet', async () => {
@@ -955,6 +1017,7 @@ describe('App', () => {
             waitingReason: 'Which database should the demo use?',
           },
         ],
+        notices: [],
         total: 1,
       }),
     };
