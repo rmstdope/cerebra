@@ -29,9 +29,11 @@ const workItem: WorkItem = {
   createdAt: '2026-09-29T00:00:00.000Z',
   description: 'Make the board easy to use.',
   id: 'item-1',
+  key: 'WEB-1',
   priority: null,
   state: 'new',
   title: 'Show the board',
+  type: 'feature',
   updatedAt: '2026-09-29T00:00:00.000Z',
 };
 
@@ -285,6 +287,115 @@ test('keeps entered details when saving fails and retries with Try again', async
     await screen.findByText('Work item added. It is ready for you to review.'),
   ).toBeTruthy();
   expect(attempts).toBe(2);
+});
+
+function typeOption(name: string): HTMLInputElement {
+  return within(screen.getByRole('group', { name: 'Type' })).getByRole(
+    'radio',
+    { name },
+  ) as HTMLInputElement;
+}
+
+async function submitNewWorkItem(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(
+    within(screen.getByRole('form', { name: 'New work item' })).getByRole(
+      'button',
+      { name: 'Add work item' },
+    ),
+  );
+}
+
+test('files the chosen type, and chooses Feature again after adding', async () => {
+  const user = userEvent.setup();
+  const filed: unknown[] = [];
+  renderBoard(
+    createClient({
+      create: async (_projectId, input) => {
+        filed.push(input);
+        return { ...workItem, id: 'item-2', title: input.title };
+      },
+    }),
+  );
+
+  await screen.findByRole('button', { name: /Show the board/ });
+  await user.click(screen.getByRole('button', { name: 'Add work item' }));
+  expect(typeOption('Feature').checked).toBe(true);
+  expect(document.activeElement).toBe(
+    screen.getByLabelText('What needs to change?'),
+  );
+  await user.type(screen.getByLabelText('What needs to change?'), 'Login');
+  await user.click(typeOption('Bug'));
+  await submitNewWorkItem(user);
+
+  expect(
+    await screen.findByText('Work item added. It is ready for you to review.'),
+  ).toBeTruthy();
+  expect(filed).toEqual([{ description: '', title: 'Login', type: 'bug' }]);
+  await user.click(screen.getAllByRole('button', { name: 'Add work item' })[0]!);
+  expect(typeOption('Feature').checked).toBe(true);
+});
+
+test('keeps the chosen type when saving fails', async () => {
+  const user = userEvent.setup();
+  const filed: unknown[] = [];
+  let attempts = 0;
+  renderBoard(
+    createClient({
+      create: async (_projectId, input) => {
+        attempts += 1;
+        if (attempts === 1) throw new Error('down');
+        filed.push(input);
+        return { ...workItem, id: 'item-2', title: input.title };
+      },
+    }),
+  );
+
+  await screen.findByRole('button', { name: /Show the board/ });
+  await user.click(screen.getByRole('button', { name: 'Add work item' }));
+  await user.type(screen.getByLabelText('What needs to change?'), 'Tidy');
+  await user.click(typeOption('Refactoring'));
+  await submitNewWorkItem(user);
+
+  expect(
+    await screen.findByText('Cerebra couldn’t save your changes. Try again.'),
+  ).toBeTruthy();
+  expect(typeOption('Refactoring').checked).toBe(true);
+  await user.click(screen.getByRole('button', { name: 'Try again' }));
+  expect(
+    await screen.findByText('Work item added. It is ready for you to review.'),
+  ).toBeTruthy();
+  expect(filed).toEqual([
+    { description: '', title: 'Tidy', type: 'refactoring' },
+  ]);
+});
+
+test('offers the four types as one keyboard group announced as Type', async () => {
+  const user = userEvent.setup();
+  renderBoard(createClient());
+
+  await screen.findByRole('button', { name: /Show the board/ });
+  await user.click(screen.getByRole('button', { name: 'Add work item' }));
+  const group = screen.getByRole('group', { name: 'Type' });
+  expect(
+    within(group)
+      .getAllByRole('radio')
+      .map((radio) => radio.getAttribute('value')),
+  ).toEqual(['feature', 'bug', 'task', 'refactoring']);
+  for (const name of ['Feature', 'Bug', 'Task', 'Refactoring']) {
+    expect(typeOption(name)).toBeTruthy();
+  }
+  expect(group.getAttribute('aria-describedby')).toBeTruthy();
+  expect(
+    document.getElementById(group.getAttribute('aria-describedby')!)
+      ?.textContent,
+  ).toBe('Bugs go to the bug fixer; everything else is planned and built as usual.');
+
+  await user.tab();
+  expect(document.activeElement).toBe(typeOption('Feature'));
+  await user.keyboard('{ArrowRight}');
+  expect(typeOption('Bug').checked).toBe(true);
+  await user.tab();
+  expect(document.activeElement).toBe(screen.getByLabelText(/Optional/));
 });
 
 test('triages the selected item in place', async () => {

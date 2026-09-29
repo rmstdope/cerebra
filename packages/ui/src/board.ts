@@ -2,6 +2,27 @@ export type Priority = 'P0' | 'P1' | 'P2' | 'P3';
 export type BoardRoute = 'grooming_ready' | 'design_ready' | 'build_ready';
 export type BoardSort = 'newest' | 'oldest' | 'priority';
 
+export type WorkItemType = 'feature' | 'bug' | 'task' | 'refactoring';
+
+/** The four types in the order the navigator is offered them (spec §4.1). */
+export const workItemTypes: readonly WorkItemType[] = [
+  'feature',
+  'bug',
+  'task',
+  'refactoring',
+];
+
+const typeLabels: Record<WorkItemType, string> = {
+  bug: 'Bug',
+  feature: 'Feature',
+  refactoring: 'Refactoring',
+  task: 'Task',
+};
+
+export function typeLabel(type: WorkItemType): string {
+  return typeLabels[type];
+}
+
 export const workItemStates = [
   'new',
   'grooming_ready',
@@ -36,9 +57,12 @@ export interface WorkItem {
   /** Present on board list rows; null when the navigator filed the item. */
   readonly filedBy?: FiledBy | null;
   readonly id: string;
+  /** The project's prefix and the item's number, `WEB-12` (spec §4.1). */
+  readonly key: string;
   readonly priority: Priority | null;
   readonly state: string;
   readonly title: string;
+  readonly type: WorkItemType;
   readonly updatedAt: string;
 }
 
@@ -81,7 +105,7 @@ export interface BoardClient {
   comments(itemId: string): Promise<readonly BoardComment[]>;
   create(
     projectId: string,
-    input: { description: string; title: string },
+    input: { description: string; title: string; type: WorkItemType },
   ): Promise<WorkItem>;
   history(itemId: string): Promise<readonly HistoryEntry[]>;
   item(itemId: string): Promise<WorkItem>;
