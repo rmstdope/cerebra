@@ -161,6 +161,77 @@ describe('database migrations', { concurrent: false }, () => {
     }
   });
 
+  test("introspects only the database's own schema", async () => {
+    const schema = await createSchema();
+    const otherSchema = await createSchema();
+    const database = createDatabase(databaseUrl, schema);
+    const pool = new Pool({ connectionString: databaseUrl });
+
+    try {
+      await pool.query(`CREATE TABLE "${schema}".own_table (id serial)`);
+      await pool.query(`CREATE TABLE "${otherSchema}".other_table (id serial)`);
+
+      const tables = await database.introspection.getTables({
+        withInternalKyselyTables: true,
+      });
+
+      expect(tables).toEqual([
+        expect.objectContaining({
+          columns: [
+            expect.objectContaining({
+              dataType: 'int4',
+              isAutoIncrementing: true,
+              name: 'id',
+            }),
+          ],
+          name: 'own_table',
+          schema,
+        }),
+      ]);
+    } finally {
+      await pool.end();
+      await database.destroy();
+      await dropSchema(otherSchema);
+      await dropSchema(schema);
+    }
+  });
+
+  test('reads its tables while other schemas are created and dropped', async () => {
+    const schema = await createSchema();
+    const database = createDatabase(databaseUrl, schema);
+    const pool = new Pool({ connectionString: databaseUrl });
+    let churning = true;
+
+    async function churn(): Promise<void> {
+      while (churning) {
+        const other = schemaName();
+        await pool.query(`CREATE SCHEMA "${other}"`);
+        await pool.query(`CREATE TABLE "${other}".churn (id serial)`);
+        await pool.query(`DROP SCHEMA "${other}" CASCADE`);
+      }
+    }
+
+    try {
+      await migrateToLatest(database, schema);
+      const churners = [churn(), churn()];
+
+      try {
+        for (let read = 0; read < 50; read += 1) {
+          await database.introspection.getTables({
+            withInternalKyselyTables: true,
+          });
+        }
+      } finally {
+        churning = false;
+        await Promise.all(churners);
+      }
+    } finally {
+      await pool.end();
+      await database.destroy();
+      await dropSchema(schema);
+    }
+  });
+
   test('refuses direct work-item writes that violate single-row invariants', async () => {
     const schema = await createSchema();
     const database = createDatabase(databaseUrl, schema);
