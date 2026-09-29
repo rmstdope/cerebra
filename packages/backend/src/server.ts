@@ -51,6 +51,21 @@ import {
   type ProjectRegistration,
 } from './projects.js';
 import type { RunnerGateway } from './runner-gateway.js';
+import {
+  AgentUnavailableError,
+  RunEndedError,
+  RunNotFoundError,
+  RunStartError,
+  type RunUpdate,
+  type Supervisor,
+} from './supervisor.js';
+import type { Conversation } from './runs.js';
+
+/** What the conversation routes need of the run supervisor. */
+export type ConversationControl = Pick<
+  Supervisor,
+  'answer' | 'read' | 'send' | 'stopRun' | 'subscribe'
+>;
 
 export interface ServerOptions {
   readonly auth: AuthService;
@@ -60,8 +75,10 @@ export interface ServerOptions {
   readonly instance?: InstanceService;
   readonly projects?: ProjectRegistration;
   readonly queue?: NavigatorQueue;
-  /** Absent until run supervision exists; starting or stopping then answers 503. */
+  /** Absent when no container engine is configured; starting or stopping then answers 503. */
   readonly runs?: RunControl;
+  /** Reads and feeds live conversations; absent alongside `runs`. */
+  readonly conversations?: ConversationControl;
   /** Serves `/runner`, authenticated by run token rather than the navigator's session. */
   readonly runnerGateway?: RunnerGateway;
   readonly uiDirectory?: string;
@@ -257,6 +274,7 @@ function deliveriesBody(
 export const createServer = async ({
   auth,
   board,
+  conversations,
   credentials,
   fleet,
   instance = createInstanceService(),
@@ -807,8 +825,13 @@ export const createServer = async ({
             .status(503)
             .send({ error: 'Cerebra can’t run agents yet.' });
         }
+        const { agentId } = request.params as { agentId: string };
         try {
-          await runs[action]((request.params as { agentId: string }).agentId);
+          if (action === 'start') {
+            const { runId } = await runs.start(agentId);
+            return reply.status(202).send({ runId });
+          }
+          await runs.stop(agentId);
           return reply.status(202).send({ ok: true });
         } catch (error) {
           return fleetError(reply, error);
@@ -816,6 +839,144 @@ export const createServer = async ({
       },
     );
   }
+
+  const conversationRoute = (
+    handler: (
+      control: ConversationControl,
+      runId: string,
+      request: FastifyRequest,
+      reply: FastifyReply,
+    ) => Promise<unknown>,
+  ) =>
+    async function route(request: FastifyRequest, reply: FastifyReply) {
+      if (conversations === undefined) {
+        return reply
+          .status(503)
+          .send({ error: 'Cerebra can’t run agents yet.' });
+      }
+      try {
+        return await handler(
+          conversations,
+          (request.params as { runId: string }).runId,
+          request,
+          reply,
+        );
+      } catch (error) {
+        return fleetError(reply, error);
+      }
+    };
+
+  server.get(
+    '/api/runs/:runId',
+    conversationRoute(async (control, runId, _request, reply) => {
+      const conversation = await control.read(runId);
+      if (conversation === null) {
+        throw new RunNotFoundError(runId);
+      }
+      return reply.send(conversationBody(conversation));
+    }),
+  );
+
+  server.post(
+    '/api/runs/:runId/messages',
+    conversationRoute(async (control, runId, request, reply) => {
+      const body = objectBody(request.body);
+      if (typeof body?.text !== 'string' || body.text.trim() === '') {
+        return reply.status(400).send({ error: 'Write a message.' });
+      }
+      await control.send(runId, body.text);
+      return reply.status(202).send({ ok: true });
+    }),
+  );
+
+  server.post(
+    '/api/runs/:runId/answers',
+    conversationRoute(async (control, runId, request, reply) => {
+      const body = objectBody(request.body);
+      const answers = objectBody(body?.answers);
+      if (
+        typeof body?.questionId !== 'string' ||
+        answers === null ||
+        Object.values(answers).some(
+          (answer) => typeof answer !== 'string' || answer.trim() === '',
+        ) ||
+        Object.keys(answers).length === 0
+      ) {
+        return reply.status(400).send({ error: 'Choose an answer.' });
+      }
+      await control.answer(
+        runId,
+        body.questionId,
+        answers as Record<string, string>,
+      );
+      return reply.status(202).send({ ok: true });
+    }),
+  );
+
+  server.post(
+    '/api/runs/:runId/stop',
+    conversationRoute(async (control, runId, _request, reply) => {
+      await control.stopRun(runId);
+      return reply.status(202).send({ ok: true });
+    }),
+  );
+
+  server.get(
+    '/ws/runs/:runId',
+    {
+      preValidation: (request, reply) => authorize(auth, request, reply),
+      websocket: true,
+    },
+    async (socket, request) => {
+      if (conversations === undefined) {
+        socket.close(1011, 'Cerebra can’t run agents yet.');
+        return;
+      }
+      const { runId } = request.params as { runId: string };
+      const after = Number(
+        new URL(request.url, 'http://localhost').searchParams.get('after') ?? 0,
+      );
+      let last = Number.isInteger(after) && after > 0 ? after : 0;
+      let replaying = true;
+      const held: RunUpdate[] = [];
+      const forward = (update: RunUpdate) => {
+        if (update.type === 'event') {
+          if (update.position <= last) return;
+          last = update.position;
+        }
+        socket.send(JSON.stringify(updateBody(update)));
+      };
+      const unsubscribe = conversations.subscribe(runId, (update) => {
+        if (replaying) {
+          held.push(update);
+        } else {
+          forward(update);
+        }
+      });
+      socket.on('close', unsubscribe);
+      try {
+        const conversation = await conversations.read(runId);
+        if (conversation === null) {
+          socket.close(4404, 'Conversation not found.');
+          return;
+        }
+        for (const record of conversation.events) {
+          forward({ type: 'event', ...record });
+        }
+        forward({
+          failure: conversation.run.failure,
+          state: conversation.run.state,
+          type: 'state',
+        });
+        for (const update of held.splice(0)) {
+          forward(update);
+        }
+        replaying = false;
+      } catch {
+        socket.close(1011, 'Cerebra couldn’t load this conversation.');
+      }
+    },
+  );
 
   if (uiDirectory !== undefined) {
     server.setNotFoundHandler((request, reply) => {
@@ -840,6 +1001,34 @@ export const startServer = async (
   return server;
 };
 
+function conversationBody({ events, run }: Conversation) {
+  return {
+    events: events.map((record) => updateBody({ type: 'event', ...record })),
+    run: {
+      agentId: run.agentId,
+      agentName: run.agentName,
+      agentRole: run.agentRole,
+      endedAt: run.endedAt?.toISOString() ?? null,
+      failure: run.failure,
+      id: run.id,
+      item: run.item,
+      startedAt: run.startedAt.toISOString(),
+      state: run.state,
+    },
+  };
+}
+
+function updateBody(update: RunUpdate) {
+  return update.type === 'event'
+    ? {
+        createdAt: update.createdAt.toISOString(),
+        event: update.event,
+        position: update.position,
+        type: 'event' as const,
+      }
+    : update;
+}
+
 function fleetError(reply: FastifyReply, error: unknown): FastifyReply {
   if (
     error instanceof ProjectNotFoundError ||
@@ -859,6 +1048,22 @@ function fleetError(reply: FastifyReply, error: unknown): FastifyReply {
     return reply
       .status(409)
       .send({ code: 'duplicate_name', error: error.message });
+  }
+  if (error instanceof RunNotFoundError) {
+    return reply.status(404).send({ error: 'Conversation not found.' });
+  }
+  if (error instanceof RunEndedError) {
+    return reply.status(409).send({ code: 'run_ended', error: error.message });
+  }
+  if (error instanceof AgentUnavailableError) {
+    return reply.status(409).send({ code: error.code, error: error.message });
+  }
+  if (error instanceof RunStartError) {
+    return reply.status(409).send({
+      code: 'start_failed',
+      error: error.message,
+      runId: error.runId,
+    });
   }
   if (error instanceof AgentHoldsWorkError) {
     return reply.status(409).send({ code: 'holds_work', error: error.message });
@@ -893,7 +1098,8 @@ function requiresAuthentication(url: string): boolean {
   const pathname = new URL(url, 'http://localhost').pathname;
   return (
     (pathname.startsWith('/api/') && !pathname.startsWith('/api/auth/')) ||
-    pathname === '/ws'
+    pathname === '/ws' ||
+    pathname.startsWith('/ws/')
   );
 }
 

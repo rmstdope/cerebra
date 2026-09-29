@@ -13,6 +13,12 @@ require_podman() {
   podman info >/dev/null 2>&1 || fail "The rootless Podman service is unavailable. Start your Podman machine, then try again."
 }
 
+# Agent containers join it by name; nothing else does, so compose does not create it.
+ensure_egress_network() {
+  podman network exists cerebro-egress || podman network create cerebro-egress >/dev/null ||
+    fail "Cerebra could not create the cerebro-egress network. Read the Podman output above, then try again."
+}
+
 run_compose() {
   podman compose --file "$compose_file" "$@"
 }
@@ -21,6 +27,7 @@ case "${1:-}" in
   start)
     require_podman
     [ -f .env ] || fail "Missing .env. Set a local POSTGRES_PASSWORD before starting Cerebra."
+    ensure_egress_network
     run_compose up --build --detach || fail "Cerebra could not start. Read the Podman output above, then try again."
     printf 'Cerebra is ready at http://localhost:4317.\n'
     ;;
@@ -31,6 +38,7 @@ case "${1:-}" in
   update)
     require_podman
     [ -f .env ] || fail "Missing .env. Set a local POSTGRES_PASSWORD before updating Cerebra."
+    ensure_egress_network
     printf 'Running work will stop. Updating restarts Cerebra; unfinished work returns to its queue.\n'
     run_compose up --build --detach || fail "Cerebra could not restart. Your data is still safe; read the Podman output above, then try again."
     printf 'Cerebra is ready at http://localhost:4317.\n'

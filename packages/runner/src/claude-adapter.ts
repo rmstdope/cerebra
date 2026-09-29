@@ -227,7 +227,12 @@ export function runClaude(context: {
   }
 
   async function drive(): Promise<ResultEnd> {
-    say(start.firstMessage);
+    if (start.firstMessage === '') {
+      // A conversation the navigator opened begins with their first message.
+      become('awaiting_input');
+    } else {
+      say(start.firstMessage);
+    }
     try {
       for await (const message of query) {
         if (stopping) {

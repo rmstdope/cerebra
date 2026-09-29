@@ -8,6 +8,7 @@ import {
 import type { Database } from './database.js';
 import {
   createWorkItem,
+  runEndedRequest,
   transition,
   type LifecycleContext,
   type LifecycleRole,
@@ -565,6 +566,45 @@ function toBoardWorkItem(row: {
     title: row.title,
     updatedAt: row.updated_at,
   };
+}
+
+/**
+ * Gives back the item a run held when it ended (spec §4.5), inside the caller's transaction: to
+ * its queue, or to the navigator once `max_attempts` is reached, with the run's last assistant
+ * message as a comment. Returns the item's new state, or `null` when the run held nothing.
+ */
+export async function releaseHeldItem(
+  database: Transaction<Database>,
+  runId: string,
+  options: { readonly lastMessage: string | null; readonly reason: string },
+): Promise<WorkItemState | null> {
+  const held = await database
+    .selectFrom('work_items')
+    .innerJoin('projects', 'projects.id', 'work_items.project_id')
+    .select(['work_items.id', 'projects.max_attempts'])
+    .where('work_items.holder_run_id', '=', runId)
+    .executeTakeFirst();
+  if (held === undefined) {
+    return null;
+  }
+  const current = await getLockedItem(database, held.id);
+  const request = runEndedRequest(current.item, {
+    maxAttempts: held.max_attempts,
+    reason: options.reason,
+  });
+  const result = transition(current.item, request, current.context);
+  if (!result.ok) {
+    throw new Error(result.reason);
+  }
+  await persistTransition(database, held.id, current.item, result, request);
+  const comment = options.lastMessage?.trim() ?? '';
+  if (comment !== '') {
+    await database
+      .insertInto('work_item_comments')
+      .values({ body: comment, work_item_id: held.id })
+      .execute();
+  }
+  return result.item.state;
 }
 
 async function getLockedItem(

@@ -13,8 +13,16 @@ import {
   type FleetRole,
   type FleetView,
   type RunControl,
+  AgentUnavailableError,
+  RunEndedError,
+  RunNotFoundError,
+  RunStartError,
+  type ConversationControl,
+  type Conversation,
+  type RunUpdate,
 } from '@cerebra/backend';
 import { afterEach, expect, test } from 'vitest';
+import { WebSocket } from 'ws';
 
 const servers: Array<{ close: () => Promise<void> }> = [];
 const auth = {
@@ -41,6 +49,8 @@ const storm: FleetPerson = {
   name: 'Storm',
   role: 'producer',
   running: false,
+  conversation: null,
+  startFailed: false,
   typeId: 'type-producer',
 };
 
@@ -276,6 +286,7 @@ test('starts and stops a person through run control', async () => {
   const server = await serve(fakeFleet(), {
     start: async (agentId) => {
       calls.push(`start ${agentId}`);
+      return { runId: 'run-1' };
     },
     stop: async (agentId) => {
       if (agentId === 'gone') {
@@ -299,6 +310,7 @@ test('starts and stops a person through run control', async () => {
   });
 
   expect(start.statusCode).toBe(202);
+  expect(start.json()).toEqual({ runId: 'run-1' });
   expect(stop.statusCode).toBe(202);
   expect(gone.statusCode).toBe(404);
   expect(calls).toEqual(['start agent-1', 'stop agent-1']);
@@ -320,4 +332,240 @@ test('the fleet requires a signed-in navigator', async () => {
   const response = await server.inject('/api/projects/project-1/fleet');
 
   expect(response.statusCode).toBe(401);
+});
+
+test('a start that fails or is refused answers 409 with its reason', async () => {
+  const server = await serve(fakeFleet(), {
+    start: async (agentId) => {
+      if (agentId === 'busy') {
+        throw new AgentUnavailableError(
+          'already_running',
+          'Astra is already running.',
+        );
+      }
+      throw new RunStartError('run-9', 'Astra couldn’t start.');
+    },
+    stop: async () => {},
+  });
+
+  const failed = await server.inject({
+    method: 'POST',
+    url: '/api/agents/agent-1/start',
+  });
+  const busy = await server.inject({
+    method: 'POST',
+    url: '/api/agents/busy/start',
+  });
+
+  expect(failed.statusCode).toBe(409);
+  expect(failed.json()).toEqual({
+    code: 'start_failed',
+    error: 'Astra couldn’t start.',
+    runId: 'run-9',
+  });
+  expect(busy.statusCode).toBe(409);
+  expect(busy.json()).toMatchObject({ code: 'already_running' });
+});
+
+const conversation: Conversation = {
+  events: [
+    {
+      createdAt: new Date('2026-10-01T10:14:00Z'),
+      event: { kind: 'user_message', text: 'Hello' },
+      position: 1,
+    },
+    {
+      createdAt: new Date('2026-10-01T10:14:05Z'),
+      event: { kind: 'message', text: 'Hi' },
+      position: 2,
+    },
+  ],
+  run: {
+    agentId: 'agent-1',
+    agentName: 'Astra',
+    agentRole: 'assistant',
+    containerId: 'container-1',
+    endedAt: null,
+    failure: null,
+    id: 'run-1',
+    item: null,
+    projectId: 'project-1',
+    role: 'assistant',
+    startFailed: false,
+    startedAt: new Date('2026-10-01T10:14:00Z'),
+    state: 'active',
+  },
+};
+
+function fakeConversations(
+  calls: string[],
+  listeners: Array<(update: RunUpdate) => void> = [],
+): ConversationControl {
+  const known = (runId: string) => {
+    if (runId === 'ended') throw new RunEndedError();
+    if (runId !== 'run-1') throw new RunNotFoundError(runId);
+  };
+  return {
+    answer: async (runId, questionId, answers) => {
+      known(runId);
+      calls.push(`answer ${questionId} ${JSON.stringify(answers)}`);
+    },
+    read: async (runId) => (runId === 'run-1' ? conversation : null),
+    send: async (runId, text) => {
+      known(runId);
+      calls.push(`send ${text}`);
+    },
+    stopRun: async (runId) => {
+      known(runId);
+      calls.push('stop');
+    },
+    subscribe: (_runId, listener) => {
+      listeners.push(listener);
+      return () => listeners.splice(listeners.indexOf(listener), 1);
+    },
+  };
+}
+
+async function serveConversations(control: ConversationControl) {
+  const server = await createServer({ auth, conversations: control });
+  servers.push(server);
+  return server;
+}
+
+test('reads a conversation, and answers 404 for one that does not exist', async () => {
+  const server = await serveConversations(fakeConversations([]));
+
+  const found = await server.inject('/api/runs/run-1');
+  const missing = await server.inject('/api/runs/other');
+
+  expect(found.statusCode).toBe(200);
+  expect(found.json()).toEqual({
+    events: [
+      {
+        createdAt: '2026-10-01T10:14:00.000Z',
+        event: { kind: 'user_message', text: 'Hello' },
+        position: 1,
+        type: 'event',
+      },
+      {
+        createdAt: '2026-10-01T10:14:05.000Z',
+        event: { kind: 'message', text: 'Hi' },
+        position: 2,
+        type: 'event',
+      },
+    ],
+    run: {
+      agentId: 'agent-1',
+      agentName: 'Astra',
+      agentRole: 'assistant',
+      endedAt: null,
+      failure: null,
+      id: 'run-1',
+      item: null,
+      startedAt: '2026-10-01T10:14:00.000Z',
+      state: 'active',
+    },
+  });
+  expect(missing.statusCode).toBe(404);
+  expect(missing.json()).toEqual({ error: 'Conversation not found.' });
+});
+
+test('messages, answers and stop reach the run, checked first', async () => {
+  const calls: string[] = [];
+  const server = await serveConversations(fakeConversations(calls));
+  const post = (url: string, payload?: unknown) =>
+    server.inject({ method: 'POST', payload: payload as object, url });
+
+  expect(
+    (await post('/api/runs/run-1/messages', { text: 'Hi' })).statusCode,
+  ).toBe(202);
+  expect(
+    (await post('/api/runs/run-1/messages', { text: '  ' })).json(),
+  ).toEqual({
+    error: 'Write a message.',
+  });
+  expect(
+    (
+      await post('/api/runs/run-1/answers', {
+        answers: { Which: 'This one' },
+        questionId: 'q-1',
+      })
+    ).statusCode,
+  ).toBe(202);
+  expect(
+    (await post('/api/runs/run-1/answers', { answers: {}, questionId: 'q-1' }))
+      .statusCode,
+  ).toBe(400);
+  expect((await post('/api/runs/run-1/stop')).statusCode).toBe(202);
+  const ended = await post('/api/runs/ended/messages', { text: 'Hi' });
+  expect(ended.statusCode).toBe(409);
+  expect(ended.json()).toEqual({
+    code: 'run_ended',
+    error: 'This conversation has ended.',
+  });
+  expect((await post('/api/runs/other/stop')).statusCode).toBe(404);
+  expect(calls).toEqual(['send Hi', 'answer q-1 {"Which":"This one"}', 'stop']);
+});
+
+test('the conversation socket replays events after a position, then streams live ones', async () => {
+  const listeners: Array<(update: RunUpdate) => void> = [];
+  const server = await serveConversations(fakeConversations([], listeners));
+  await server.ready();
+  const address = await server.listen({ host: '127.0.0.1', port: 0 });
+  const received: unknown[] = [];
+  const socket = new WebSocket(
+    `${address.replace('http', 'ws')}/ws/runs/run-1?after=1`,
+  );
+  socket.on('message', (value) => received.push(JSON.parse(value.toString())));
+  const arrived = async (count: number) => {
+    while (received.length < count) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  };
+
+  await arrived(2);
+  listeners[0]?.({
+    createdAt: new Date('2026-10-01T10:15:00Z'),
+    event: { kind: 'message', text: 'More' },
+    position: 3,
+    type: 'event',
+  });
+  listeners[0]?.({ failure: null, state: 'finished', type: 'state' });
+  await arrived(4);
+  socket.close();
+
+  expect(received).toEqual([
+    {
+      createdAt: '2026-10-01T10:14:05.000Z',
+      event: { kind: 'message', text: 'Hi' },
+      position: 2,
+      type: 'event',
+    },
+    { failure: null, state: 'active', type: 'state' },
+    {
+      createdAt: '2026-10-01T10:15:00.000Z',
+      event: { kind: 'message', text: 'More' },
+      position: 3,
+      type: 'event',
+    },
+    { failure: null, state: 'finished', type: 'state' },
+  ]);
+});
+
+test('the conversation socket and routes require a signed-in navigator', async () => {
+  const server = await createServer({
+    auth: {
+      ...auth,
+      status: async () => ({
+        reason: 'signed-out' as const,
+        state: 'unauthenticated' as const,
+      }),
+    },
+    conversations: fakeConversations([]),
+  });
+  servers.push(server);
+  await server.ready();
+
+  expect((await server.inject('/api/runs/run-1')).statusCode).toBe(401);
+  await expect(server.injectWS('/ws/runs/run-1')).rejects.toThrow();
 });

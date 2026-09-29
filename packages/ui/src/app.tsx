@@ -25,7 +25,10 @@ import type { BoardClient } from './board';
 import { NavigatorQueue, type WorkTab } from './navigator-queue';
 import { ProjectBoard } from './project-board';
 import type { FleetClient } from './fleet';
+import { ConversationPage } from './conversation-page';
 import { FleetPage } from './fleet-page';
+import { browserFleetClient } from './fleet';
+import { browserConversationClient, type ConversationClient } from './runs';
 import type { QueueClient } from './queue';
 import { AgentCredentialsPage, AgentTypesList } from './agent-credentials';
 import type { CredentialClient } from './credentials';
@@ -54,12 +57,17 @@ interface AppProps {
   fleetClient?: FleetClient;
   queueClient?: QueueClient;
   credentialClient?: CredentialClient;
+  conversationClient?: ConversationClient;
 }
 
 type SettingsRoute =
   | { readonly page: 'credentials' }
   | { readonly page: 'agents' }
   | { readonly page: 'agent'; readonly agentType: string };
+
+function conversationRoute(hash: string): string | null {
+  return /^#\/conversations\/([0-9a-f-]+)$/i.exec(hash)?.[1] ?? null;
+}
 
 function settingsRoute(hash: string): SettingsRoute | null {
   if (hash === '#/settings' || hash === '#/settings/credentials') {
@@ -112,6 +120,7 @@ export function App({
   fleetClient,
   queueClient,
   credentialClient,
+  conversationClient = browserConversationClient,
 }: AppProps): ReactNode {
   const [preference, setPreference] = useState<ThemePreference>(() =>
     getInitialPreference(storage),
@@ -147,6 +156,7 @@ export function App({
   const [hash, setHash] = useState(() => window.location.hash);
   const focusQueue = useRef(false);
   const settings = settingsRoute(hash);
+  const conversation = settings === null ? conversationRoute(hash) : null;
   const updateButton = useRef<HTMLButtonElement>(null);
   const items = useRef<Record<ThemePreference, HTMLDivElement | null>>({
     light: null,
@@ -659,6 +669,24 @@ export function App({
             />
           )}
         </main>
+      ) : conversation !== null ? (
+        <main className="mx-auto w-full max-w-255 px-5 py-6 sm:py-8">
+          <ConversationPage
+            client={conversationClient}
+            key={conversation}
+            onBack={() => {
+              setProjectView('fleet');
+              window.location.hash = '';
+            }}
+            onTryAgain={async (agentId) => {
+              const { runId } = await (fleetClient ?? browserFleetClient).start(
+                agentId,
+              );
+              window.location.hash = `#/conversations/${runId}`;
+            }}
+            runId={conversation}
+          />
+        </main>
       ) : (
         <main className="mx-auto w-full max-w-255 px-5 py-10 sm:py-14">
           <p className="text-xs font-extrabold uppercase tracking-widest text-[var(--accent)]">
@@ -721,6 +749,12 @@ export function App({
                   <FleetPage
                     client={fleetClient}
                     key={projectId}
+                    onOpenChat={(runId) => {
+                      window.location.hash = `#/conversations/${runId}`;
+                    }}
+                    onViewSetup={(person) => {
+                      window.location.hash = `#/settings/agents/${person.role}`;
+                    }}
                     onViewWork={(id) => {
                       setBoardRequest({ id, tab: 'overview' });
                       setReturnToFleet(true);

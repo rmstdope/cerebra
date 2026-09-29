@@ -1,4 +1,5 @@
 import {
+  act,
   cleanup,
   render,
   screen,
@@ -26,12 +27,14 @@ function person(
 ): FleetPerson {
   return {
     activity: { kind: 'available' },
+    conversation: null,
     enabled: true,
     id: `agent-${name.toLowerCase()}`,
     name,
     role,
     running:
       extra.activity !== undefined && extra.activity.kind !== 'available',
+    startFailed: false,
     typeId: `type-${role}`,
     ...extra,
   };
@@ -64,6 +67,7 @@ const fleet: FleetView = {
         kind: 'waiting',
         question: 'Storm asked which export format to support first.',
       },
+      conversation: { runId: 'run-storm', state: 'awaiting_input' },
     }),
     person('Magma', 'producer', {
       activity: {
@@ -104,7 +108,7 @@ function createClient(overrides: Partial<FleetClient> = {}): FleetClient {
       ...settings,
       typeId,
     }),
-    start: async () => undefined,
+    start: async () => ({ runId: 'run-new' }),
     stop: async () => undefined,
     updatePerson: async (agentId, changes) => ({
       ...(fleet.people.find((entry) => entry.id === agentId) ??
@@ -153,11 +157,13 @@ test('shows every person in stable order with the agreed words for their state',
   const astra = within(card('Astra'));
   expect(astra.getByText('Assistant')).toBeTruthy();
   expect(astra.getByText('Ready to talk')).toBeTruthy();
-  expect(astra.getByText('Start a conversation')).toBeTruthy();
   expect(
     astra.getByText('Ask about this project, file work, or request a release.'),
   ).toBeTruthy();
-  expect(astra.getByRole('button', { name: 'Open chat' })).toBeTruthy();
+  expect(
+    astra.getByRole('button', { name: 'Start a conversation' }),
+  ).toBeTruthy();
+  expect(astra.queryByRole('button', { name: 'Open chat' })).toBeNull();
 
   const storm = within(card('Storm'));
   expect(storm.getByText('Waiting for your answer')).toBeTruthy();
@@ -238,18 +244,30 @@ test('Open chat on a running assistant opens its conversation without starting a
     createClient({
       read: async () => ({
         ...fleet,
-        people: [person('Astra', 'assistant', { running: true })],
+        people: [
+          person('Astra', 'assistant', {
+            conversation: { runId: 'run-astra', state: 'active' },
+            running: true,
+          }),
+        ],
       }),
-      start: async (agentId) => void started.push(agentId),
+      start: async (agentId) => {
+        started.push(agentId);
+        return { runId: 'run-other' };
+      },
     }),
-    { onOpenChat: (entry) => opened.push(entry.id) },
+    { onOpenChat: (runId) => opened.push(runId) },
   );
 
   const astra = within(await screen.findByRole('article', { name: 'Astra' }));
-  expect(astra.getByText('Ready to talk')).toBeTruthy();
+  expect(astra.getByText('Working now')).toBeTruthy();
+  expect(
+    astra.queryByRole('button', { name: 'Start a conversation' }),
+  ).toBeNull();
+  expect(astra.getByRole('button', { name: 'Stop' })).toBeTruthy();
   await userEvent.click(astra.getByRole('button', { name: 'Open chat' }));
   expect(started).toEqual([]);
-  expect(opened).toEqual(['agent-astra']);
+  expect(opened).toEqual(['run-astra']);
 });
 
 test('several waiting people are counted and Open chat opens the first of them', async () => {
@@ -262,6 +280,7 @@ test('several waiting people are counted and Open chat opens the first of them',
         kind: 'waiting',
         question: `${name} has a question.`,
       },
+      conversation: { runId: `run-${name}`, state: 'awaiting_input' },
     });
   renderFleet(
     createClient({
@@ -269,9 +288,12 @@ test('several waiting people are counted and Open chat opens the first of them',
         ...fleet,
         people: [waiting('Storm'), waiting('Rogue')],
       }),
-      start: async (agentId) => void started.push(agentId),
+      start: async (agentId) => {
+        started.push(agentId);
+        return { runId: 'run-other' };
+      },
     }),
-    { onOpenChat: (entry) => opened.push(entry.id) },
+    { onOpenChat: (runId) => opened.push(runId) },
   );
   const notice = await screen.findByRole('status');
 
@@ -280,7 +302,7 @@ test('several waiting people are counted and Open chat opens the first of them',
     within(notice).getByRole('button', { name: 'Open chat' }),
   );
   expect(started).toEqual([]);
-  expect(opened).toEqual(['agent-storm']);
+  expect(opened).toEqual(['run-Storm']);
   expect(notice.textContent).not.toContain('is waiting for an answer');
 });
 
@@ -401,20 +423,94 @@ test('a refused start names the person and the reason', async () => {
   expect(alert.textContent).toContain('Cerebra can’t run agents yet.');
 });
 
-test('Open chat hands the person to the conversation once started', async () => {
+test('Start a conversation opens the new conversation once it has started', async () => {
   const opened: string[] = [];
-  renderFleet(createClient(), {
-    onOpenChat: (chosen) => opened.push(chosen.name),
-  });
+  let finish: (value: { runId: string }) => void = () => undefined;
+  const started: string[] = [];
+  renderFleet(
+    createClient({
+      start: (agentId) => {
+        started.push(agentId);
+        return new Promise((resolve) => {
+          finish = resolve;
+        });
+      },
+    }),
+    { onOpenChat: (runId) => opened.push(runId) },
+  );
+  const astra = within(await screen.findByRole('article', { name: 'Astra' }));
 
   await userEvent.click(
-    within(await screen.findByRole('article', { name: 'Astra' })).getByRole(
-      'button',
-      { name: 'Open chat' },
-    ),
+    astra.getByRole('button', { name: 'Start a conversation' }),
   );
 
-  await waitFor(() => expect(opened).toEqual(['Astra']));
+  expect(astra.getByText('Starting…')).toBeTruthy();
+  expect(
+    astra.queryByRole('button', { name: 'Start a conversation' }),
+  ).toBeNull();
+  expect(started).toEqual(['agent-astra']);
+  expect(opened).toEqual([]);
+  await act(async () => finish({ runId: 'run-astra' }));
+  expect(opened).toEqual(['run-astra']);
+});
+
+test('a conversation that cannot start is shown on that card only', async () => {
+  let attempts = 0;
+  const setups: string[] = [];
+  const opened: string[] = [];
+  renderFleet(
+    createClient({
+      start: async () => {
+        attempts += 1;
+        if (attempts === 1) {
+          throw new FleetRequestError('Astra couldn’t start.', null);
+        }
+        return { runId: 'run-astra' };
+      },
+    }),
+    {
+      onOpenChat: (runId) => opened.push(runId),
+      onViewSetup: (chosen) => setups.push(chosen.role),
+    },
+  );
+  const article = await screen.findByRole('article', { name: 'Astra' });
+  const astra = within(article);
+
+  await userEvent.click(
+    astra.getByRole('button', { name: 'Start a conversation' }),
+  );
+
+  const alert = await astra.findByRole('alert');
+  expect(alert.textContent).toContain('Astra couldn’t start.');
+  expect(alert.textContent).toContain(
+    'Nothing was sent. Try again, or check the assistant’s setup.',
+  );
+  expect(screen.getAllByRole('alert')).toEqual([alert]);
+  expect(opened).toEqual([]);
+
+  await userEvent.click(astra.getByRole('button', { name: 'View setup' }));
+  expect(setups).toEqual(['assistant']);
+
+  await userEvent.click(astra.getByRole('button', { name: 'Try again' }));
+  await waitFor(() => expect(opened).toEqual(['run-astra']));
+  expect(astra.queryByRole('alert')).toBeNull();
+});
+
+test('a start that failed before this visit is still shown on the card', async () => {
+  renderFleet(
+    createClient({
+      read: async () => ({
+        ...fleet,
+        people: [person('Astra', 'assistant', { startFailed: true })],
+      }),
+    }),
+  );
+
+  const astra = within(await screen.findByRole('article', { name: 'Astra' }));
+  expect((await astra.findByRole('alert')).textContent).toContain(
+    'Astra couldn’t start.',
+  );
+  expect(astra.getByRole('button', { name: 'Try again' })).toBeTruthy();
 });
 
 test('View work opens the held item', async () => {

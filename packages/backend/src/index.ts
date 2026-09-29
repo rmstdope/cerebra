@@ -1,6 +1,12 @@
 export const packageName = '@cerebra/backend';
 
-export { createDatabase, type Database } from './database.js';
+export {
+  createDatabase,
+  liveRunStates,
+  type Database,
+  type LiveRunState,
+  type RunState,
+} from './database.js';
 export {
   agentRoles,
   agentTypesDirectory,
@@ -177,4 +183,26 @@ export {
   type RunnerGatewayOptions,
   type RunnerListener,
 } from './runner-gateway.js';
-export { createServer, startServer } from './server.js';
+export {
+  createRunStore,
+  type Conversation,
+  type RunEventRecord,
+  type RunRecord,
+  type RunStore,
+} from './runs.js';
+export {
+  AgentUnavailableError,
+  createSupervisor,
+  directoryPreparer,
+  RunEndedError,
+  RunNotFoundError,
+  RunStartError,
+  type RunUpdate,
+  type Supervisor,
+  type SupervisorOptions,
+} from './supervisor.js';
+export {
+  createServer,
+  startServer,
+  type ConversationControl,
+} from './server.js';

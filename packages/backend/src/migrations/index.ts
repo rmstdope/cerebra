@@ -9,11 +9,11 @@ import type { Database } from '../database.js';
 
 const migrationFolder = path.dirname(fileURLToPath(import.meta.url));
 
-export async function migrateToLatest(
+function migrator(
   database: import('kysely').Kysely<Database>,
-  schema?: string,
-): Promise<readonly MigrationResult[]> {
-  const migrator = new Migrator({
+  schema: string | undefined,
+): Migrator {
+  return new Migrator({
     db: database,
     migrationTableSchema: schema,
     provider: new FileMigrationProvider({
@@ -22,7 +22,28 @@ export async function migrateToLatest(
       path,
     }),
   });
-  const { error, results } = await migrator.migrateToLatest();
+}
+
+export async function migrateToLatest(
+  database: import('kysely').Kysely<Database>,
+  schema?: string,
+): Promise<readonly MigrationResult[]> {
+  const { error, results } = await migrator(database, schema).migrateToLatest();
+
+  if (error) {
+    throw error;
+  }
+
+  return results ?? [];
+}
+
+/** Migrates to a named migration; tests use it to check what a later migration does to old rows. */
+export async function migrateTo(
+  database: import('kysely').Kysely<Database>,
+  name: string,
+  schema?: string,
+): Promise<readonly MigrationResult[]> {
+  const { error, results } = await migrator(database, schema).migrateTo(name);
 
   if (error) {
     throw error;

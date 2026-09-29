@@ -322,6 +322,38 @@ export function transition(
   };
 }
 
+/**
+ * What the backend asks for when the run holding `item` ends without moving it (spec §4.5): back
+ * to its queue with one more attempt, or, when that attempt reaches `maxAttempts`, to the
+ * navigator as an escalation that returns to the same queue.
+ */
+export function runEndedRequest(
+  item: WorkItem,
+  options: { readonly maxAttempts: number; readonly reason: string },
+): TransitionRequest {
+  const queue = queueForWorkingState[item.state];
+  if (queue === undefined) {
+    throw new Error(`A ${item.state} item is not held by a run.`);
+  }
+  const actor = {
+    role: 'backend',
+    ...(item.holderRunId === null ? {} : { runId: item.holderRunId }),
+  };
+  if (item.attempts + 1 >= options.maxAttempts) {
+    return {
+      actor,
+      reason: options.reason,
+      to: 'waiting',
+      waiting: {
+        kind: 'escalation',
+        reason: options.reason,
+        returnState: queue,
+      },
+    };
+  }
+  return { actor, reason: options.reason, to: queue };
+}
+
 function findRule(
   item: WorkItem,
   request: TransitionRequest,
@@ -450,10 +482,13 @@ function isValidWaitingRequest(
 }
 
 function nextAttempts(item: WorkItem, request: TransitionRequest): number {
-  return request.actor.role === 'backend' &&
-    queueForWorkingState[item.state] === request.to
-    ? item.attempts + 1
-    : item.attempts;
+  const queue = queueForWorkingState[item.state];
+  const runEnded =
+    request.actor.role === 'backend' &&
+    queue !== undefined &&
+    (request.to === queue ||
+      (request.to === 'waiting' && request.waiting?.kind === 'escalation'));
+  return runEnded ? item.attempts + 1 : item.attempts;
 }
 
 function nextPriority(

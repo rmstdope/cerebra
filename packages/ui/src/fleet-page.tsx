@@ -33,7 +33,7 @@ interface Filters {
 const filtersKey = 'cerebra.fleet.filters';
 const noFilters: Filters = { role: '', status: '' };
 
-const roleNames: Record<AgentRole, string> = {
+export const roleNames: Record<AgentRole, string> = {
   assistant: 'Assistant',
   bugfixer: 'Bug fixer',
   designer: 'Designer',
@@ -375,8 +375,11 @@ function PersonCard({
   onOpenChat,
   onStart,
   onStop,
+  onViewSetup,
   onViewWork,
   person,
+  startFailed,
+  starting,
   startMode,
 }: {
   readonly onMenu: (
@@ -386,8 +389,12 @@ function PersonCard({
   readonly onOpenChat: () => void;
   readonly onStart: () => void;
   readonly onStop: (trigger: HTMLElement) => void;
+  readonly onViewSetup: () => void;
   readonly onViewWork: (itemId: string) => void;
   readonly person: FleetPerson;
+  /** The person's last start failed; shown on this card only. */
+  readonly startFailed: boolean;
+  readonly starting: boolean;
   readonly startMode: StartMode | null;
 }): ReactNode {
   const menuTrigger = useRef<HTMLButtonElement>(null);
@@ -455,13 +462,51 @@ function PersonCard({
     heading = 'No work in hand';
     detail = `Won’t start until you enable ${person.name}.`;
     actions = null;
+  } else if (
+    interactive &&
+    (starting || person.conversation?.state === 'starting')
+  ) {
+    statusText = 'Starting…';
+    heading = 'Start a conversation';
+    detail = 'Ask about this project, file work, or request a release.';
+    actions = null;
+  } else if (interactive && person.conversation !== null) {
+    statusText =
+      person.conversation.state === 'awaiting_input'
+        ? 'Waiting for your answer'
+        : 'Working now';
+    heading = 'No work in hand';
+    detail = null;
+    actions = (
+      <>
+        <button className={link} onClick={onOpenChat} type="button">
+          Open chat
+        </button>
+        <button
+          className={link}
+          onClick={(event) => onStop(event.currentTarget)}
+          type="button"
+        >
+          Stop
+        </button>
+      </>
+    );
   } else if (interactive) {
     statusText = 'Ready to talk';
     heading = 'Start a conversation';
     detail = 'Ask about this project, file work, or request a release.';
-    actions = (
-      <button className={link} onClick={onOpenChat} type="button">
-        Open chat
+    actions = startFailed ? (
+      <>
+        <button className={link} onClick={onStart} type="button">
+          Try again
+        </button>
+        <button className={link} onClick={onViewSetup} type="button">
+          View setup
+        </button>
+      </>
+    ) : (
+      <button className={link} onClick={onStart} type="button">
+        Start a conversation
       </button>
     );
   } else if (person.running) {
@@ -568,6 +613,17 @@ function PersonCard({
         {statusText}
       </p>
       <div className="border-t border-[var(--border)] px-4 pb-4 pt-3 text-sm text-[var(--muted)]">
+        {startFailed && interactive && actions !== null && !person.running ? (
+          <div
+            className="mb-3 rounded-lg border border-[var(--danger)] bg-red-50 p-2.5 text-[var(--danger)] dark:bg-red-950"
+            role="alert"
+          >
+            <p className="font-bold">{`${person.name} couldn’t start.`}</p>
+            <p className="mt-1">
+              Nothing was sent. Try again, or check the assistant’s setup.
+            </p>
+          </div>
+        ) : null}
         <p className="break-words font-bold text-[var(--foreground)]">
           {heading}
         </p>
@@ -591,14 +647,17 @@ type Editing =
 export function FleetPage({
   client = browserFleetClient,
   onOpenChat,
+  onViewSetup,
   onViewWork,
   projectId,
   refreshIntervalMs = 15_000,
   storage: storageOverride,
 }: {
   readonly client?: FleetClient;
-  /** Called once a person's conversation has been started. */
-  readonly onOpenChat?: (person: FleetPerson) => void;
+  /** Opens a live conversation, once started when it had to be. */
+  readonly onOpenChat?: (runId: string) => void;
+  /** Opens the setup of a person's role. */
+  readonly onViewSetup?: (person: FleetPerson) => void;
   readonly onViewWork?: (itemId: string) => void;
   readonly projectId: string;
   readonly refreshIntervalMs?: number;
@@ -668,11 +727,16 @@ export function FleetPage({
         : previous,
     );
 
-  const startPerson = async (person: FleetPerson, chat: boolean) => {
+  const [starting, setStarting] = useState<ReadonlySet<string>>(new Set());
+  /** A start's outcome on this visit, which overrides what the last read said. */
+  const [startOutcomes, setStartOutcomes] = useState<
+    Readonly<Record<string, 'failed' | 'started'>>
+  >({});
+
+  const startPerson = async (person: FleetPerson) => {
     setProblem(null);
     try {
       await client.start(person.id);
-      if (chat) onOpenChat?.(person);
       void load();
     } catch (error) {
       setProblem({
@@ -682,14 +746,36 @@ export function FleetPage({
     }
   };
 
-  const openChat = (person: FleetPerson) => {
-    if (person.running) {
-      setProblem(null);
-      onOpenChat?.(person);
-      return;
+  const startConversation = async (person: FleetPerson) => {
+    if (starting.has(person.id)) return;
+    setProblem(null);
+    setStarting((previous) => new Set(previous).add(person.id));
+    try {
+      const { runId } = await client.start(person.id);
+      setStartOutcomes((previous) => ({ ...previous, [person.id]: 'started' }));
+      onOpenChat?.(runId);
+      void load();
+    } catch {
+      setStartOutcomes((previous) => ({ ...previous, [person.id]: 'failed' }));
+    } finally {
+      setStarting((previous) => {
+        const next = new Set(previous);
+        next.delete(person.id);
+        return next;
+      });
     }
-    void startPerson(person, true);
   };
+
+  const openChat = (person: FleetPerson) => {
+    setProblem(null);
+    if (person.conversation !== null) {
+      onOpenChat?.(person.conversation.runId);
+    }
+  };
+
+  const startFailed = (person: FleetPerson) =>
+    (startOutcomes[person.id] ??
+      (person.startFailed ? 'failed' : 'started')) === 'failed';
 
   const closeConfirmation = () => {
     const trigger = confirmation?.trigger;
@@ -1119,12 +1205,19 @@ export function FleetPage({
                       void onMenu(person, action, trigger)
                     }
                     onOpenChat={() => openChat(person)}
-                    onStart={() => void startPerson(person, false)}
+                    onStart={() =>
+                      void ((startModes.get(person.typeId) ?? null) === null
+                        ? startConversation(person)
+                        : startPerson(person))
+                    }
+                    onViewSetup={() => onViewSetup?.(person)}
                     onStop={(trigger) =>
                       setConfirmation({ kind: 'stop', person, trigger })
                     }
                     onViewWork={(itemId) => onViewWork?.(itemId)}
                     person={person}
+                    startFailed={startFailed(person)}
+                    starting={starting.has(person.id)}
                     startMode={startModes.get(person.typeId) ?? null}
                   />
                 ))}

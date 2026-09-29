@@ -223,7 +223,7 @@ describe('the fleet', { concurrent: false }, () => {
 
       await database
         .updateTable('runs')
-        .set({ status: 'ended' })
+        .set({ status: 'finished' })
         .where('id', '=', runId)
         .execute();
       expect(
@@ -260,6 +260,56 @@ describe('the fleet', { concurrent: false }, () => {
       await expect(fleet.removeAgent(storm?.id ?? '')).rejects.toBeInstanceOf(
         AgentHoldsWorkError,
       );
+    });
+  });
+
+  test('a person shows their live conversation, and a start that failed until the next start', async () => {
+    await withFleet(async ({ database, fleet }) => {
+      const projectId = await registerProject(database);
+      const cerebro = (await fleet.read(projectId)).people.find(
+        (person) => person.name === 'Cerebro',
+      );
+      expect(cerebro).toMatchObject({ conversation: null, startFailed: false });
+      const failedRun = crypto.randomUUID();
+      await database
+        .insertInto('runs')
+        .values({
+          agent_id: cerebro?.id,
+          created_at: new Date(Date.now() - 60_000),
+          id: failedRun,
+          project_id: projectId,
+          role: 'assistant',
+          start_failed: true,
+          status: 'failed',
+        })
+        .execute();
+      const cerebroNow = async () =>
+        (await fleet.read(projectId)).people.find(
+          (person) => person.name === 'Cerebro',
+        );
+      expect(await cerebroNow()).toMatchObject({
+        conversation: null,
+        running: false,
+        startFailed: true,
+      });
+
+      const liveRun = crypto.randomUUID();
+      await database
+        .insertInto('runs')
+        .values({
+          agent_id: cerebro?.id,
+          id: liveRun,
+          project_id: projectId,
+          role: 'assistant',
+          status: 'awaiting_input',
+        })
+        .execute();
+
+      expect(await cerebroNow()).toMatchObject({
+        conversation: { runId: liveRun, state: 'awaiting_input' },
+        running: true,
+        startFailed: false,
+      });
     });
   });
 

@@ -28,12 +28,19 @@ export type AgentActivity =
 
 export interface FleetPerson {
   readonly activity: AgentActivity;
+  /** The person's live run, if any; open it to talk to them. */
+  readonly conversation: {
+    readonly runId: string;
+    readonly state: 'active' | 'awaiting_input' | 'starting';
+  } | null;
   readonly enabled: boolean;
   readonly id: string;
   readonly name: string;
   readonly role: AgentRole;
   /** True while the person has a live run, whether or not it holds work. */
   readonly running: boolean;
+  /** True when the person's most recent run in this project failed to start. */
+  readonly startFailed: boolean;
   readonly typeId: string;
 }
 
@@ -73,7 +80,8 @@ export interface FleetClient {
     typeId: string,
     settings: RoleSettings,
   ): Promise<FleetRole>;
-  start(agentId: string): Promise<void>;
+  /** Starts a run; failures reject with the reason. */
+  start(agentId: string): Promise<{ readonly runId: string }>;
   stop(agentId: string): Promise<void>;
   updatePerson(
     agentId: string,
@@ -130,9 +138,8 @@ export const browserFleetClient: FleetClient = {
       `/api/projects/${projectId}/roles/${typeId}`,
       jsonBody('PUT', settings),
     ),
-  start: async (agentId) => {
-    await send(`/api/agents/${agentId}/start`, { method: 'POST' });
-  },
+  start: (agentId) =>
+    request(`/api/agents/${agentId}/start`, { method: 'POST' }),
   stop: async (agentId) => {
     await send(`/api/agents/${agentId}/stop`, { method: 'POST' });
   },
