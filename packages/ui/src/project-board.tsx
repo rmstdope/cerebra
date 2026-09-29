@@ -46,7 +46,7 @@ const emptyFilters: BoardFilters = {
   state: '',
 };
 
-const routes: readonly {
+export const routes: readonly {
   readonly description: string;
   readonly label: string;
   readonly value: BoardRoute;
@@ -140,11 +140,17 @@ function isFiltered(filters: BoardFilters): boolean {
 export function ProjectBoard({
   arrivalsIntervalMs = 30_000,
   boardClient = browserBoardClient,
+  openRequest = null,
   projectId,
   storage: storageOverride,
 }: {
   readonly arrivalsIntervalMs?: number;
   readonly boardClient?: BoardClient;
+  /** Opens an item from elsewhere, such as the navigator queue; a new object reopens it. */
+  readonly openRequest?: {
+    readonly id: string;
+    readonly tab: 'discussion' | 'overview';
+  } | null;
   readonly projectId: string;
   readonly storage?: BoardStorage;
 }): ReactNode {
@@ -468,6 +474,21 @@ export function ProjectBoard({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
+
+  const openFromRequest = useRef<
+    (request: NonNullable<typeof openRequest>) => void
+  >(() => undefined);
+  openFromRequest.current = (request) => {
+    openItem(request.id);
+    if (request.tab === 'discussion') {
+      setTab('discussion');
+      void readComments(request.id);
+    }
+    boardHeading.current?.focus();
+  };
+  useEffect(() => {
+    if (openRequest !== null) openFromRequest.current(openRequest);
+  }, [openRequest]);
 
   const updateFilters = (change: Partial<BoardFilters>) =>
     setFilters((current) => ({ ...current, ...change }));

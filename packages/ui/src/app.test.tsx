@@ -1,7 +1,15 @@
 import { App, type ThemeMediaQuery } from './app';
 import type { AuthClient } from './auth';
+import type { BoardClient, WorkItem } from './board';
+import type { QueueClient } from './queue';
 import { AuthenticationRequiredError } from './instance';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { act } from 'react';
 import { afterEach, describe, expect, test, vi } from 'vitest';
@@ -38,6 +46,12 @@ class FakeMediaQuery implements ThemeMediaQuery {
 }
 
 afterEach(cleanup);
+
+const emptyQueue: QueueClient = {
+  answer: async () => undefined,
+  decide: async () => undefined,
+  list: async () => ({ entries: [], total: 0 }),
+};
 
 const authenticatedAuth: AuthClient = {
   setup: async () => undefined,
@@ -88,7 +102,7 @@ describe('App', () => {
     expect(screen.getByText('Update Cerebra')).toBeTruthy();
 
     screen.getByRole('button', { name: 'Theme: System' });
-    await user.keyboard('{Tab}{ArrowDown}');
+    await user.keyboard('{Tab}{Tab}{ArrowDown}');
 
     expect(screen.getByRole('menu')).toBeTruthy();
     await waitFor(() => {
@@ -242,6 +256,7 @@ describe('App', () => {
 
     render(
       <App
+        queueClient={emptyQueue}
         authClient={{
           ...authenticatedAuth,
           signOut: async () => {
@@ -262,5 +277,110 @@ describe('App', () => {
     expect(screen.getByRole('alert').textContent).toBe(
       'Cerebra couldn’t sign you out. Try again.',
     );
+  });
+  test('opens the navigator queue first, counts it and views work on its board', async () => {
+    const user = userEvent.setup();
+    const storage = new Map<string, string>([['cerebra.project', 'project-9']]);
+    const item: WorkItem = {
+      createdAt: '2026-09-29T00:00:00.000Z',
+      description: '',
+      id: 'item-1',
+      priority: null,
+      state: 'waiting',
+      title: 'Which release should we support?',
+      updatedAt: '2026-09-29T00:00:00.000Z',
+    };
+    const listed: string[] = [];
+    const unused = async () => {
+      throw new Error('Not exercised');
+    };
+    const boardClient: BoardClient = {
+      addComment: unused,
+      arrivals: async () => 0,
+      cancel: unused,
+      comments: async () => [],
+      create: unused,
+      history: async () => [],
+      item: async () => item,
+      list: async (projectId) => {
+        listed.push(projectId);
+        return { items: [item], nextCursor: null, snapshot: '1', total: 1 };
+      },
+      triage: unused,
+    };
+    const queueClient: QueueClient = {
+      answer: unused,
+      decide: unused,
+      list: async () => ({
+        entries: [
+          {
+            askedBy: 'Groomer',
+            availableRoutes: ['build_ready'],
+            description: '',
+            id: 'item-1',
+            kind: 'question',
+            priority: 'P1',
+            projectId: 'project-1',
+            projectName: 'acme/mobile',
+            since: '2026-09-29T00:00:00.000Z',
+            title: 'Which release should we support?',
+            waitingReason: 'Current app only?',
+          },
+        ],
+        total: 1,
+      }),
+    };
+
+    render(
+      <App
+        authClient={authenticatedAuth}
+        boardClient={boardClient}
+        instanceClient={{
+          getStatus: async () => ({
+            address: 'http://localhost:4317',
+            lastUpdatedAt: '2026-09-28T20:00:00.000Z',
+            status: 'running',
+            version: '0.0.0',
+          }),
+          update: async () => undefined,
+        }}
+        mediaQuery={new FakeMediaQuery(false)}
+        queueClient={queueClient}
+        storage={{
+          getItem: (key) => storage.get(key) ?? null,
+          setItem: (key, value) => storage.set(key, value),
+        }}
+      />,
+    );
+
+    const queueLink = await screen.findByRole('link', {
+      name: 'Navigator queue 1',
+    });
+    expect(document.title).toBe('(1) Cerebra');
+    const headings = screen
+      .getAllByRole('heading', { level: 2 })
+      .map((heading) => heading.textContent);
+    expect(headings.indexOf('What needs you')).toBeLessThan(
+      headings.indexOf('Project board'),
+    );
+    await user.click(queueLink);
+    expect(document.activeElement).toBe(
+      screen.getByRole('heading', { name: 'What needs you' }),
+    );
+
+    await user.click(
+      await screen.findByRole('button', { name: /Which release should/ }),
+    );
+    await user.click(screen.getByRole('button', { name: 'Open conversation' }));
+
+    expect(storage.get('cerebra.project')).toBe('project-1');
+    await waitFor(() => expect(listed).toContain('project-1'));
+    const board = screen.getByRole('region', { name: 'Project board' });
+    expect(
+      await within(board).findByRole('tab', {
+        name: 'Discussion',
+        selected: true,
+      }),
+    ).toBeTruthy();
   });
 });
