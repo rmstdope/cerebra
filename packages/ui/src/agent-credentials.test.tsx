@@ -9,8 +9,9 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, expect, test } from 'vitest';
 
 import { AgentCredentialsPage, AgentTypesList } from './agent-credentials';
-import type {
-  AgentCredentialDelivery,
+import {
+  CredentialRequestError,
+  type AgentCredentialDelivery,
   AgentCredentialSettings,
   CredentialClient,
 } from './credentials';
@@ -422,4 +423,80 @@ test('explains a failed read rather than listing nothing', async () => {
     ),
   ).toBeTruthy();
   expect(screen.queryByRole('button', { name: 'Save changes' })).toBeNull();
+});
+
+test('treats any casing of the reserved prefix as already used', async () => {
+  render(
+    <AgentCredentialsPage
+      agentType="producer"
+      client={client()}
+      projectId="p1"
+    />,
+  );
+  await screen.findByRole('listitem', { name: 'Deploy key' });
+  await userEvent.click(screen.getByRole('button', { name: 'Add credential' }));
+  const dialog = screen.getByRole('dialog');
+  await userEvent.type(
+    within(dialog).getByLabelText('Variable name'),
+    'cerebra_token',
+  );
+  await userEvent.click(
+    within(dialog).getByRole('button', { name: 'Add credential' }),
+  );
+
+  expect(
+    within(dialog).getByText(
+      '“cerebra_token” is already used. Choose a different name or change the existing credential.',
+    ),
+  ).toBeTruthy();
+});
+
+test('names a destination the server finds already used', async () => {
+  render(
+    <AgentCredentialsPage
+      agentType="producer"
+      client={client({
+        setAgentCredentials: async () => {
+          throw new CredentialRequestError(
+            'refused',
+            'duplicate_destination',
+            'DEPLOY_KEY',
+          );
+        },
+      })}
+      projectId="p1"
+    />,
+  );
+  await userEvent.click(
+    await screen.findByRole('button', { name: 'Change Deploy key' }),
+  );
+  await userEvent.click(
+    screen.getByRole('button', { name: 'Remove from this agent' }),
+  );
+  await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+  expect(
+    await screen.findByText(
+      '“DEPLOY_KEY” is already used. Choose a different name or change the existing credential.',
+    ),
+  ).toBeTruthy();
+});
+
+test('offers the agreed actions when changing a credential', async () => {
+  render(
+    <AgentCredentialsPage
+      agentType="producer"
+      client={client()}
+      projectId="p1"
+    />,
+  );
+  await userEvent.click(
+    await screen.findByRole('button', { name: 'Change Deploy key' }),
+  );
+  const dialog = screen.getByRole('dialog');
+
+  expect(
+    within(dialog).getByRole('button', { name: 'Add credential' }),
+  ).toBeTruthy();
+  expect(within(dialog).queryByRole('button', { name: /Update/ })).toBeNull();
 });

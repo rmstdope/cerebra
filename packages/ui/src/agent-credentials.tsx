@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   agentTypeName,
   browserCredentialClient,
+  CredentialRequestError,
   type AgentCredentialEntry,
   type AgentCredentialSettings,
   type CredentialClient,
@@ -46,11 +47,16 @@ function destinationProblem(
   }
   if (
     taken.includes(destination) ||
-    (delivery === 'environment' && destination.startsWith('CEREBRA_'))
+    (delivery === 'environment' &&
+      destination.toUpperCase().startsWith('CEREBRA_'))
   ) {
-    return `“${destination}” is already used. Choose a different name or change the existing credential.`;
+    return alreadyUsed(destination);
   }
   return null;
+}
+
+function alreadyUsed(destination: string): string {
+  return `“${destination}” is already used. Choose a different name or change the existing credential.`;
 }
 
 export function AgentTypesList(): ReactNode {
@@ -102,6 +108,7 @@ export function AgentCredentialsPage({
   const [loadFailed, setLoadFailed] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveFailed, setSaveFailed] = useState(false);
+  const [usedDestination, setUsedDestination] = useState<string | null>(null);
   const [dialog, setDialog] = useState<DialogState | null>(null);
   const addButton = useRef<HTMLButtonElement>(null);
 
@@ -127,6 +134,7 @@ export function AgentCredentialsPage({
   async function save(): Promise<void> {
     setSaving(true);
     setSaveFailed(false);
+    setUsedDestination(null);
     try {
       const next = await client.setAgentCredentials(
         projectId,
@@ -141,8 +149,15 @@ export function AgentCredentialsPage({
       );
       setLoaded(next);
       setDraft(next.entries);
-    } catch {
+    } catch (error) {
       setSaveFailed(true);
+      if (
+        error instanceof CredentialRequestError &&
+        error.code === 'duplicate_destination' &&
+        error.destination !== null
+      ) {
+        setUsedDestination(error.destination);
+      }
     } finally {
       setSaving(false);
     }
@@ -276,6 +291,11 @@ export function AgentCredentialsPage({
                 <p className="text-[var(--danger)]">
                   Couldn’t save these credentials. Your choices are still here.
                 </p>
+                {usedDestination !== null ? (
+                  <p className="mt-1 text-sm text-[var(--danger)]">
+                    {alreadyUsed(usedDestination)}
+                  </p>
+                ) : null}
                 <button
                   className="secondary-button mt-3"
                   onClick={() => void save()}
@@ -292,6 +312,7 @@ export function AgentCredentialsPage({
                 onClick={() => {
                   setDraft(loaded.entries);
                   setSaveFailed(false);
+                  setUsedDestination(null);
                 }}
                 type="button"
               >
@@ -514,7 +535,7 @@ function DeliveryDialog({
             disabled={credentialName === '' || destination.trim() === ''}
             type="submit"
           >
-            {entry === null ? 'Add credential' : 'Update credential'}
+            Add credential
           </button>
         </div>
       </form>

@@ -653,3 +653,84 @@ test('counts several problems and names every one, including a missing one', asy
     screen.queryByRole('menuitem', { name: 'Remove credential' }),
   ).toBeNull();
 });
+
+test('keeps focus on the control that opened the panel after saving', async () => {
+  let rows: CredentialRow[] = [];
+  render(
+    <CredentialsPage
+      client={client({
+        overview: async () => overview({ projectCredentials: rows }),
+        save: async ({ name }) => {
+          rows = [row({ name })];
+          return { name, replaced: rows.length > 0 };
+        },
+      })}
+      projectId="p1"
+      storage={memoryStorage()}
+    />,
+  );
+  await screen.findByText('No credentials saved for this project');
+  const [toolbarAdd, emptyAdd] = screen.getAllByRole('button', {
+    name: 'Add credential',
+  });
+
+  await userEvent.click(emptyAdd);
+  await userEvent.type(screen.getByLabelText('Name'), 'Deploy key');
+  await userEvent.type(screen.getByLabelText('Credential value'), 'v1');
+  await userEvent.click(
+    screen.getByRole('button', { name: 'Save credential' }),
+  );
+
+  const manage = await screen.findByRole('button', {
+    name: 'Manage Deploy key',
+  });
+  await waitFor(() => expect(document.activeElement).toBe(toolbarAdd));
+
+  await userEvent.click(manage);
+  await userEvent.click(
+    await screen.findByRole('menuitem', { name: 'Replace credential' }),
+  );
+  await waitFor(() =>
+    expect(document.activeElement).toBe(
+      screen.getByLabelText('Credential value'),
+    ),
+  );
+  await userEvent.type(screen.getByLabelText('Credential value'), 'v2');
+  await userEvent.click(
+    screen.getByRole('button', { name: 'Save credential' }),
+  );
+
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  await waitFor(() => expect(document.activeElement).toBe(manage));
+});
+
+test('names who cannot start even when no agent type uses the credential', async () => {
+  render(
+    <CredentialsPage
+      client={client({
+        overview: async () =>
+          overview({
+            attention: [
+              {
+                agentTypes: [],
+                everyAgent: false,
+                name: 'Old key',
+                scope: 'instance',
+              },
+            ],
+            instanceCredentials: [
+              row({ name: 'Old key', needsAttention: true, scope: 'instance' }),
+            ],
+          }),
+      })}
+      projectId="p1"
+      storage={memoryStorage()}
+    />,
+  );
+
+  expect(
+    await screen.findByText(
+      'Agents cannot start until “Old key” is replaced or removed from their setup.',
+    ),
+  ).toBeTruthy();
+});

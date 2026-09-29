@@ -89,9 +89,10 @@ function usedBy(row: CredentialRow): ReactNode {
 }
 
 function attentionSentence(entry: CredentialAttention): string {
-  const who = entry.everyAgent
-    ? 'Agents'
-    : joinWithAnd(entry.agentTypes.map((type) => agentTypeName(type, true)));
+  const who =
+    entry.everyAgent || entry.agentTypes.length === 0
+      ? 'Agents'
+      : joinWithAnd(entry.agentTypes.map((type) => agentTypeName(type, true)));
   return `${who} cannot start until “${entry.name}” is replaced or removed from their setup.`;
 }
 
@@ -119,6 +120,7 @@ export function CredentialsPage({
   const list = useRef<HTMLUListElement>(null);
   const keepButton = useRef<HTMLButtonElement>(null);
   const menuAction = useRef<(() => void) | null>(null);
+  const refocusAfterSave = useRef(false);
 
   useEffect(() => {
     if (removing !== null) {
@@ -126,9 +128,11 @@ export function CredentialsPage({
     }
   }, [removing]);
 
-  async function load(): Promise<void> {
+  async function load(refresh = false): Promise<void> {
     setLoadFailed(false);
-    setData(null);
+    if (!refresh) {
+      setData(null);
+    }
     try {
       setData(await client.overview(projectId));
     } catch {
@@ -163,6 +167,17 @@ export function CredentialsPage({
     }
     setFocusTarget(null);
   }, [focusTarget, data, tab]);
+
+  useEffect(() => {
+    if (!refocusAfterSave.current || data === null) {
+      return;
+    }
+    refocusAfterSave.current = false;
+    // The empty state's button leaves once the first credential is listed.
+    if (returnFocus.current?.isConnected !== true) {
+      addButton.current?.focus();
+    }
+  }, [data]);
 
   function chooseTab(next: CredentialScope): void {
     setChosenTab(next);
@@ -203,7 +218,7 @@ export function CredentialsPage({
     try {
       await client.remove(row.id);
       setNotice(`“${row.name}” removed.`);
-      await load();
+      await load(true);
       setFocusTarget({ index: Math.max(index, 0) });
     } catch {
       setNotice(`Couldn’t remove “${row.name}”. Try again.`);
@@ -475,7 +490,8 @@ export function CredentialsPage({
           onSaved={(name, replaced) => {
             setNotice(`“${name}” ${replaced ? 'replaced' : 'saved'}.`);
             closePanel();
-            void load();
+            refocusAfterSave.current = true;
+            void load(true);
           }}
           projectId={projectId}
           projectName={projectName}
