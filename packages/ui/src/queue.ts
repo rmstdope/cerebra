@@ -11,6 +11,8 @@ export interface QueueEntry {
   readonly priority: Priority | null;
   readonly projectId: string;
   readonly projectName: string;
+  /** The live run whose question this is; null for a work item. */
+  readonly run: { readonly id: string } | null;
   readonly since: string;
   readonly title: string;
   readonly waitingReason: string | null;
