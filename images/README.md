@@ -30,12 +30,12 @@ The main container runs agents only when `CEREBRA_PODMAN_SOCKET` names the mount
 and `CEREBRA_PROJECT_TOKEN_KEY` lets it read credentials; otherwise starting an agent answers that
 Cerebra can't run agents yet. The other settings, with the values compose gives them:
 
-| Variable | Value | What it is |
-|---|---|---|
-| `CEREBRA_DATA_VOLUME` | `cerebra-data` | The volume mounted at `/data`; agent mounts are subpaths of it. |
-| `CEREBRA_INTERNAL_NETWORK` | `cerebro-internal` | Joins the main container and agents only. |
-| `CEREBRA_EGRESS_NETWORK` | `cerebro-egress` | Agents' way out; `./cerebra start` creates it. |
-| `CEREBRA_GATEWAY_URL` | `ws://main:4317/runner` | Where a runner reaches the backend. |
+| Variable                   | Value                   | What it is                                                      |
+| -------------------------- | ----------------------- | --------------------------------------------------------------- |
+| `CEREBRA_DATA_VOLUME`      | `cerebra-data`          | The volume mounted at `/data`; agent mounts are subpaths of it. |
+| `CEREBRA_INTERNAL_NETWORK` | `cerebro-internal`      | Joins the main container and agents only.                       |
+| `CEREBRA_EGRESS_NETWORK`   | `cerebro-egress`        | Agents' way out; `./cerebra start` creates it.                  |
+| `CEREBRA_GATEWAY_URL`      | `ws://main:4317/runner` | Where a runner reaches the backend.                             |
 
 Postgres sits on a separate `database` network, so agents cannot reach it. The data volume is
 named `cerebra-data` exactly, because the engine mounts it by that name; an instance created before
