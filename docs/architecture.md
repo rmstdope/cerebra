@@ -358,8 +358,9 @@ one WebSocket per open view: run events for a chat, item changes for a board. Po
 owns every run, so a chat's socket (`/ws/runs/:id?after=n`) replays the recorded events after `n`
 and then receives the supervisor's in-process updates once each event is committed; `LISTEN/NOTIFY`
 is needed only when more than one process writes. Agent output is rendered as text:
-no raw HTML from an agent reaches the page, and a strict Content-Security-Policy is the second
-layer.
+no raw HTML from an agent reaches the page, and a strict Content-Security-Policy on every response
+is the second layer: scripts, connections and everything else only from the page's own origin, no
+framing, no plugins. Styles also allow inline, because Radix's scroll lock injects a `<style>`.
 
 React with Vite, using shadcn/ui with Radix primitives and Tailwind CSS (D44, D45). Component
 source is maintained in `packages/ui`; detailed screens and wording are agreed in UX sessions.
