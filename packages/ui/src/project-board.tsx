@@ -393,6 +393,7 @@ export function ProjectBoard({
     setSaveRetry(null);
     try {
       replaceItem(await boardClient.cancel(id));
+      if (shownItem.current !== id) return;
       // Closing the detail keeps the row reachable on a narrow window too.
       closePanel();
     } catch {
