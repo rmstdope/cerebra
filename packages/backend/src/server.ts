@@ -10,6 +10,10 @@ import { join } from 'node:path';
 import { type AuthService, type AuthenticationResult } from './auth.js';
 import type { Backups } from './backups.js';
 import {
+  InvolvementInputError,
+  type InvolvementSettings,
+} from './involvement.js';
+import {
   boardRoutes,
   boardSorts,
   ProjectNotFoundError,
@@ -98,6 +102,8 @@ export interface ServerOptions {
   readonly uiDirectory?: string;
   /** The automatic-start pause and the run limits. */
   readonly startSettings?: StartSettings;
+  /** How closely the navigator follows each project's builders (spec §4.9). */
+  readonly involvement?: InvolvementSettings;
   /** Explains waiting work; absent when no container engine is configured. */
   readonly dispatcher?: Pick<Dispatcher, 'status'>;
   /** The scheduled database backups; absent when no backup folder is configured. */
@@ -341,6 +347,7 @@ export const createServer = async ({
   mcp,
   uiDirectory = process.env.CEREBRA_UI_DIR,
   startSettings,
+  involvement,
   dispatcher,
   onMutation,
   attention,
@@ -1242,6 +1249,48 @@ export const createServer = async ({
     '/api/settings/limits',
     startSettingsRoute(async (settings, _params, request) =>
       settings.setInstanceLimit(objectBody(request.body)?.instanceLimit),
+    ),
+  );
+
+  const involvementRoute =
+    (
+      handler: (
+        settings: InvolvementSettings,
+        projectId: string,
+        request: FastifyRequest,
+      ) => Promise<unknown>,
+    ) =>
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      if (involvement === undefined) {
+        return reply
+          .status(503)
+          .send({ error: 'Involvement settings are unavailable.' });
+      }
+      const { projectId } = request.params as { projectId: string };
+      try {
+        return await handler(involvement, projectId, request);
+      } catch (error) {
+        if (error instanceof ProjectNotFoundError) {
+          return reply.status(404).send({ error: error.message });
+        }
+        if (error instanceof InvolvementInputError) {
+          return reply
+            .status(400)
+            .send({ code: 'invalid_involvement', error: error.message });
+        }
+        throw error;
+      }
+    };
+
+  server.get(
+    '/api/projects/:projectId/involvement',
+    involvementRoute(async (settings, projectId) => settings.get(projectId)),
+  );
+
+  server.put(
+    '/api/projects/:projectId/involvement',
+    involvementRoute(async (settings, projectId, request) =>
+      settings.set(projectId, request.body),
     ),
   );
 

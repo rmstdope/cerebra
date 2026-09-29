@@ -29,6 +29,7 @@ import { createRunnerGateway } from './runner-gateway.js';
 import { createRunStore } from './runs.js';
 import { createMcpEndpoint } from './mcp.js';
 import { createServer } from './server.js';
+import { createInvolvementSettings } from './involvement.js';
 import { createStartSettings } from './start-settings.js';
 import { createSupervisor, directoryPreparer } from './supervisor.js';
 import { createDispatcher, type Dispatcher } from './dispatcher.js';
@@ -196,6 +197,7 @@ try {
       mergeWatcher?.nudge();
     },
     startSettings: createStartSettings(database),
+    involvement: createInvolvementSettings(database),
     uiDirectory: new URL('../../ui/dist', import.meta.url).pathname,
   });
   server.addHook('onClose', async () => {

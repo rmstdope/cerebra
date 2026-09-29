@@ -204,6 +204,7 @@ export interface Database {
     github_token_iv: Generated<string>;
     github_token_tag: Generated<string>;
     id: string;
+    involvement: Generated<string>;
     item_sequence: Generated<string>;
     key_prefix: Generated<string>;
     max_attempts: Generated<number>;
@@ -212,6 +213,7 @@ export interface Database {
     name: string;
     owner: Generated<string>;
     remote: Generated<string>;
+    review_account: string | null;
     verify_enabled: Generated<boolean>;
   };
 }
