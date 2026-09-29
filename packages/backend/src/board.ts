@@ -151,6 +151,8 @@ export interface Board {
   ): Promise<TransitionResult>;
 }
 
+export const filingLockKey = 7_294_130_001;
+
 export function createBoard(database: Kysely<Database>): Board {
   return {
     async addComment(itemId, body) {
@@ -194,23 +196,31 @@ export function createBoard(database: Kysely<Database>): Board {
       await assertProjectExists(database, projectId);
       const item = createWorkItem({ priority, state });
 
-      await database
-        .insertInto('work_items')
-        .values({
-          id,
-          project_id: projectId,
-          state: item.state,
-          description,
-          title,
-          priority: item.priority,
-          holder_run_id: item.holderRunId,
-          waiting_kind: item.waitingKind,
-          waiting_reason: item.waitingReason,
-          return_state: item.returnState,
-          attempts: item.attempts,
-          rounds: item.rounds,
-        })
-        .execute();
+      await database.transaction().execute(async (transaction) => {
+        // Filing is serialised so filed_sequence order is commit order; a
+        // list snapshot (the highest sequence it saw) then never skips an
+        // item that commits later with a lower sequence.
+        await sql`select pg_advisory_xact_lock(${filingLockKey})`.execute(
+          transaction,
+        );
+        await transaction
+          .insertInto('work_items')
+          .values({
+            id,
+            project_id: projectId,
+            state: item.state,
+            description,
+            title,
+            priority: item.priority,
+            holder_run_id: item.holderRunId,
+            waiting_kind: item.waitingKind,
+            waiting_reason: item.waitingReason,
+            return_state: item.returnState,
+            attempts: item.attempts,
+            rounds: item.rounds,
+          })
+          .execute();
+      });
     },
 
     async listWorkItems(projectId, query = {}) {

@@ -32,6 +32,7 @@ interface Remote<T> {
 }
 
 interface ListState {
+  readonly filters: BoardFilters;
   readonly items: readonly WorkItem[];
   readonly nextCursor: string | null;
   readonly snapshot: string;
@@ -90,6 +91,8 @@ function filtersKey(projectId: string): string {
   return `cerebra.board.${projectId}`;
 }
 
+const storedPriorities: readonly string[] = ['P0', 'P1', 'P2', 'P3', 'none'];
+
 function readFilters(storage: BoardStorage, projectId: string): BoardFilters {
   try {
     const stored = JSON.parse(
@@ -98,7 +101,8 @@ function readFilters(storage: BoardStorage, projectId: string): BoardFilters {
     if (stored === null || typeof stored !== 'object') return emptyFilters;
     return {
       priority:
-        typeof stored.priority === 'string'
+        typeof stored.priority === 'string' &&
+        storedPriorities.includes(stored.priority)
           ? stored.priority
           : emptyFilters.priority,
       search: typeof stored.search === 'string' ? stored.search : '',
@@ -106,7 +110,11 @@ function readFilters(storage: BoardStorage, projectId: string): BoardFilters {
         stored.sort === 'oldest' || stored.sort === 'priority'
           ? stored.sort
           : 'newest',
-      state: typeof stored.state === 'string' ? stored.state : '',
+      state:
+        typeof stored.state === 'string' &&
+        (workItemStates as readonly string[]).includes(stored.state)
+          ? stored.state
+          : '',
     };
   } catch {
     return emptyFilters;
@@ -175,6 +183,8 @@ export function ProjectBoard({
   const cancelControl = useRef<HTMLButtonElement>(null);
   const dialogHeading = useRef<HTMLHeadingElement>(null);
   const listRequest = useRef(0);
+  const shownItem = useRef<string | null>(null);
+  const boardHeading = useRef<HTMLHeadingElement>(null);
 
   const loadList = useCallback(
     async (current: BoardFilters) => {
@@ -184,7 +194,7 @@ export function ProjectBoard({
       try {
         const next = await boardClient.list(projectId, current);
         if (request !== listRequest.current) return;
-        setList(next);
+        setList({ ...next, filters: current });
         setArrivals(0);
         setMoreError(false);
       } catch {
@@ -208,20 +218,24 @@ export function ProjectBoard({
   }, [filters, loadList, projectId, storage]);
 
   const snapshot = list?.snapshot ?? null;
+  const listedFilters = list?.filters ?? null;
   useEffect(() => {
-    if (snapshot === null) return;
+    if (snapshot === null || listedFilters === null) return;
     const timer = window.setInterval(() => {
       boardClient
-        .arrivals(projectId, filters, snapshot)
+        .arrivals(projectId, listedFilters, snapshot)
         .then(setArrivals)
         .catch(() => undefined);
     }, arrivalsIntervalMs);
     return () => window.clearInterval(timer);
-  }, [arrivalsIntervalMs, boardClient, filters, projectId, snapshot]);
+  }, [arrivalsIntervalMs, boardClient, listedFilters, projectId, snapshot]);
 
   useEffect(() => {
     if (focusTarget === null) return;
-    if (focusTarget.kind === 'row') rows.current.get(focusTarget.id)?.focus();
+    if (focusTarget.kind === 'row') {
+      // A row outside the loaded page or filter falls back to the heading.
+      (rows.current.get(focusTarget.id) ?? boardHeading.current)?.focus();
+    }
     if (focusTarget.kind === 'cancel') cancelControl.current?.focus();
     if (focusTarget.kind === 'dialog') dialogHeading.current?.focus();
     setFocusTarget(null);
@@ -251,8 +265,9 @@ export function ProjectBoard({
     setItemRead((current) => ({ ...current, error: false, loading: true }));
     try {
       const item = await boardClient.item(id);
-      replaceItem(item);
+      if (shownItem.current === id) replaceItem(item);
     } catch {
+      if (shownItem.current !== id) return;
       setItemRead((current) => ({ ...current, error: true, loading: false }));
     }
   };
@@ -260,12 +275,11 @@ export function ProjectBoard({
   const readComments = async (id: string) => {
     setComments((current) => ({ ...current, error: false, loading: true }));
     try {
-      setComments({
-        data: await boardClient.comments(id),
-        error: false,
-        loading: false,
-      });
+      const data = await boardClient.comments(id);
+      if (shownItem.current !== id) return;
+      setComments({ data, error: false, loading: false });
     } catch {
+      if (shownItem.current !== id) return;
       setComments((current) => ({ ...current, error: true, loading: false }));
     }
   };
@@ -273,12 +287,11 @@ export function ProjectBoard({
   const readHistory = async (id: string) => {
     setHistory((current) => ({ ...current, error: false, loading: true }));
     try {
-      setHistory({
-        data: await boardClient.history(id),
-        error: false,
-        loading: false,
-      });
+      const data = await boardClient.history(id);
+      if (shownItem.current !== id) return;
+      setHistory({ data, error: false, loading: false });
     } catch {
+      if (shownItem.current !== id) return;
       setHistory((current) => ({ ...current, error: true, loading: false }));
     }
   };
@@ -299,6 +312,7 @@ export function ProjectBoard({
   const openItem = (id: string) => {
     resetDetail();
     setNotice(null);
+    shownItem.current = id;
     setPanel({ kind: 'item', id });
     void readItem(id);
   };
@@ -306,12 +320,14 @@ export function ProjectBoard({
   const openDraft = () => {
     resetDetail();
     setNotice(null);
+    shownItem.current = null;
     setPanel({ kind: 'draft' });
   };
 
   const closePanel = () => {
     const id = selectedId;
     resetDetail();
+    shownItem.current = null;
     setPanel({ kind: 'none' });
     if (id !== null) setFocusTarget({ kind: 'row', id });
   };
@@ -335,6 +351,7 @@ export function ProjectBoard({
       setTitle('');
       setDescription('');
       resetDetail();
+      shownItem.current = item.id;
       setPanel({ kind: 'item', id: item.id });
       setItemRead({ data: item, error: false, loading: false });
       setNotice('Work item added. It is ready for you to review.');
@@ -376,8 +393,8 @@ export function ProjectBoard({
     setSaveRetry(null);
     try {
       replaceItem(await boardClient.cancel(id));
-      setConfirming(false);
-      setFocusTarget({ kind: 'row', id });
+      // Closing the detail keeps the row reachable on a narrow window too.
+      closePanel();
     } catch {
       setConfirming(false);
       setSaveRetry(() => () => void cancel());
@@ -391,7 +408,9 @@ export function ProjectBoard({
     setSaving(true);
     setSaveRetry(null);
     try {
-      const added = await boardClient.addComment(selectedId, comment.trim());
+      const id = selectedId;
+      const added = await boardClient.addComment(id, comment.trim());
+      if (shownItem.current !== id) return;
       setComments((current) => ({
         ...current,
         data: [...(current.data ?? []), added],
@@ -409,13 +428,13 @@ export function ProjectBoard({
     setLoadingMore(true);
     setMoreError(false);
     try {
-      const next = await boardClient.list(projectId, filters, {
+      const next = await boardClient.list(projectId, list.filters, {
         cursor: list.nextCursor,
         snapshot: list.snapshot,
       });
       setList((current) =>
         current === null
-          ? next
+          ? { ...next, filters: list.filters }
           : {
               ...current,
               items: [...current.items, ...next.items],
@@ -453,12 +472,17 @@ export function ProjectBoard({
     setFilters((current) => ({ ...current, ...change }));
 
   return (
-    <main className="mx-auto w-full max-w-320 px-5 py-10 sm:py-14">
+    <section aria-labelledby="project-board-heading" className="mt-10">
       <div className="flex flex-col justify-between gap-5 sm:flex-row sm:items-end">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">
+          <h2
+            className="text-3xl font-bold tracking-tight sm:text-4xl"
+            id="project-board-heading"
+            ref={boardHeading}
+            tabIndex={-1}
+          >
             Project board
-          </h1>
+          </h2>
           <p className="mt-1 text-[var(--muted)]">
             See what is waiting, in progress and finished.
           </p>
@@ -735,7 +759,7 @@ export function ProjectBoard({
           )}
         </section>
       </div>
-    </main>
+    </section>
   );
 }
 

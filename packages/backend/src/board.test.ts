@@ -3,6 +3,7 @@ import { describe, expect, test } from 'vitest';
 
 import {
   createBoard,
+  filingLockKey,
   ProjectNotFoundError,
   WorkItemNotFoundError,
 } from './board.js';
@@ -43,6 +44,42 @@ async function dropSchema(schema: string): Promise<void> {
 }
 
 describe('board lifecycle mutations', { concurrent: false }, () => {
+  test('files work in commit order so a list snapshot never skips an item', async () => {
+    const schema = await createSchema();
+    const database = createDatabase(databaseUrl, schema);
+    const board = createBoard(database);
+    const projectId = crypto.randomUUID();
+    const itemId = crypto.randomUUID();
+    const pool = new Pool({ connectionString: databaseUrl });
+    const holder = await pool.connect();
+
+    try {
+      await migrateToLatest(database, schema);
+      await board.createProject({ id: projectId, name: 'Test project' });
+      await holder.query('BEGIN');
+      await holder.query('SELECT pg_advisory_xact_lock($1)', [filingLockKey]);
+
+      let filed = false;
+      const filing = board
+        .createWorkItem({ id: itemId, projectId, title: 'Waits its turn' })
+        .then(() => {
+          filed = true;
+        });
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      expect(filed).toBe(false);
+      await holder.query('COMMIT');
+      await filing;
+      const page = await board.listWorkItems(projectId);
+      expect(page.items.map((item) => item.id)).toEqual([itemId]);
+    } finally {
+      holder.release();
+      await pool.end();
+      await database.destroy();
+      await dropSchema(schema);
+    }
+  });
+
   test('files, reads and triages work without treating its history as empty', async () => {
     const schema = await createSchema();
     const database = createDatabase(databaseUrl, schema);

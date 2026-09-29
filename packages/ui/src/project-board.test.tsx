@@ -374,6 +374,7 @@ test('confirms cancellation with managed focus', async () => {
   const row = await screen.findByRole('button', {
     name: /Show the board.*Cancelled/,
   });
+  expect(screen.queryByRole('heading', { name: 'Show the board' })).toBeNull();
   await waitFor(() => expect(document.activeElement).toBe(row));
 });
 
@@ -517,4 +518,111 @@ test('announces matching arrivals without moving the list until refreshed', asyn
   expect(
     await screen.findByRole('button', { name: /Arrived later/ }),
   ).toBeTruthy();
+});
+
+test('sits inside the application page as a section under its heading', async () => {
+  renderBoard(createClient());
+
+  expect(
+    await screen.findByRole('heading', { level: 2, name: 'Project board' }),
+  ).toBeTruthy();
+  expect(screen.queryByRole('main')).toBeNull();
+});
+
+test('ignores a late read for an item that is no longer selected', async () => {
+  const user = userEvent.setup();
+  const other = { ...workItem, id: 'item-2', title: 'Other item' };
+  let releaseFirst: () => void = () => undefined;
+  renderBoard(
+    createClient({
+      history: async (itemId) => {
+        if (itemId === 'item-2') return [];
+        await new Promise<void>((resolve) => {
+          releaseFirst = resolve;
+        });
+        return [
+          {
+            actorRole: 'navigator',
+            createdAt: '2026-09-29T00:00:00.000Z',
+            fromState: 'new',
+            reason: null,
+            toState: 'build_ready',
+          },
+        ];
+      },
+      item: async (itemId) => (itemId === 'item-2' ? other : workItem),
+      list: async () => page([workItem, other]),
+    }),
+  );
+
+  await openItem();
+  await user.click(screen.getByRole('tab', { name: 'History' }));
+  await openItem('Other item');
+  await user.click(screen.getByRole('tab', { name: 'History' }));
+  expect(
+    await screen.findByText('No changes have been recorded yet.'),
+  ).toBeTruthy();
+  releaseFirst();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  expect(screen.queryByText('Needs triage → Build ready')).toBeNull();
+  expect(screen.getByText('No changes have been recorded yet.')).toBeTruthy();
+  expect(screen.getByRole('heading', { name: 'Other item' })).toBeTruthy();
+});
+
+test('drops remembered filters that are no longer valid', async () => {
+  const storage = memoryStorage();
+  storage.setItem(
+    'cerebra.board.project-1',
+    JSON.stringify({
+      priority: 'P9',
+      search: 'zebra',
+      sort: 'oldest',
+      state: 'renamed_state',
+    }),
+  );
+  const requests: BoardFilters[] = [];
+  renderBoard(
+    createClient({
+      list: async (_projectId, filters) => {
+        requests.push(filters);
+        return page([]);
+      },
+    }),
+    storage,
+  );
+
+  await screen.findByText('No work items match these filters.');
+  expect(requests[0]).toEqual({
+    priority: '',
+    search: 'zebra',
+    sort: 'oldest',
+    state: '',
+  });
+});
+
+test('loads more with the filters the list was loaded with', async () => {
+  const user = userEvent.setup();
+  const more: BoardFilters[] = [];
+  renderBoard(
+    createClient({
+      list: async (_projectId, filters, next) => {
+        if (next === undefined) {
+          return page([workItem], { nextCursor: '1', snapshot: '9', total: 2 });
+        }
+        more.push(filters);
+        return page([], { snapshot: '9', total: 2 });
+      },
+    }),
+  );
+
+  const button = await screen.findByRole('button', {
+    name: 'Show more work items',
+  });
+  await user.type(
+    screen.getByRole('searchbox', { name: 'Search work items' }),
+    'z',
+  );
+  await user.click(button);
+  await waitFor(() => expect(more.length).toBe(1));
+  expect(more[0]?.search).toBe('');
 });

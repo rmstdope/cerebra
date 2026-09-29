@@ -529,7 +529,11 @@ export function App({
           Your private workspace is available only on this computer.
         </p>
         {projectId !== null ? (
-          <ProjectBoard projectId={projectId} storage={storage} />
+          <ProjectBoard
+            key={projectId}
+            projectId={projectId}
+            storage={storage}
+          />
         ) : (
           <div className="mt-7">
             <ProjectRegistration
