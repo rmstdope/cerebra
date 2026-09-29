@@ -19,7 +19,7 @@ import {
   type Fleet,
 } from './fleet.js';
 import { migrateToLatest } from './migrations/index.js';
-import { createProjectStore } from './project-registration.js';
+import { createProjectStore, listProjects } from './project-registration.js';
 import type { Kysely } from 'kysely';
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -93,6 +93,22 @@ const defaultPeople = [
 ];
 
 describe('the fleet', { concurrent: false }, () => {
+  test('lists registered projects from persistent storage without encrypted credentials', async () => {
+    await withFleet(async ({ database }) => {
+      expect(await listProjects(database)).toEqual([]);
+      const id = await registerProject(database);
+      expect(await listProjects(database)).toEqual([
+        {
+          id,
+          name: 'website',
+          owner: 'acme',
+          prefix: 'WEB',
+          defaultBranch: 'main',
+          remote: 'https://github.com/acme/website.git',
+        },
+      ]);
+    });
+  });
   test('seeding twice keeps an edited type rather than overwriting it', async () => {
     await withFleet(async ({ database, definitions, fleet }) => {
       await database

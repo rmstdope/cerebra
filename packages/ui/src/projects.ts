@@ -22,12 +22,21 @@ export interface ProjectClient {
   }): Promise<RegisteredProject>;
 }
 
+export interface ProjectDirectoryClient {
+  list(): Promise<readonly RegisteredProject[]>;
+}
+
 async function responseError(response: Response): Promise<Error> {
   const body = (await response.json()) as { error?: string };
   return new Error(body.error ?? 'Cerebra couldn’t add this project');
 }
 
-export const browserProjectClient: ProjectClient = {
+export const browserProjectClient: ProjectClient & ProjectDirectoryClient = {
+  async list() {
+    const response = await fetch('/api/projects');
+    if (!response.ok) throw await responseError(response);
+    return (await response.json()) as RegisteredProject[];
+  },
   async discover(input) {
     const response = await fetch('/api/projects/discover', {
       body: JSON.stringify(input),

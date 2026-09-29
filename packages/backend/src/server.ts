@@ -49,6 +49,7 @@ import {
   InvalidProjectUrlError,
   ProjectMirrorError,
   type ProjectRegistration,
+  type Project,
 } from './projects.js';
 import type { RunnerGateway } from './runner-gateway.js';
 import {
@@ -74,6 +75,7 @@ export interface ServerOptions {
   readonly fleet?: Fleet;
   readonly instance?: InstanceService;
   readonly projects?: ProjectRegistration;
+  readonly listProjects?: () => Promise<readonly Project[]>;
   readonly queue?: NavigatorQueue;
   /** Absent when no container engine is configured; starting or stopping then answers 503. */
   readonly runs?: RunControl;
@@ -279,6 +281,7 @@ export const createServer = async ({
   fleet,
   instance = createInstanceService(),
   projects,
+  listProjects,
   queue,
   runs,
   runnerGateway,
@@ -330,6 +333,31 @@ export const createServer = async ({
     status: 'running' as const,
     ...instance.getStatus(),
   }));
+
+  server.get('/api/projects', async (request, reply) => {
+    if (listProjects === undefined) {
+      return reply
+        .status(503)
+        .send({ error: 'Cerebra couldn’t load your projects. Try again.' });
+    }
+    try {
+      return (await listProjects()).map(
+        ({ id, owner, name, prefix, defaultBranch, remote }) => ({
+          id,
+          owner,
+          name,
+          prefix,
+          defaultBranch,
+          remote,
+        }),
+      );
+    } catch {
+      request.log.error('Could not read projects from the database.');
+      return reply
+        .status(503)
+        .send({ error: 'Cerebra couldn’t load your projects. Try again.' });
+    }
+  });
 
   server.post('/api/instance/update', async (_request, reply) => {
     try {

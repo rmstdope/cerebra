@@ -8,6 +8,7 @@ import {
   type CredentialService,
   type Board,
   GitHubAccessError,
+  ProjectMirrorError,
   startServer,
   type InstanceService,
   type NavigatorQueue,
@@ -42,6 +43,68 @@ test('serves a health response', async () => {
 
   expect(response.statusCode).toBe(200);
   expect(response.json()).toEqual({ status: 'ok' });
+});
+
+test('lists saved projects without returning credential fields', async () => {
+  const project = {
+    id: 'project-1',
+    owner: 'acme',
+    name: 'website',
+    prefix: 'WEB',
+    defaultBranch: 'main',
+    remote: 'https://github.com/acme/website.git',
+    github_token_ciphertext: 'must-not-leave-the-server',
+  };
+  const server = await createServer({
+    auth: authenticatedAuth,
+    listProjects: async () => [project],
+  });
+  servers.push(server);
+  const response = await server.inject('/api/projects');
+  expect(response.statusCode).toBe(200);
+  expect(response.json()).toEqual([
+    {
+      id: project.id,
+      owner: project.owner,
+      name: project.name,
+      prefix: project.prefix,
+      defaultBranch: project.defaultBranch,
+      remote: project.remote,
+    },
+  ]);
+  expect(response.body).not.toContain('must-not-leave-the-server');
+});
+
+test('failed project reads are unavailable, not an empty list', async () => {
+  const server = await createServer({
+    auth: authenticatedAuth,
+    listProjects: async () => {
+      throw new Error('database unavailable');
+    },
+  });
+  servers.push(server);
+  const response = await server.inject('/api/projects');
+  expect(response.statusCode).toBe(503);
+  expect(response.json()).toEqual({
+    error: 'Cerebra couldn’t load your projects. Try again.',
+  });
+});
+
+test('requires authentication before listing projects', async () => {
+  const server = await createServer({
+    auth: {
+      ...authenticatedAuth,
+      status: async () => ({
+        state: 'unauthenticated',
+        reason: 'signed-out',
+      }),
+    },
+    listProjects: async () => {
+      throw new Error('Must not be reached');
+    },
+  });
+  servers.push(server);
+  expect((await server.inject('/api/projects')).statusCode).toBe(401);
 });
 
 test('serves truthful local instance status', async () => {
@@ -156,6 +219,34 @@ test('reports inaccessible GitHub projects explicitly', async () => {
     error:
       'GitHub rejected the access token or it cannot read this repository.',
   });
+});
+
+test('forwards the actionable clone failure reason to the client', async () => {
+  const reason =
+    'The repository could not be copied because storage is full. Free space in the Podman machine, then try again.';
+  const server = await createServer({
+    auth: authenticatedAuth,
+    projects: {
+      discover: async () => {
+        throw new Error('Not exercised');
+      },
+      register: async () => {
+        throw new ProjectMirrorError(reason);
+      },
+    },
+  });
+  servers.push(server);
+  const response = await server.inject({
+    method: 'POST',
+    url: '/api/projects',
+    payload: {
+      credential: 'secret',
+      prefix: 'SITE',
+      remote: 'https://github.com/acme/website',
+    },
+  });
+  expect(response.statusCode).toBe(502);
+  expect(response.json()).toEqual({ error: reason });
 });
 
 test('starts and stops cleanly', async () => {

@@ -1,4 +1,4 @@
-import { App, type ThemeMediaQuery } from './app';
+import { App as CerebraApp, type ThemeMediaQuery } from './app';
 import type { AuthClient } from './auth';
 import type { BoardClient, WorkItem } from './board';
 import type { CredentialClient } from './credentials';
@@ -14,8 +14,32 @@ import {
   within,
 } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { act } from 'react';
+import { act, type ComponentProps } from 'react';
 import { afterEach, describe, expect, test, vi } from 'vitest';
+
+const savedProjects = [
+  {
+    id: 'project-1',
+    owner: 'acme',
+    name: 'website',
+    prefix: 'WEB',
+    defaultBranch: 'main',
+    remote: 'https://github.com/acme/website.git',
+  },
+  {
+    id: 'project-9',
+    owner: 'acme',
+    name: 'app',
+    prefix: 'APP',
+    defaultBranch: 'main',
+    remote: 'https://github.com/acme/app.git',
+  },
+];
+const directoryClient = { list: async () => savedProjects };
+
+function App(props: ComponentProps<typeof CerebraApp>) {
+  return <CerebraApp projectDirectoryClient={directoryClient} {...props} />;
+}
 
 class FakeMediaQuery implements ThemeMediaQuery {
   public readonly listeners = new Set<(event: MediaQueryListEvent) => void>();
@@ -67,6 +91,151 @@ const authenticatedAuth: AuthClient = {
 };
 
 describe('App', () => {
+  test('loads saved projects without browser state and opens the chosen board', async () => {
+    const user = userEvent.setup();
+    const storage = new Map<string, string>();
+    render(
+      <App
+        authClient={authenticatedAuth}
+        queueClient={emptyQueue}
+        mediaQuery={new FakeMediaQuery(false)}
+        storage={{
+          getItem: (key) => storage.get(key) ?? null,
+          setItem: (key, value) => void storage.set(key, value),
+        }}
+      />,
+    );
+    const picker = await screen.findByRole('combobox', { name: 'Project' });
+    expect(
+      await within(picker).findByRole('option', { name: 'acme/website' }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole('heading', { name: 'Add a GitHub project' }),
+    ).toBeNull();
+    await user.selectOptions(picker, 'project-1');
+    expect(
+      await screen.findByRole('region', { name: 'Project board' }),
+    ).toBeTruthy();
+    expect(storage.get('cerebra.project')).toBe('project-1');
+    await user.selectOptions(picker, 'project-9');
+    expect(storage.get('cerebra.project')).toBe('project-9');
+  });
+
+  test('remembers registration immediately and reopens the saved project on a returning visit', async () => {
+    const user = userEvent.setup();
+    const storage = new Map<string, string>();
+    const project = savedProjects[0];
+    const props = {
+      authClient: authenticatedAuth,
+      queueClient: emptyQueue,
+      mediaQuery: new FakeMediaQuery(false),
+      storage: {
+        getItem: (key: string) => storage.get(key) ?? null,
+        setItem: (key: string, value: string) => void storage.set(key, value),
+      },
+    };
+    const first = render(
+      <App
+        {...props}
+        projectDirectoryClient={{ list: async () => [] }}
+        projectClient={{
+          discover: async () => project,
+          register: async () => project,
+        }}
+      />,
+    );
+    await screen.findByRole('heading', { name: 'Add a GitHub project' });
+    await user.type(
+      screen.getByLabelText('GitHub repository link'),
+      project.remote,
+    );
+    await user.type(
+      screen.getByLabelText('GitHub access token'),
+      'synthetic-token',
+    );
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    await user.click(
+      await screen.findByRole('button', { name: 'Add project' }),
+    );
+    await screen.findByRole('heading', { name: 'Project added' });
+    expect(storage.get('cerebra.project')).toBe(project.id);
+    first.unmount();
+
+    render(<App {...props} />);
+    expect(
+      await screen.findByRole('region', { name: 'Project board' }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole<HTMLSelectElement>('combobox', { name: 'Project' })
+        .value,
+    ).toBe(project.id);
+    expect(
+      screen.queryByRole('heading', { name: 'Add a GitHub project' }),
+    ).toBeNull();
+  });
+
+  test('recovers from a stale saved project and supports selection without writable browser storage', async () => {
+    const user = userEvent.setup();
+    render(
+      <App
+        authClient={authenticatedAuth}
+        queueClient={emptyQueue}
+        mediaQuery={new FakeMediaQuery(false)}
+        storage={{
+          getItem: (key) =>
+            key === 'cerebra.project' ? 'deleted-project' : null,
+          setItem: () => {
+            throw new Error('Storage unavailable');
+          },
+        }}
+      />,
+    );
+    const picker = await screen.findByRole<HTMLSelectElement>('combobox', {
+      name: 'Project',
+    });
+    expect(picker.value).toBe('');
+    expect(
+      screen.queryByRole('heading', { name: 'Add a GitHub project' }),
+    ).toBeNull();
+    await user.selectOptions(picker, 'project-1');
+    expect(
+      await screen.findByRole('region', { name: 'Project board' }),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(/Cerebra couldn’t remember your project selection/),
+    ).toBeTruthy();
+  });
+
+  test('does not mistake a failed project read for first-use onboarding and can retry', async () => {
+    const user = userEvent.setup();
+    const list = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValue(savedProjects);
+    render(
+      <App
+        authClient={authenticatedAuth}
+        queueClient={emptyQueue}
+        mediaQuery={new FakeMediaQuery(false)}
+        projectDirectoryClient={{ list }}
+        storage={{ getItem: () => null, setItem: () => undefined }}
+      />,
+    );
+    expect(
+      await screen.findByText(
+        'Cerebra couldn’t load your projects. Try again.',
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole('heading', { name: 'Add a GitHub project' }),
+    ).toBeNull();
+    await user.click(
+      screen.getByRole('button', { name: 'Retry loading projects' }),
+    );
+    expect(
+      await screen.findByRole('option', { name: 'acme/website' }),
+    ).toBeTruthy();
+  });
   test('renders the agreed empty state and selects an appearance by keyboard', async () => {
     const user = userEvent.setup();
     const mediaQuery = new FakeMediaQuery(false);
@@ -161,7 +330,7 @@ describe('App', () => {
     ).toBeTruthy();
   });
 
-  test('follows a changed system preference while System is selected', () => {
+  test('follows a changed system preference while System is selected', async () => {
     const mediaQuery = new FakeMediaQuery(false);
     render(
       <App
@@ -171,6 +340,7 @@ describe('App', () => {
       />,
     );
 
+    await screen.findByRole('combobox', { name: 'Project' });
     expect(document.documentElement.dataset.theme).toBe('light');
     act(() => mediaQuery.update(true));
     expect(document.documentElement.dataset.theme).toBe('dark');

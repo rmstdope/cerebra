@@ -4,11 +4,35 @@ Containerfiles for Cerebra's two images (architecture §12). Build both from the
 
 ## `cerebro-main`
 
-The backend and the web UI.
+The backend and the web UI, with Git and CA certificates for GitHub discovery and mirror cloning.
+Dependency installation caps Node's heap and download concurrency so the image can build in the
+default 2 GB Podman machine while the local application is running.
 
 ```sh
 podman build -f images/main.Containerfile -t cerebro-main .
 ```
+
+For the local application use `./cerebra start` from the repository root instead of invoking
+Compose directly on a fresh installation. The launcher provisions the persistent external Podman
+secret `cerebra-project-token-key`; Compose mounts it only in `main` at
+`/run/secrets/cerebra-project-token-key`. `CEREBRA_PROJECT_TOKEN_KEY_FILE` points to that file, and
+an unreadable or malformed key prevents startup. Never replace this secret on updates: existing
+credentials depend on it. See the root README for legacy-key migration and backup guidance.
+
+The `internal` network connects only `main` and Postgres. Only `main` also joins `egress`, for
+GitHub HTTPS and Git. Only the web port is published, on `127.0.0.1:4317`; Postgres has no host port.
+
+Project discovery uses GitHub API Bearer authentication; mirror cloning uses Git-over-HTTPS
+Basic authentication with the token as the password. The Git header is passed only in the clone
+process environment, never in the repository URL or saved Git configuration. Cloning is
+non-interactive: a rejected token fails registration rather than prompting for credentials.
+
+Failed clones write a structured `git.clone.failed` entry to the backend's stderr, including the
+exit status or signal and credential-redacted Git diagnostics. Inspect it with
+`podman logs --tail 100 -f images_main_1`. Capture is limited to 64 KiB of text; larger output is
+omitted rather than risk logging a partially captured credential. The registration page shows an
+actionable reason for common access, network, certificate and storage failures, or the redacted
+Git diagnostic for an unrecognised failure.
 
 ## `cerebro-agent`
 

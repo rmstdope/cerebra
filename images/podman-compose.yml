@@ -11,6 +11,7 @@ services:
       CEREBRA_GATEWAY_URL: ws://main:4317/runner
       CEREBRA_INTERNAL_NETWORK: cerebro-internal
       CEREBRA_PODMAN_SOCKET: /run/podman/podman.sock
+      CEREBRA_PROJECT_TOKEN_KEY_FILE: /run/secrets/cerebra-project-token-key
       DATABASE_URL: postgresql://cerebra:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/cerebra
     ports:
       - '127.0.0.1:4317:4317'
@@ -20,15 +21,33 @@ services:
     networks:
       - database
       - internal
+      - egress
+    secrets:
+      - cerebra-project-token-key
     depends_on:
       postgres:
-        condition: service_started
+        condition: service_healthy
   postgres:
     image: docker.io/library/postgres:18
     environment:
       POSTGRES_DB: cerebra
       POSTGRES_USER: cerebra
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'pg_isready',
+          '-h',
+          '127.0.0.1',
+          '-U',
+          'cerebra',
+          '-d',
+          'cerebra',
+        ]
+      interval: 2s
+      timeout: 5s
+      retries: 30
     volumes:
       - cerebra-postgres:/var/lib/postgresql
     networks:
@@ -41,6 +60,10 @@ networks:
   internal:
     name: cerebro-internal
     internal: true
+  egress:
+secrets:
+  cerebra-project-token-key:
+    external: true
 volumes:
   cerebra-data:
     name: cerebra-data
