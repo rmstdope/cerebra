@@ -52,6 +52,8 @@ export interface Database {
   work_items: {
     attempts: number;
     created_at: Generated<Date>;
+    description: string;
+    filed_sequence: Generated<string>;
     holder_run_id: string | null;
     id: string;
     priority: Priority | null;
@@ -59,9 +61,16 @@ export interface Database {
     return_state: WorkItemState | null;
     rounds: number;
     state: WorkItemState;
+    title: string;
     updated_at: Generated<Date>;
     waiting_kind: WaitingKind | null;
     waiting_reason: string | null;
+  };
+  work_item_comments: {
+    body: string;
+    created_at: Generated<Date>;
+    id: Generated<number>;
+    work_item_id: string;
   };
   projects: {
     created_at: Generated<Date>;

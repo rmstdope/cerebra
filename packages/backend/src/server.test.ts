@@ -1,5 +1,7 @@
 import {
+  WorkItemNotFoundError,
   createServer,
+  type Board,
   GitHubAccessError,
   startServer,
   type InstanceService,
@@ -278,4 +280,182 @@ test('rejects when it cannot start listening', async () => {
       { auth: authenticatedAuth },
     ),
   ).rejects.toThrow();
+});
+
+const boardItem = {
+  createdAt: new Date('2026-09-29T00:00:00.000Z'),
+  description: '',
+  id: 'item-1',
+  priority: null,
+  state: 'new' as const,
+  title: 'Show the board',
+  updatedAt: new Date('2026-09-29T00:00:00.000Z'),
+};
+
+function fakeBoard(overrides: Partial<Board> = {}): Board {
+  const unused = async () => {
+    throw new Error('Not exercised');
+  };
+  return {
+    addComment: unused,
+    cancel: unused,
+    claim: unused,
+    countArrivals: unused,
+    createProject: unused,
+    createWorkItem: unused,
+    getHistory: unused,
+    getWorkItem: unused,
+    listComments: unused,
+    listWorkItems: unused,
+    transition: unused,
+    triage: unused,
+    ...overrides,
+  } as Board;
+}
+
+test('lists a board page with its query and snapshot', async () => {
+  const queries: unknown[] = [];
+  const server = await createServer({
+    auth: authenticatedAuth,
+    board: fakeBoard({
+      listWorkItems: async (projectId, query) => {
+        queries.push({ projectId, query });
+        return {
+          items: [boardItem],
+          nextCursor: '25',
+          snapshot: '7',
+          total: 26,
+        };
+      },
+    }),
+  });
+  servers.push(server);
+
+  const response = await server.inject(
+    '/api/projects/project-1/work-items?search=board&state=new&priority=none&sort=oldest&cursor=25&snapshot=7',
+  );
+
+  expect(response.statusCode).toBe(200);
+  expect(response.json()).toEqual({
+    items: [
+      {
+        ...boardItem,
+        createdAt: '2026-09-29T00:00:00.000Z',
+        updatedAt: '2026-09-29T00:00:00.000Z',
+      },
+    ],
+    nextCursor: '25',
+    snapshot: '7',
+    total: 26,
+  });
+  expect(queries).toEqual([
+    {
+      projectId: 'project-1',
+      query: {
+        cursor: '25',
+        priority: 'none',
+        search: 'board',
+        snapshot: '7',
+        sort: 'oldest',
+        state: 'new',
+      },
+    },
+  ]);
+});
+
+test('refuses an unknown list filter rather than answering with nothing', async () => {
+  const server = await createServer({
+    auth: authenticatedAuth,
+    board: fakeBoard(),
+  });
+  servers.push(server);
+
+  const response = await server.inject(
+    '/api/projects/project-1/work-items?sort=sideways',
+  );
+
+  expect(response.statusCode).toBe(400);
+});
+
+test('counts matching arrivals after a snapshot', async () => {
+  const server = await createServer({
+    auth: authenticatedAuth,
+    board: fakeBoard({
+      countArrivals: async (_projectId, query) =>
+        query.snapshot === '7' && query.search === 'x' ? 2 : 0,
+    }),
+  });
+  servers.push(server);
+
+  const response = await server.inject(
+    '/api/projects/project-1/work-items/arrivals?snapshot=7&search=x',
+  );
+
+  expect(response.statusCode).toBe(200);
+  expect(response.json()).toEqual({ count: 2 });
+});
+
+test('returns an unavailable route as an explicit refusal', async () => {
+  const server = await createServer({
+    auth: authenticatedAuth,
+    board: fakeBoard({
+      triage: async () => ({
+        code: 'route_unavailable',
+        ok: false,
+        reason: 'That next step is not available for this project.',
+      }),
+    }),
+  });
+  servers.push(server);
+
+  const response = await server.inject({
+    method: 'POST',
+    payload: { priority: 'P1', to: 'design_ready' },
+    url: '/api/work-items/item-1/triage',
+  });
+
+  expect(response.statusCode).toBe(409);
+  expect(response.json()).toEqual({
+    code: 'route_unavailable',
+    error: 'That next step is not available for this project.',
+  });
+});
+
+test('answers an unknown work item with 404, never an empty body', async () => {
+  const missing = async () => {
+    throw new WorkItemNotFoundError('item-9');
+  };
+  const server = await createServer({
+    auth: authenticatedAuth,
+    board: fakeBoard({
+      getHistory: missing,
+      getWorkItem: missing,
+      listComments: missing,
+    }),
+  });
+  servers.push(server);
+
+  for (const url of [
+    '/api/work-items/item-9',
+    '/api/work-items/item-9/history',
+    '/api/work-items/item-9/comments',
+  ]) {
+    const response = await server.inject(url);
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({
+      error: 'Work item item-9 does not exist.',
+    });
+  }
+});
+
+test('answers every board read with 503 when no board is wired', async () => {
+  const server = await createServer({ auth: authenticatedAuth });
+  servers.push(server);
+
+  const response = await server.inject('/api/projects/project-1/work-items');
+
+  expect(response.statusCode).toBe(503);
+  expect(response.json()).toEqual({
+    error: 'The project board is unavailable.',
+  });
 });

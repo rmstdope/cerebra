@@ -7,8 +7,10 @@ import {
 } from './projects';
 
 export function ProjectRegistration({
+  onProjectAdded,
   projectClient = browserProjectClient,
 }: {
+  readonly onProjectAdded?: (project: RegisteredProject) => void;
   readonly projectClient?: ProjectClient;
 }): ReactNode {
   const [credential, setCredential] = useState('');
@@ -74,7 +76,11 @@ export function ProjectRegistration({
           There’s no work here yet. File the first piece of work when you’re
           ready.
         </p>
-        <button className="primary-button mt-5" type="button">
+        <button
+          className="primary-button mt-5"
+          onClick={() => onProjectAdded?.(project)}
+          type="button"
+        >
           File work
         </button>
       </section>

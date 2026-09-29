@@ -7,7 +7,23 @@ export {
   type AuthStatus,
   type AuthenticationResult,
 } from './auth.js';
-export { createBoard, type Board } from './board.js';
+export {
+  boardRoutes,
+  boardSorts,
+  createBoard,
+  ProjectNotFoundError,
+  WorkItemNotFoundError,
+  type Board,
+  type BoardComment,
+  type BoardFilters,
+  type BoardHistoryEntry,
+  type BoardPage,
+  type BoardQuery,
+  type BoardRoute,
+  type BoardSort,
+  type BoardWorkItem,
+  type TriageResult,
+} from './board.js';
 export {
   createInstanceService,
   type InstanceService,
@@ -17,6 +33,7 @@ export {
   createWorkItem,
   transition,
   transitionTable,
+  workItemStates,
   type LifecycleContext,
   type LifecycleEffect,
   type LifecycleRole,

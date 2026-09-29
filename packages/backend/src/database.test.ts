@@ -80,6 +80,10 @@ describe('database migrations', { concurrent: false }, () => {
           migrationName: '20260928230000_create_authentication_configuration',
           status: 'Success',
         }),
+        expect.objectContaining({
+          migrationName: '20260929010000_add_board_content',
+          status: 'Success',
+        }),
       ]);
       expect(
         await database.introspection.getTables({
@@ -93,6 +97,7 @@ describe('database migrations', { concurrent: false }, () => {
           expect.objectContaining({ name: 'projects' }),
           expect.objectContaining({ name: 'runs' }),
           expect.objectContaining({ name: 'sessions' }),
+          expect.objectContaining({ name: 'work_item_comments' }),
           expect.objectContaining({ name: 'users' }),
           expect.objectContaining({ name: 'work_item_history' }),
           expect.objectContaining({ name: 'work_item_records' }),

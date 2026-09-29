@@ -3,10 +3,22 @@ import fastifyStatic from '@fastify/static';
 import Fastify, {
   type FastifyInstance,
   type FastifyListenOptions,
+  type FastifyReply,
+  type FastifyRequest,
 } from 'fastify';
 import { join } from 'node:path';
 import { type AuthService, type AuthenticationResult } from './auth.js';
+import {
+  boardRoutes,
+  boardSorts,
+  ProjectNotFoundError,
+  WorkItemNotFoundError,
+  type Board,
+  type BoardQuery,
+  type BoardRoute,
+} from './board.js';
 import { createInstanceService, type InstanceService } from './instance.js';
+import { workItemStates, type Priority } from './lifecycle.js';
 import {
   GitHubAccessError,
   InvalidProjectPrefixError,
@@ -17,6 +29,7 @@ import {
 
 export interface ServerOptions {
   readonly auth: AuthService;
+  readonly board?: Board;
   readonly instance?: InstanceService;
   readonly projects?: ProjectRegistration;
   readonly uiDirectory?: string;
@@ -58,6 +71,7 @@ function projectError(
   ) {
     return { error: error.message, status: 400 };
   }
+
   if (error instanceof GitHubAccessError) {
     return { error: error.message, status: 401 };
   }
@@ -67,8 +81,62 @@ function projectError(
   return null;
 }
 
+function objectBody(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function boardQuery(value: unknown): BoardQuery | null {
+  const query = objectBody(value) ?? {};
+  const text = (key: string): string | undefined =>
+    typeof query[key] === 'string' && query[key] !== ''
+      ? (query[key] as string)
+      : undefined;
+  const state = text('state');
+  const priority = text('priority');
+  const sort = text('sort');
+  const cursor = text('cursor');
+  const snapshot = text('snapshot');
+  if (
+    (state !== undefined &&
+      !(workItemStates as readonly string[]).includes(state)) ||
+    (priority !== undefined &&
+      !['P0', 'P1', 'P2', 'P3', 'none'].includes(priority)) ||
+    (sort !== undefined && !(boardSorts as readonly string[]).includes(sort)) ||
+    (cursor !== undefined && !/^\d+$/.test(cursor)) ||
+    (snapshot !== undefined && !/^\d+$/.test(snapshot))
+  ) {
+    return null;
+  }
+  return Object.fromEntries(
+    Object.entries({
+      cursor,
+      priority,
+      search: text('search'),
+      snapshot,
+      sort,
+      state,
+    }).filter(([, entry]) => entry !== undefined),
+  ) as BoardQuery;
+}
+
+function workItemBody(
+  value: unknown,
+): { readonly description: string; readonly title: string } | null {
+  const body = objectBody(value);
+  if (body === null || typeof body.title !== 'string') {
+    return null;
+  }
+  return {
+    description: typeof body.description === 'string' ? body.description : '',
+    title: body.title,
+  };
+}
+
 export const createServer = async ({
   auth,
+  board,
   instance = createInstanceService(),
   projects,
   uiDirectory = process.env.CEREBRA_UI_DIR,
@@ -192,6 +260,171 @@ export const createServer = async ({
       throw error;
     }
   });
+
+  const boardRoute =
+    <P>(
+      handler: (
+        board: Board,
+        params: P,
+        request: FastifyRequest,
+        reply: FastifyReply,
+      ) => Promise<unknown>,
+    ) =>
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      if (board === undefined) {
+        return reply
+          .status(503)
+          .send({ error: 'The project board is unavailable.' });
+      }
+      try {
+        return await handler(board, request.params as P, request, reply);
+      } catch (error) {
+        if (
+          error instanceof WorkItemNotFoundError ||
+          error instanceof ProjectNotFoundError
+        ) {
+          return reply.status(404).send({ error: error.message });
+        }
+        throw error;
+      }
+    };
+
+  server.get(
+    '/api/projects/:projectId/work-items',
+    boardRoute<{ projectId: string }>(
+      async (board, { projectId }, request, reply) => {
+        const query = boardQuery(request.query);
+        return query === null
+          ? reply.status(400).send({ error: 'Choose a valid board filter.' })
+          : board.listWorkItems(projectId, query);
+      },
+    ),
+  );
+
+  server.get(
+    '/api/projects/:projectId/work-items/arrivals',
+    boardRoute<{ projectId: string }>(
+      async (board, { projectId }, request, reply) => {
+        const query = boardQuery(request.query);
+        if (query === null || query.snapshot === undefined) {
+          return reply.status(400).send({ error: 'Choose a valid snapshot.' });
+        }
+        return {
+          count: await board.countArrivals(projectId, {
+            ...query,
+            snapshot: query.snapshot,
+          }),
+        };
+      },
+    ),
+  );
+
+  server.post(
+    '/api/projects/:projectId/work-items',
+    boardRoute<{ projectId: string }>(
+      async (board, { projectId }, request, reply) => {
+        const input = workItemBody(request.body);
+        if (input === null || input.title.trim().length === 0) {
+          return reply
+            .status(400)
+            .send({ error: 'Enter what needs to change.' });
+        }
+        const id = crypto.randomUUID();
+        await board.createWorkItem({
+          ...input,
+          id,
+          projectId,
+          title: input.title.trim(),
+        });
+        return reply.status(201).send(await board.getWorkItem(id));
+      },
+    ),
+  );
+
+  server.get(
+    '/api/work-items/:itemId',
+    boardRoute<{ itemId: string }>(async (board, { itemId }) =>
+      board.getWorkItem(itemId),
+    ),
+  );
+
+  server.get(
+    '/api/work-items/:itemId/history',
+    boardRoute<{ itemId: string }>(async (board, { itemId }) =>
+      board.getHistory(itemId),
+    ),
+  );
+
+  server.get(
+    '/api/work-items/:itemId/comments',
+    boardRoute<{ itemId: string }>(async (board, { itemId }) =>
+      board.listComments(itemId),
+    ),
+  );
+
+  server.post(
+    '/api/work-items/:itemId/comments',
+    boardRoute<{ itemId: string }>(
+      async (board, { itemId }, request, reply) => {
+        const body = objectBody(request.body);
+        if (
+          body === null ||
+          typeof body.body !== 'string' ||
+          body.body.trim().length === 0
+        ) {
+          return reply.status(400).send({ error: 'Enter a comment.' });
+        }
+        return reply
+          .status(201)
+          .send(await board.addComment(itemId, body.body));
+      },
+    ),
+  );
+
+  server.post(
+    '/api/work-items/:itemId/triage',
+    boardRoute<{ itemId: string }>(
+      async (board, { itemId }, request, reply) => {
+        const body = objectBody(request.body);
+        if (
+          body === null ||
+          !['P0', 'P1', 'P2', 'P3'].includes(body.priority as string) ||
+          !boardRoutes.includes(body.to as BoardRoute)
+        ) {
+          return reply
+            .status(400)
+            .send({ error: 'Choose a priority and next step.' });
+        }
+        const result = await board.triage(
+          itemId,
+          body.priority as Priority,
+          body.to as BoardRoute,
+        );
+        if (result.ok) {
+          return board.getWorkItem(itemId);
+        }
+        return reply
+          .status(409)
+          .send(
+            'code' in result
+              ? { code: result.code, error: result.reason }
+              : { error: result.reason },
+          );
+      },
+    ),
+  );
+
+  server.post(
+    '/api/work-items/:itemId/cancel',
+    boardRoute<{ itemId: string }>(
+      async (board, { itemId }, _request, reply) => {
+        const result = await board.cancel(itemId);
+        return result.ok
+          ? board.getWorkItem(itemId)
+          : reply.status(409).send({ error: result.reason });
+      },
+    ),
+  );
 
   if (uiDirectory !== undefined) {
     server.setNotFoundHandler((request, reply) => {
