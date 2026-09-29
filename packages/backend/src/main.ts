@@ -1,5 +1,7 @@
 import { createAuthService } from './auth.js';
 import { createBoard } from './board.js';
+import { createEnvelopeCipher } from './credential-cipher.js';
+import { createCredentialService } from './credentials.js';
 import { createDatabase } from './database.js';
 import { migrateToLatest } from './migrations/index.js';
 import { createNavigatorQueue } from './navigator-queue.js';
@@ -17,6 +19,13 @@ try {
     {
       auth: createAuthService(database),
       board: createBoard(database),
+      credentials:
+        projectTokenKey === undefined
+          ? undefined
+          : createCredentialService({
+              cipher: createEnvelopeCipher(projectTokenKey),
+              database,
+            }),
       projects:
         projectTokenKey === undefined
           ? undefined

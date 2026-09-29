@@ -48,6 +48,33 @@ export {
 } from './engine.js';
 export { createFakeEngine, type FakeEngine } from './fake-engine.js';
 export {
+  createEnvelopeCipher,
+  type EnvelopeCipher,
+  type SealedValue,
+} from './credential-cipher.js';
+export {
+  agentGitHubCredentialName,
+  builtInAgentTypes,
+  builtInDeliveries,
+  createCredentialService,
+  CredentialInputError,
+  CredentialNotFoundError,
+  DuplicateDestinationError,
+  modelCredentialName,
+  type AgentCredentialDelivery,
+  type AgentCredentialEntry,
+  type AgentCredentialSettings,
+  type CredentialAttention,
+  type CredentialDeliveryMethod,
+  type CredentialOverview,
+  type CredentialProblem,
+  type CredentialRow,
+  type CredentialScope,
+  type CredentialService,
+  type RunCredentials,
+  type SaveCredential,
+} from './credentials.js';
+export {
   createInstanceService,
   type InstanceService,
   type InstanceStatus,
