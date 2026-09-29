@@ -11,6 +11,7 @@ import {
   type ContainerStatus,
   type EngineOperation,
   type EngineSettings,
+  requireAgentId,
   stopTimeoutSeconds,
 } from './engine.js';
 
@@ -135,6 +136,14 @@ export function createFakeEngine(
         );
       }
       containers.delete(container.id);
+    },
+
+    async containersOf(agentId) {
+      requireAgentId(agentId);
+      injected('list');
+      return [...containers.values()]
+        .filter((container) => container.agentId === agentId)
+        .map((container) => container.id);
     },
 
     failNext(operation, error) {

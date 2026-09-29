@@ -200,7 +200,9 @@ navigator stops is sent `stop` and is ended `finished` once the runner reports i
 after thirty seconds. Every ending closes the connection, releases any held item through the
 lifecycle, and stops and removes the container (an ending the database refuses is retried, and
 one it keeps refusing is left to the next startup's recovery). A named agent has at most one live run, which the
-database enforces.
+database enforces. Its containers are held to the same rule: before a run's container is created,
+every earlier container labelled with the same agent is stopped and removed, and a start that cannot
+prove them gone fails, so the agent's home and CLI state are never mounted by two containers (D17).
 
 On startup the supervisor reconciles every run the database thinks is live against the engine's
 containers: a container still running is left to its runner, which reconnects; a run whose

@@ -11,6 +11,7 @@ import {
   type ContainerStatus,
   type EngineOperation,
   type EngineSettings,
+  requireAgentId,
   stopTimeoutSeconds,
 } from './engine.js';
 
@@ -207,6 +208,22 @@ export function createPodmanEngine(
     remove(id) {
       return command('remove', id, 'DELETE', `/containers/${ref(id)}`);
     },
+
+    async containersOf(agentId) {
+      requireAgentId(agentId);
+      const filters = JSON.stringify({
+        label: [`${agentContainerLabels.agent}=${agentId}`],
+      });
+      const reply = await call(
+        'list',
+        'GET',
+        `/containers/json?all=true&filters=${encodeURIComponent(filters)}`,
+      );
+      if (reply.status !== 200) {
+        throw refusal('list', reply);
+      }
+      return parse('list', reply.body, containerIds);
+    },
   };
 }
 
@@ -271,6 +288,18 @@ function containerInfo(value: unknown): ContainerInfo | undefined {
     runId: label(agentContainerLabels.run),
     status,
   };
+}
+
+function containerIds(value: unknown): readonly string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const ids: string[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry) || typeof entry.Id !== 'string' || entry.Id === '') {
+      return undefined;
+    }
+    ids.push(entry.Id);
+  }
+  return ids;
 }
 
 function engineMessage(body: string): string | undefined {

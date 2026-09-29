@@ -40,6 +40,7 @@ export async function withTestDatabase(
 /** Registers a project with its default fleet and answers its id. */
 export async function registerTestProject(
   database: Kysely<Database>,
+  name = 'website',
 ): Promise<string> {
   const id = crypto.randomUUID();
   await createProjectStore({ database, masterKey }).create({
@@ -47,10 +48,10 @@ export async function registerTestProject(
     project: {
       defaultBranch: 'main',
       id,
-      name: 'website',
+      name,
       owner: 'acme',
-      prefix: 'WEB',
-      remote: 'https://github.com/acme/website.git',
+      prefix: name.slice(0, 3).toUpperCase(),
+      remote: `https://github.com/acme/${name}.git`,
     },
   });
   return id;

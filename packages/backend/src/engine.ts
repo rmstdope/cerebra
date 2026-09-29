@@ -64,10 +64,12 @@ export interface ContainerEngine {
   stop(id: string, options?: StopOptions): Promise<void>;
   /** Refuses a running container: stop it first. */
   remove(id: string): Promise<void>;
+  /** Every container, in any status, labelled as the named agent's; every failure throws. */
+  containersOf(agentId: string): Promise<readonly string[]>;
 }
 
 export type EngineOperation =
-  'create' | 'start' | 'inspect' | 'stop' | 'remove';
+  'create' | 'start' | 'inspect' | 'stop' | 'remove' | 'list';
 
 export class EngineError extends Error {
   readonly operation: EngineOperation;
@@ -268,6 +270,11 @@ export function agentContainerRequest(
     },
     name: agentContainerName(spec.runId),
   };
+}
+
+/** Refuses an agent id that could not have been given to a container. */
+export function requireAgentId(agentId: string): void {
+  requireSafeId('agent id', agentId);
 }
 
 function requireSafeId(what: string, value: string): void {

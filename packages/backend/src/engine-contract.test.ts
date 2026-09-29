@@ -187,6 +187,42 @@ function engineContract(
     });
 
     test(
+      "lists every container of an agent, stopped or running, and only that agent's",
+      { timeout: options.timeout },
+      async () => {
+        const { engine } = subject;
+        const running = await newRun();
+        const created = await newRun();
+        const other = await newRun();
+        const first = await engine.create(subject.spec(running));
+        await engine.start(first.id);
+        const second = await engine.create(subject.spec(created));
+        const foreign = await engine.create({
+          ...subject.spec(other),
+          agentId: 'agent-2',
+        });
+
+        const listed = await engine.containersOf('agent-1');
+        expect(listed).toEqual(expect.arrayContaining([first.id, second.id]));
+        expect(listed).not.toContain(foreign.id);
+        expect(await engine.containersOf('agent-2')).toContain(foreign.id);
+
+        await engine.remove(second.id);
+        expect(await engine.containersOf('agent-1')).not.toContain(second.id);
+      },
+    );
+
+    test(
+      'an invalid agent id is refused before anything is listed',
+      { timeout: options.timeout },
+      async () => {
+        await expect(
+          subject.engine.containersOf('../agent-1'),
+        ).rejects.toBeInstanceOf(InvalidContainerSpecError);
+      },
+    );
+
+    test(
       'an invalid specification creates nothing',
       { timeout: options.timeout },
       async () => {
@@ -276,6 +312,8 @@ function podmanHarness(): EngineHarness {
         `/data/runs/${runId}/checkout`,
         '/data/agents/agent-1/home',
         '/data/agents/agent-1/cli-state',
+        '/data/agents/agent-2/home',
+        '/data/agents/agent-2/cli-state',
       ];
       podman(
         'run',
