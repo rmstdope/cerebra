@@ -41,6 +41,19 @@ import type { QueueClient } from './queue';
 import { AgentCredentialsPage, AgentTypesList } from './agent-credentials';
 import type { CredentialClient } from './credentials';
 import { CredentialsPage } from './credentials-page';
+import { AttentionCenter } from './attention-center';
+import {
+  browserAttentionClient,
+  type AttentionClient,
+  type AttentionEntry,
+} from './attention';
+import type { CostClient } from './costs';
+import type { NotificationSettingsClient } from './notification-settings';
+import { NotificationSettingsPage } from './notification-settings-page';
+import {
+  connectNotifications,
+  type ConnectNotificationsOptions,
+} from './notifications';
 
 export interface ThemeMediaQuery {
   readonly matches: boolean;
@@ -69,12 +82,23 @@ interface AppProps {
   conversationClient?: ConversationClient;
   projectClient?: ProjectClient;
   projectDirectoryClient?: ProjectDirectoryClient;
+  attentionClient?: AttentionClient;
+  costClient?: CostClient;
+  notificationSettingsClient?: NotificationSettingsClient;
+  /** Opens the push connection; returns what closes it. */
+  notificationsConnector?: (
+    options: Pick<
+      ConnectNotificationsOptions,
+      'onOpenEntry' | 'onOpenPanel' | 'onPush'
+    >,
+  ) => () => void;
 }
 
 type SettingsRoute =
   | { readonly page: 'credentials' }
   | { readonly page: 'agents' }
   | { readonly page: 'limits' }
+  | { readonly page: 'notifications' }
   | { readonly page: 'agent'; readonly agentType: string };
 
 function conversationRoute(hash: string): string | null {
@@ -90,6 +114,9 @@ function settingsRoute(hash: string): SettingsRoute | null {
   }
   if (hash === '#/settings/limits') {
     return { page: 'limits' };
+  }
+  if (hash === '#/settings/notifications') {
+    return { page: 'notifications' };
   }
   const agent = /^#\/settings\/agents\/([a-z][a-z0-9-]*)$/.exec(hash);
   return agent === null ? null : { agentType: agent[1], page: 'agent' };
@@ -139,6 +166,10 @@ export function App({
   conversationClient = browserConversationClient,
   projectClient = browserProjectClient,
   projectDirectoryClient = browserProjectClient,
+  attentionClient = browserAttentionClient,
+  costClient,
+  notificationSettingsClient,
+  notificationsConnector = connectNotifications,
 }: AppProps): ReactNode {
   const [preference, setPreference] = useState<ThemePreference>(() =>
     getInitialPreference(storage),
@@ -180,6 +211,11 @@ export function App({
   const [projectView, setProjectView] = useState<'board' | 'fleet'>('board');
   const [returnToFleet, setReturnToFleet] = useState(false);
   const [hash, setHash] = useState(() => window.location.hash);
+  const [attentionPush, setAttentionPush] = useState(0);
+  const [attentionOpen, setAttentionOpen] = useState(0);
+  const [queueRequest, setQueueRequest] = useState<{
+    readonly id: string;
+  } | null>(null);
   const focusQueue = useRef(false);
   const settings = settingsRoute(hash);
   const conversation = settings === null ? conversationRoute(hash) : null;
@@ -202,7 +238,10 @@ export function App({
   }, [mediaQuery]);
 
   useEffect(() => {
-    const followHash = () => setHash(window.location.hash);
+    const followHash = () => {
+      setHash(window.location.hash);
+      if (window.location.hash !== '') setQueueRequest(null);
+    };
     window.addEventListener('hashchange', followHash);
     return () => window.removeEventListener('hashchange', followHash);
   }, []);
@@ -259,6 +298,31 @@ export function App({
       cancelled = true;
     };
   }, [authStatus?.state, projectDirectoryClient, projectReload]);
+
+  function openAttentionEntry(entry: AttentionEntry): void {
+    if (entry.runId !== null) {
+      window.location.hash = `#/conversations/${entry.runId}`;
+      return;
+    }
+    window.history.pushState(
+      null,
+      '',
+      window.location.pathname + window.location.search,
+    );
+    setHash('');
+    setQueueRequest({ id: entry.itemId ?? entry.id });
+  }
+  const openEntry = useRef(openAttentionEntry);
+  openEntry.current = openAttentionEntry;
+
+  useEffect(() => {
+    if (authStatus?.state !== 'authenticated') return;
+    return notificationsConnector({
+      onOpenEntry: (entry) => openEntry.current(entry),
+      onOpenPanel: () => setAttentionOpen((count) => count + 1),
+      onPush: () => setAttentionPush((count) => count + 1),
+    });
+  }, [authStatus?.state, notificationsConnector]);
 
   function rememberProject(id: string): void {
     setProjectId(id);
@@ -588,6 +652,16 @@ export function App({
             </span>
           ) : null}
         </a>
+        <AttentionCenter
+          client={attentionClient}
+          closeKey={projectId ?? ''}
+          onOpen={openAttentionEntry}
+          onOpenSettings={() => {
+            window.location.hash = '#/settings/notifications';
+          }}
+          openSignal={attentionOpen}
+          pushSignal={attentionPush}
+        />
         <a
           aria-current={settings !== null ? 'page' : undefined}
           className="mr-2 rounded-lg px-2 py-2 text-sm font-bold outline-none focus-visible:ring-3 focus-visible:ring-[var(--focus)] sm:text-base"
@@ -758,6 +832,7 @@ export function App({
                 ['credentials', 'Credentials', '#/settings/credentials'],
                 ['agents', 'Agent types', '#/settings/agents'],
                 ['limits', 'Limits', '#/settings/limits'],
+                ['notifications', 'Notifications', '#/settings/notifications'],
               ] as const
             ).map(([page, label, href]) => {
               const current =
@@ -795,6 +870,8 @@ export function App({
               key={projectId ?? 'instance'}
               projectId={projectId}
             />
+          ) : settings.page === 'notifications' ? (
+            <NotificationSettingsPage client={notificationSettingsClient} />
           ) : projectId === null ? (
             <p className="card">
               Add a project first, then give its agents credentials.
@@ -852,6 +929,7 @@ export function App({
                 openProject(nextProject);
                 setBoardRequest({ id, tab });
               }}
+              openRequest={queueRequest}
               storage={storage}
             />
           </div>
@@ -907,6 +985,7 @@ export function App({
                 <ProjectBoard
                   automaticStartsClient={automaticStartsClient}
                   boardClient={boardClient}
+                  costClient={costClient}
                   key={projectId}
                   onClose={
                     returnToFleet
