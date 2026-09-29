@@ -578,6 +578,7 @@ export function createSupervisor({
     } else if (event.kind === 'result') {
       await runs.addUsage(runId, {
         costUsd: event.usage.costUsd,
+        models: event.usage.models,
         ...(event.sessionId === undefined
           ? {}
           : { sessionId: event.sessionId }),

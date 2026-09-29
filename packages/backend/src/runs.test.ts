@@ -246,8 +246,35 @@ describe('the run store', { concurrent: false }, () => {
         role: 'assistant',
         tokenHash: 'hash-6',
       });
-      await runs.addUsage(run.id, { costUsd: 0.25, sessionId: 'session-1' });
-      await runs.addUsage(run.id, { costUsd: 0.5 });
+      await runs.addUsage(run.id, {
+        costUsd: 0.25,
+        models: {
+          'claude-opus': {
+            cacheCreationInputTokens: 4,
+            cacheReadInputTokens: 3,
+            inputTokens: 10,
+            outputTokens: 20,
+          },
+        },
+        sessionId: 'session-1',
+      });
+      await runs.addUsage(run.id, {
+        costUsd: 0.5,
+        models: {
+          'claude-haiku': {
+            cacheCreationInputTokens: 0,
+            cacheReadInputTokens: 0,
+            inputTokens: 1,
+            outputTokens: 2,
+          },
+          'claude-opus': {
+            cacheCreationInputTokens: 1,
+            cacheReadInputTokens: 1,
+            inputTokens: 5,
+            outputTokens: 5,
+          },
+        },
+      });
       await runs.end(run.id, {
         failure: 'No model credential.',
         reason: 'The run could not start.',
@@ -266,6 +293,45 @@ describe('the run store', { concurrent: false }, () => {
         start_failed: true,
       });
       expect((await runs.live()).map((live) => live.id)).toEqual([]);
+      // What each result reported is kept by model, after the run failed.
+      expect(
+        await database
+          .selectFrom('run_model_usage')
+          .select([
+            'model',
+            'input_tokens',
+            'output_tokens',
+            'cache_read_tokens',
+            'cache_write_tokens',
+          ])
+          .where('run_id', '=', run.id)
+          .orderBy('model')
+          .execute()
+          .then((rows) =>
+            rows.map((row) => ({
+              cache_read_tokens: Number(row.cache_read_tokens),
+              cache_write_tokens: Number(row.cache_write_tokens),
+              input_tokens: Number(row.input_tokens),
+              model: row.model,
+              output_tokens: Number(row.output_tokens),
+            })),
+          ),
+      ).toEqual([
+        {
+          cache_read_tokens: 0,
+          cache_write_tokens: 0,
+          input_tokens: 1,
+          model: 'claude-haiku',
+          output_tokens: 2,
+        },
+        {
+          cache_read_tokens: 4,
+          cache_write_tokens: 5,
+          input_tokens: 15,
+          model: 'claude-opus',
+          output_tokens: 25,
+        },
+      ]);
     });
   });
 });

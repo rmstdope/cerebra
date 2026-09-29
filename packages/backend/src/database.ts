@@ -104,6 +104,15 @@ export interface Database {
     start_failed: Generated<boolean>;
     status: Generated<RunState>;
     token_hash: Generated<string | null>;
+    work_item_id: Generated<string | null>;
+  };
+  run_model_usage: {
+    cache_read_tokens: Generated<string>;
+    cache_write_tokens: Generated<string>;
+    input_tokens: Generated<string>;
+    model: string;
+    output_tokens: Generated<string>;
+    run_id: string;
   };
   run_events: {
     created_at: Generated<Date>;
@@ -171,6 +180,7 @@ export interface Database {
   };
   projects: {
     automatic_starts_paused: Generated<boolean>;
+    browser_notifications: Generated<boolean>;
     created_at: Generated<Date>;
     default_branch: Generated<string>;
     design_enabled: Generated<boolean>;

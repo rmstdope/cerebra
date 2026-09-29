@@ -1,4 +1,4 @@
-import type { AgentEvent } from '@cerebra/shared';
+import type { AgentEvent, Usage } from '@cerebra/shared';
 import { sql, type Kysely } from 'kysely';
 
 import type { AgentRole } from './agent-types.js';
@@ -60,9 +60,10 @@ export interface RunStore {
     runId: string,
     state: Extract<RunState, 'active' | 'awaiting_input'>,
   ): Promise<boolean>;
+  /** Adds one result's spending to the run as it arrives, so a later failure loses none of it. */
   addUsage(
     runId: string,
-    usage: { readonly costUsd: number; readonly sessionId?: string },
+    usage: Usage & { readonly sessionId?: string },
   ): Promise<void>;
   /** Ends a live run and gives back what it held, in one transaction; `false` if it had ended. */
   end(runId: string, ending: EndRun): Promise<boolean>;
@@ -182,15 +183,38 @@ export function createRunStore(database: Kysely<Database>): RunStore {
       return result.numUpdatedRows > 0n;
     },
 
-    async addUsage(runId, { costUsd, sessionId }) {
-      await database
-        .updateTable('runs')
-        .set({
-          cost_usd: sql`cost_usd + ${costUsd}`,
-          ...(sessionId === undefined ? {} : { session_id: sessionId }),
-        })
-        .where('id', '=', runId)
-        .execute();
+    async addUsage(runId, { costUsd, models, sessionId }) {
+      await database.transaction().execute(async (transaction) => {
+        await transaction
+          .updateTable('runs')
+          .set({
+            cost_usd: sql`cost_usd + ${costUsd}`,
+            ...(sessionId === undefined ? {} : { session_id: sessionId }),
+          })
+          .where('id', '=', runId)
+          .execute();
+        const rows = Object.entries(models).map(([model, tokens]) => ({
+          cache_read_tokens: String(tokens.cacheReadInputTokens),
+          cache_write_tokens: String(tokens.cacheCreationInputTokens),
+          input_tokens: String(tokens.inputTokens),
+          model,
+          output_tokens: String(tokens.outputTokens),
+          run_id: runId,
+        }));
+        if (rows.length === 0) return;
+        await transaction
+          .insertInto('run_model_usage')
+          .values(rows)
+          .onConflict((conflict) =>
+            conflict.columns(['run_id', 'model']).doUpdateSet({
+              cache_read_tokens: sql`run_model_usage.cache_read_tokens + excluded.cache_read_tokens`,
+              cache_write_tokens: sql`run_model_usage.cache_write_tokens + excluded.cache_write_tokens`,
+              input_tokens: sql`run_model_usage.input_tokens + excluded.input_tokens`,
+              output_tokens: sql`run_model_usage.output_tokens + excluded.output_tokens`,
+            }),
+          )
+          .execute();
+      });
     },
 
     async end(runId, ending) {
