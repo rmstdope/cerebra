@@ -195,7 +195,8 @@ not connect within a minute) ends `failed` with the reason, and nothing the navi
 kept waiting on it. A runner that disconnects without a final result fails its run; a run the
 navigator stops is sent `stop` and is ended `finished` once the runner reports its result, or
 after thirty seconds. Every ending closes the connection, releases any held item through the
-lifecycle, and stops and removes the container. A named agent has at most one live run, which the
+lifecycle, and stops and removes the container (an ending the database refuses is retried, and
+one it keeps refusing is left to the next startup's recovery). A named agent has at most one live run, which the
 database enforces.
 
 On startup the supervisor reconciles every run the database thinks is live against the engine's

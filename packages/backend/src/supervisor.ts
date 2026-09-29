@@ -64,6 +64,9 @@ export interface SupervisorOptions {
   ) => Promise<void>;
   readonly connectTimeoutMs?: number;
   readonly stopTimeoutMs?: number;
+  /** How often an ending is tried before it is left to the next restart's recovery. */
+  readonly endAttempts?: number;
+  readonly endRetryMs?: number;
   readonly log?: (message: string) => void;
 }
 
@@ -169,6 +172,8 @@ export function createSupervisor({
   prepareDirectories,
   connectTimeoutMs = 60_000,
   stopTimeoutMs = 30_000,
+  endAttempts = 5,
+  endRetryMs = 1_000,
   log = () => {},
 }: SupervisorOptions): Supervisor {
   const live = new Map<string, LiveRun>();
@@ -188,11 +193,32 @@ export function createSupervisor({
     if (containerId === null) return;
     try {
       await engine.stop(containerId);
+    } catch (error) {
+      log(
+        `Run ${runId}: its container could not be stopped: ${failureText(error)}`,
+      );
+    }
+    try {
       await engine.remove(containerId);
     } catch (error) {
       log(
         `Run ${runId}: its container could not be removed: ${failureText(error)}`,
       );
+    }
+  }
+
+  /** Records a run's ending, retrying so a passing database fault cannot leave it live. */
+  async function recordEnding(runId: string, ending: EndRun): Promise<boolean> {
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await runs.end(runId, ending);
+      } catch (error) {
+        log(
+          `Run ${runId}: its ending could not be recorded (attempt ${attempt}): ${failureText(error)}`,
+        );
+        if (attempt >= endAttempts) throw error;
+        await new Promise((resolve) => setTimeout(resolve, endRetryMs));
+      }
     }
   }
 
@@ -203,17 +229,19 @@ export function createSupervisor({
       if (entry.connectTimer !== null) clearTimeout(entry.connectTimer);
       if (entry.stopTimer !== null) clearTimeout(entry.stopTimer);
     }
-    const ended = await runs.end(runId, ending);
     entry?.connection?.close();
-    const run = await runs.get(runId);
-    if (ended) {
-      publish(runId, {
-        failure: ending.failure ?? null,
-        state: ending.state,
-        type: 'state',
-      });
+    try {
+      if (await recordEnding(runId, ending)) {
+        publish(runId, {
+          failure: ending.failure ?? null,
+          state: ending.state,
+          type: 'state',
+        });
+      }
+    } finally {
+      const run = await runs.get(runId).catch(() => null);
+      await removeContainer(runId, run?.containerId ?? null);
     }
-    await removeContainer(runId, run?.containerId ?? null);
   }
 
   async function agentToStart(agentId: string) {
@@ -271,6 +299,7 @@ export function createSupervisor({
       throw new Error('The agent type names no image.');
     }
     await prepareDirectories(run.id, agentId);
+    if (!live.has(run.id)) return;
     const container = await engine.create({
       agentId,
       environment: {
@@ -287,7 +316,9 @@ export function createSupervisor({
       runId: run.id,
     });
     await runs.setContainer(run.id, container.id);
-    await engine.start(container.id);
+    if (live.has(run.id)) await engine.start(container.id);
+    // Stopped while the container was being made: the ending may not have seen it.
+    if (!live.has(run.id)) await removeContainer(run.id, container.id);
   }
 
   async function liveRun(runId: string): Promise<LiveRun> {

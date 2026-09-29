@@ -426,6 +426,82 @@ describe('the run supervisor', { concurrent: false }, () => {
     });
   });
 
+  test('a run stopped while its container is being made leaves no container behind', async () => {
+    let release: () => void = () => undefined;
+    const prepared = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await withSupervisor(
+      async ({ agent, engine, runs, supervisor }) => {
+        const cerebroId = await agent('Cerebro');
+        const starting = supervisor.start(cerebroId);
+        await settle();
+        const live = await runs.liveFor(cerebroId);
+        expect(live).not.toBeNull();
+
+        await supervisor.stop(cerebroId);
+        release();
+        const { runId } = await starting;
+
+        expect(runId).toBe(live?.id);
+        expect((await runs.get(runId))?.state).toBe('finished');
+        expect(containerOf(engine, runId)).toBeUndefined();
+      },
+      { prepareDirectories: () => prepared },
+    );
+  });
+
+  test('a container that cannot be stopped is still removed', async () => {
+    await withSupervisor(async ({ agent, engine, runs, supervisor }) => {
+      const cerebroId = await agent('Cerebro');
+      engine.failNext('start', new EngineError('start', 'No room.'));
+      engine.failNext('stop', new EngineError('stop', 'Already gone.'));
+
+      const failure = await supervisor.start(cerebroId).catch((e) => e);
+
+      expect(failure).toBeInstanceOf(RunStartError);
+      const runId = (failure as RunStartError).runId;
+      expect((await runs.get(runId))?.state).toBe('failed');
+      expect(containerOf(engine, runId)).toBeUndefined();
+    });
+  });
+
+  test('an ending the database refuses at first is retried until it is recorded', async () => {
+    await withTestDatabase(async (database) => {
+      const projectId = await registerTestProject(database);
+      const store = createRunStore(database);
+      let refusals = 1;
+      const runs: typeof store = {
+        ...store,
+        end: async (runId, ending) => {
+          if (refusals > 0) {
+            refusals -= 1;
+            throw new Error('connection reset');
+          }
+          return store.end(runId, ending);
+        },
+      };
+      const supervisor = createSupervisor({
+        credentials: { resolveForRun: goodCredentials },
+        database,
+        endRetryMs: 1,
+        engine: createFakeEngine(),
+        gatewayUrl: 'ws://main:4317/runner',
+        prepareDirectories: async () => undefined,
+        runs,
+      });
+      const cerebroId = await agentNamed(database, projectId, 'Cerebro');
+      const { runId } = await supervisor.start(cerebroId);
+
+      await supervisor.stopRun(runId);
+
+      expect((await store.get(runId))?.state).toBe('finished');
+      await expect(supervisor.send(runId, 'Hi')).rejects.toBeInstanceOf(
+        RunEndedError,
+      );
+    });
+  });
+
   test('recovery after a restart fails every live run and removes its container', async () => {
     await withSupervisor(async ({ agent, database, engine, runs }) => {
       const agentId = await agent('Cerebro');
