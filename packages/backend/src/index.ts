@@ -28,4 +28,24 @@ export {
   type WorkItemState,
 } from './lifecycle.js';
 export { migrateToLatest } from './migrations/index.js';
+export { createProjectRegistrationService } from './project-registration.js';
+export {
+  createProjectTokenCipher,
+  type EncryptedProjectToken,
+  type ProjectTokenCipher,
+} from './project-token.js';
+export {
+  GitHubAccessError,
+  InvalidProjectPrefixError,
+  InvalidProjectUrlError,
+  ProjectRegistrationService,
+  ProjectMirrorError,
+  type GitHubProject,
+  type GitHubRepository,
+  type MirrorRepository,
+  type Project,
+  type ProjectDiscovery,
+  type ProjectRegistration,
+  type ProjectStore,
+} from './projects.js';
 export { createServer, startServer } from './server.js';

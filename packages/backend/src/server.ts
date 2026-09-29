@@ -7,19 +7,70 @@ import Fastify, {
 import { join } from 'node:path';
 import { type AuthService, type AuthenticationResult } from './auth.js';
 import { createInstanceService, type InstanceService } from './instance.js';
+import {
+  GitHubAccessError,
+  InvalidProjectPrefixError,
+  InvalidProjectUrlError,
+  ProjectMirrorError,
+  type ProjectRegistration,
+} from './projects.js';
 
 export interface ServerOptions {
   readonly auth: AuthService;
   readonly instance?: InstanceService;
+  readonly projects?: ProjectRegistration;
   readonly uiDirectory?: string;
 }
 
 const sessionCookieName = 'cerebra_session';
 const sessionCookieLifetimeSeconds = 30 * 24 * 60 * 60;
+function projectRequestBody(value: unknown): {
+  credential: string;
+  prefix?: string;
+  remote: string;
+} | null {
+  if (typeof value !== 'object' || value === null) {
+    return null;
+  }
+
+  const body = value as Record<string, unknown>;
+  if (
+    typeof body.credential !== 'string' ||
+    typeof body.remote !== 'string' ||
+    (body.prefix !== undefined && typeof body.prefix !== 'string')
+  ) {
+    return null;
+  }
+
+  return {
+    credential: body.credential,
+    ...(typeof body.prefix === 'string' ? { prefix: body.prefix } : {}),
+    remote: body.remote,
+  };
+}
+
+function projectError(
+  error: unknown,
+): { readonly error: string; readonly status: number } | null {
+  if (
+    error instanceof InvalidProjectUrlError ||
+    error instanceof InvalidProjectPrefixError
+  ) {
+    return { error: error.message, status: 400 };
+  }
+  if (error instanceof GitHubAccessError) {
+    return { error: error.message, status: 401 };
+  }
+  if (error instanceof ProjectMirrorError) {
+    return { error: error.message, status: 502 };
+  }
+  return null;
+}
 
 export const createServer = async ({
   auth,
   instance = createInstanceService(),
+  projects,
   uiDirectory = process.env.CEREBRA_UI_DIR,
 }: ServerOptions): Promise<FastifyInstance> => {
   const server = Fastify();
@@ -89,6 +140,58 @@ export const createServer = async ({
       socket.on('message', (message) => socket.send(message));
     },
   );
+
+  server.post('/api/projects/discover', async (request, reply) => {
+    const body = projectRequestBody(request.body);
+    if (body === null) {
+      return reply
+        .status(400)
+        .send({ error: 'Enter a GitHub repository link.' });
+    }
+    if (projects === undefined) {
+      return reply
+        .status(503)
+        .send({ error: 'Project registration is unavailable.' });
+    }
+
+    try {
+      return await projects.discover(body);
+    } catch (error) {
+      const known = projectError(error);
+      if (known !== null) {
+        return reply.status(known.status).send({ error: known.error });
+      }
+      throw error;
+    }
+  });
+
+  server.post('/api/projects', async (request, reply) => {
+    const body = projectRequestBody(request.body);
+    if (body === null || body.prefix === undefined) {
+      return reply.status(400).send({ error: 'Enter the project settings.' });
+    }
+    if (projects === undefined) {
+      return reply
+        .status(503)
+        .send({ error: 'Project registration is unavailable.' });
+    }
+
+    try {
+      return reply.status(201).send(
+        await projects.register({
+          credential: body.credential,
+          prefix: body.prefix,
+          remote: body.remote,
+        }),
+      );
+    } catch (error) {
+      const known = projectError(error);
+      if (known !== null) {
+        return reply.status(known.status).send({ error: known.error });
+      }
+      throw error;
+    }
+  });
 
   if (uiDirectory !== undefined) {
     server.setNotFoundHandler((request, reply) => {

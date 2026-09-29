@@ -1,4 +1,4 @@
-import { Generated, Kysely, PostgresDialect } from 'kysely';
+import { type Generated, Kysely, PostgresDialect } from 'kysely';
 import { Pool } from 'pg';
 
 import type { Priority, WaitingKind, WorkItemState } from './lifecycle.js';
@@ -15,14 +15,6 @@ export interface Database {
     payload: unknown;
     work_item_id: string;
   };
-  projects: {
-    created_at: Generated<Date>;
-    design_enabled: boolean;
-    grooming_enabled: boolean;
-    id: string;
-    name: string;
-    verify_enabled: boolean;
-  };
   runs: {
     created_at: Generated<Date>;
     id: string;
@@ -36,7 +28,7 @@ export interface Database {
     user_id: string;
   };
   users: {
-    created_at: Date;
+    created_at: Generated<Date>;
     id: string;
     password_hash: string;
   };
@@ -70,6 +62,24 @@ export interface Database {
     updated_at: Generated<Date>;
     waiting_kind: WaitingKind | null;
     waiting_reason: string | null;
+  };
+  projects: {
+    created_at: Generated<Date>;
+    default_branch: Generated<string>;
+    design_enabled: Generated<boolean>;
+    grooming_enabled: Generated<boolean>;
+    github_token_ciphertext: Generated<string>;
+    github_token_iv: Generated<string>;
+    github_token_tag: Generated<string>;
+    id: string;
+    key_prefix: Generated<string>;
+    max_attempts: Generated<number>;
+    max_concurrent_runs: Generated<number>;
+    max_rounds: Generated<number>;
+    name: string;
+    owner: Generated<string>;
+    remote: Generated<string>;
+    verify_enabled: Generated<boolean>;
   };
 }
 

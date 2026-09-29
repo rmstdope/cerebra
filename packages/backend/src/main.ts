@@ -1,10 +1,12 @@
 import { createAuthService } from './auth.js';
 import { createDatabase } from './database.js';
 import { migrateToLatest } from './migrations/index.js';
+import { createProjectRegistrationService } from './project-registration.js';
 import { startServer } from './server.js';
 
 const port = Number(process.env.CEREBRA_PORT ?? 4317);
 const database = createDatabase(process.env.DATABASE_URL ?? '');
+const projectTokenKey = process.env.CEREBRA_PROJECT_TOKEN_KEY;
 
 try {
   await migrateToLatest(database);
@@ -12,6 +14,14 @@ try {
     { host: '0.0.0.0', port },
     {
       auth: createAuthService(database),
+      projects:
+        projectTokenKey === undefined
+          ? undefined
+          : createProjectRegistrationService({
+              dataDirectory: process.env.CEREBRA_DATA_DIR ?? '/data',
+              database,
+              masterKey: projectTokenKey,
+            }),
       uiDirectory: new URL('../../ui/dist', import.meta.url).pathname,
     },
   );
