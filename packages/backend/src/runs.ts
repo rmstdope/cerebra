@@ -267,9 +267,12 @@ export function createRunStore(database: Kysely<Database>): RunStore {
         .leftJoin('agents', 'agents.id', 'runs.agent_id')
         .leftJoin('agent_types', 'agent_types.id', 'agents.agent_type_id')
         .leftJoin('work_items', 'work_items.holder_run_id', 'runs.id')
+        .leftJoin('work_items as claimed', 'claimed.id', 'runs.work_item_id')
         .select([
           ...runColumns,
           'agent_types.role as agent_role',
+          'claimed.id as claimed_id',
+          'claimed.title as claimed_title',
           'work_items.id as item_id',
           'work_items.title as item_title',
         ])
@@ -278,22 +281,25 @@ export function createRunStore(database: Kysely<Database>): RunStore {
       if (row === undefined) {
         return null;
       }
-      // Once released, the item is the one this run's history names first: its claim.
+      // The item it claimed; for a run recorded before claims were stamped, the one it
+      // holds, or once released the one its history names first.
       const item =
-        row.item_id !== null && row.item_title !== null
-          ? { id: row.item_id, title: row.item_title }
-          : ((await database
-              .selectFrom('work_item_history')
-              .innerJoin(
-                'work_items',
-                'work_items.id',
-                'work_item_history.work_item_id',
-              )
-              .select(['work_items.id', 'work_items.title'])
-              .where('work_item_history.actor_run_id', '=', runId)
-              .orderBy('work_item_history.id')
-              .limit(1)
-              .executeTakeFirst()) ?? null);
+        row.claimed_id !== null && row.claimed_title !== null
+          ? { id: row.claimed_id, title: row.claimed_title }
+          : row.item_id !== null && row.item_title !== null
+            ? { id: row.item_id, title: row.item_title }
+            : ((await database
+                .selectFrom('work_item_history')
+                .innerJoin(
+                  'work_items',
+                  'work_items.id',
+                  'work_item_history.work_item_id',
+                )
+                .select(['work_items.id', 'work_items.title'])
+                .where('work_item_history.actor_run_id', '=', runId)
+                .orderBy('work_item_history.id')
+                .limit(1)
+                .executeTakeFirst()) ?? null);
       const events = await database
         .selectFrom('run_events')
         .select(['created_at', 'event', 'position'])

@@ -105,6 +105,60 @@ describe('the run store', { concurrent: false }, () => {
     });
   });
 
+  test('a run names the item it claimed, not one it touched before', async () => {
+    await withTestDatabase(async (database) => {
+      const projectId = await registerTestProject(database);
+      const agentId = await agentNamed(database, projectId, 'Storm');
+      const runs = createRunStore(database);
+      const run = await runs.create({
+        agentId,
+        agentName: 'Storm',
+        projectId,
+        role: 'builder',
+        tokenHash: 'hash-claimed',
+      });
+      const [touched, claimed] = [crypto.randomUUID(), crypto.randomUUID()];
+      await database
+        .insertInto('work_items')
+        .values(
+          [
+            [touched, 'File the follow-up'],
+            [claimed, 'Share reports'],
+          ].map(([id, title]) => ({
+            attempts: 0,
+            description: '',
+            id: id!,
+            priority: 'P1' as const,
+            project_id: projectId,
+            rounds: 0,
+            state: 'build_ready',
+            title: title!,
+          })),
+        )
+        .execute();
+      await database
+        .insertInto('work_item_history')
+        .values({
+          actor_role: 'builder',
+          actor_run_id: run.id,
+          from_state: 'new',
+          to_state: 'build_ready',
+          work_item_id: touched,
+        })
+        .execute();
+      await database
+        .updateTable('runs')
+        .set({ work_item_id: claimed })
+        .where('id', '=', run.id)
+        .execute();
+
+      expect((await runs.read(run.id))?.run.item).toEqual({
+        id: claimed,
+        title: 'Share reports',
+      });
+    });
+  });
+
   test('ending a run that holds an item gives it back with its last message', async () => {
     await withTestDatabase(async (database) => {
       const projectId = await registerTestProject(database);
