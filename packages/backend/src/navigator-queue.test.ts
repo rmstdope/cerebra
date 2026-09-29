@@ -1,5 +1,12 @@
 import { Pool } from 'pg';
-import { afterEach, beforeEach, describe, expect, test } from 'vitest';
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  test,
+} from 'vitest';
 import type { Kysely } from 'kysely';
 
 import { createBoard, WorkItemNotFoundError, type Board } from './board.js';
@@ -19,10 +26,13 @@ if (!databaseUrl) {
 
 const url = databaseUrl;
 
-async function withPool(query: string): Promise<void> {
+async function withPool<T extends object = object>(
+  query: string,
+  values: readonly unknown[] = [],
+): Promise<T[]> {
   const pool = new Pool({ connectionString: url });
   try {
-    await pool.query(query);
+    return (await pool.query<T>(query, [...values])).rows;
   } finally {
     await pool.end();
   }
@@ -36,13 +46,31 @@ describe('navigator queue', { concurrent: false }, () => {
   const alpha = crypto.randomUUID();
   const beta = crypto.randomUUID();
 
-  beforeEach(async () => {
+  // One schema per file: dropping a schema while another file migrates races
+  // Kysely's all-schema introspection, so tests truncate rather than drop.
+  beforeAll(async () => {
     schema = `cerebra_queue_test_${crypto.randomUUID().replaceAll('-', '')}`;
     await withPool(`CREATE SCHEMA "${schema}"`);
     database = createDatabase(url, schema);
     await migrateToLatest(database, schema);
     board = createBoard(database);
     queue = createNavigatorQueue(database);
+  });
+
+  afterAll(async () => {
+    await database.destroy();
+    await withPool(`DROP SCHEMA "${schema}" CASCADE`);
+  });
+
+  beforeEach(async () => {
+    const tables = await withPool<{ tablename: string }>(
+      "SELECT tablename FROM pg_tables WHERE schemaname = $1 AND tablename NOT LIKE 'kysely%'",
+      [schema],
+    );
+    const names = tables
+      .map(({ tablename }) => `"${schema}"."${tablename}"`)
+      .join(', ');
+    await withPool(`TRUNCATE ${names} RESTART IDENTITY CASCADE`);
     await board.createProject({ id: alpha, name: 'alpha' });
     await board.createProject({ id: beta, name: 'beta' });
     await database
@@ -50,11 +78,6 @@ describe('navigator queue', { concurrent: false }, () => {
       .set({ owner: 'acme' })
       .where('id', '=', alpha)
       .execute();
-  });
-
-  afterEach(async () => {
-    await database.destroy();
-    await withPool(`DROP SCHEMA "${schema}" CASCADE`);
   });
 
   async function file(
