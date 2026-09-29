@@ -91,6 +91,7 @@ export interface BoardPage {
   readonly items: readonly BoardWorkItem[];
   readonly nextCursor: string | null;
   readonly snapshot: string;
+  readonly total: number;
 }
 
 export type TriageResult =
@@ -243,10 +244,21 @@ export function createBoard(database: Kysely<Database>): Board {
         .offset(offset)
         .execute();
 
+      const total = await filtered(
+        database
+          .selectFrom('work_items')
+          .select((builder) => builder.fn.countAll<string>().as('count')),
+        projectId,
+        query,
+      )
+        .where('filed_sequence', '<=', snapshot)
+        .executeTakeFirstOrThrow();
+
       return {
         items: page.slice(0, limit).map(toBoardWorkItem),
         nextCursor: page.length > limit ? String(offset + limit) : null,
         snapshot,
+        total: Number(total.count),
       };
     },
 

@@ -1,74 +1,346 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from 'react';
 
 import {
+  BoardRequestError,
   browserBoardClient,
+  workItemStates,
   type BoardClient,
+  type BoardComment,
+  type BoardFilters,
   type BoardRoute,
+  type HistoryEntry,
   type Priority,
   type WorkItem,
 } from './board';
 
-function label(state: string): string {
-  return state === 'new'
-    ? 'Needs triage'
-    : state
-        .replaceAll('_', ' ')
-        .replace(/\b\w/g, (letter) => letter.toUpperCase());
+type BoardStorage = Pick<Storage, 'getItem' | 'setItem'>;
+type Tab = 'overview' | 'discussion' | 'history';
+type Panel =
+  { kind: 'none' } | { kind: 'draft' } | { kind: 'item'; id: string };
+
+interface Remote<T> {
+  readonly data: T | null;
+  readonly error: boolean;
+  readonly loading: boolean;
+}
+
+interface ListState {
+  readonly items: readonly WorkItem[];
+  readonly nextCursor: string | null;
+  readonly snapshot: string;
+  readonly total: number;
+}
+
+const emptyFilters: BoardFilters = {
+  priority: '',
+  search: '',
+  sort: 'newest',
+  state: '',
+};
+
+const routes: readonly {
+  readonly description: string;
+  readonly label: string;
+  readonly value: BoardRoute;
+}[] = [
+  {
+    description:
+      'Clarify the intended result before someone designs or builds it.',
+    label: 'Groom the outcome',
+    value: 'grooming_ready',
+  },
+  {
+    description:
+      'The intended result is already clear and needs an agreed experience.',
+    label: 'Send to design',
+    value: 'design_ready',
+  },
+  {
+    description: 'It can be built without a design session.',
+    label: 'Send to build',
+    value: 'build_ready',
+  },
+];
+
+const idle = { data: null, error: false, loading: false } as const;
+
+export function stateLabel(state: string): string {
+  if (state === 'new') return 'Needs triage';
+  const words = state.replaceAll('_', ' ');
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+function actorLabel(role: string): string {
+  return role.charAt(0).toUpperCase() + role.slice(1);
+}
+
+function formatTime(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
+function filtersKey(projectId: string): string {
+  return `cerebra.board.${projectId}`;
+}
+
+function readFilters(storage: BoardStorage, projectId: string): BoardFilters {
+  try {
+    const stored = JSON.parse(
+      storage.getItem(filtersKey(projectId)) ?? 'null',
+    ) as Partial<BoardFilters> | null;
+    if (stored === null || typeof stored !== 'object') return emptyFilters;
+    return {
+      priority:
+        typeof stored.priority === 'string'
+          ? stored.priority
+          : emptyFilters.priority,
+      search: typeof stored.search === 'string' ? stored.search : '',
+      sort:
+        stored.sort === 'oldest' || stored.sort === 'priority'
+          ? stored.sort
+          : 'newest',
+      state: typeof stored.state === 'string' ? stored.state : '',
+    };
+  } catch {
+    return emptyFilters;
+  }
+}
+
+function browserStorage(): BoardStorage {
+  try {
+    return window.localStorage;
+  } catch {
+    return { getItem: () => null, setItem: () => undefined };
+  }
+}
+
+function isFiltered(filters: BoardFilters): boolean {
+  return (
+    filters.search.trim() !== '' ||
+    filters.state !== '' ||
+    filters.priority !== ''
+  );
 }
 
 export function ProjectBoard({
+  arrivalsIntervalMs = 30_000,
   boardClient = browserBoardClient,
   projectId,
+  storage: storageOverride,
 }: {
+  readonly arrivalsIntervalMs?: number;
   readonly boardClient?: BoardClient;
   readonly projectId: string;
+  readonly storage?: BoardStorage;
 }): ReactNode {
-  const [items, setItems] = useState<readonly WorkItem[] | null>(null);
-  const [selected, setSelected] = useState<WorkItem | null>(null);
-  const [draft, setDraft] = useState(false);
+  const [storage] = useState<BoardStorage>(
+    () => storageOverride ?? browserStorage(),
+  );
+  const [filters, setFilters] = useState<BoardFilters>(() =>
+    readFilters(storage, projectId),
+  );
+  const [list, setList] = useState<ListState | null>(null);
+  const [listLoading, setListLoading] = useState(true);
+  const [listError, setListError] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [moreError, setMoreError] = useState(false);
+  const [arrivals, setArrivals] = useState(0);
+  const [panel, setPanel] = useState<Panel>({ kind: 'none' });
+  const [tab, setTab] = useState<Tab>('overview');
+  const [itemRead, setItemRead] = useState<Remote<WorkItem>>(idle);
+  const [comments, setComments] =
+    useState<Remote<readonly BoardComment[]>>(idle);
+  const [history, setHistory] = useState<Remote<readonly HistoryEntry[]>>(idle);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [error, setError] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [comment, setComment] = useState('');
   const [priority, setPriority] = useState<Priority>('P2');
   const [route, setRoute] = useState<BoardRoute>('grooming_ready');
+  const [saving, setSaving] = useState(false);
+  const [saveRetry, setSaveRetry] = useState<(() => void) | null>(null);
+  const [routeRefused, setRouteRefused] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
-  const cancelButton = useRef<HTMLButtonElement>(null);
+  const [focusTarget, setFocusTarget] = useState<
+    { kind: 'row'; id: string } | { kind: 'cancel' } | { kind: 'dialog' } | null
+  >(null);
+  const rows = useRef(new Map<string, HTMLButtonElement>());
+  const cancelControl = useRef<HTMLButtonElement>(null);
+  const dialogHeading = useRef<HTMLHeadingElement>(null);
+  const listRequest = useRef(0);
 
-  const refresh = async () => {
-    setError(false);
+  const loadList = useCallback(
+    async (current: BoardFilters) => {
+      const request = ++listRequest.current;
+      setListLoading(true);
+      setListError(false);
+      try {
+        const next = await boardClient.list(projectId, current);
+        if (request !== listRequest.current) return;
+        setList(next);
+        setArrivals(0);
+        setMoreError(false);
+      } catch {
+        if (request !== listRequest.current) return;
+        setListError(true);
+      } finally {
+        if (request === listRequest.current) setListLoading(false);
+      }
+    },
+    [boardClient, projectId],
+  );
+
+  useEffect(() => {
     try {
-      const next = await boardClient.list(projectId);
-      setItems(next);
-      setSelected(
-        (current) =>
-          next.find((item) => item.id === current?.id) ?? next[0] ?? null,
-      );
+      storage.setItem(filtersKey(projectId), JSON.stringify(filters));
     } catch {
-      setError(true);
+      // Remembering filters is best effort; the board still works without it.
+    }
+    const timer = window.setTimeout(() => void loadList(filters), 150);
+    return () => window.clearTimeout(timer);
+  }, [filters, loadList, projectId, storage]);
+
+  const snapshot = list?.snapshot ?? null;
+  useEffect(() => {
+    if (snapshot === null) return;
+    const timer = window.setInterval(() => {
+      boardClient
+        .arrivals(projectId, filters, snapshot)
+        .then(setArrivals)
+        .catch(() => undefined);
+    }, arrivalsIntervalMs);
+    return () => window.clearInterval(timer);
+  }, [arrivalsIntervalMs, boardClient, filters, projectId, snapshot]);
+
+  useEffect(() => {
+    if (focusTarget === null) return;
+    if (focusTarget.kind === 'row') rows.current.get(focusTarget.id)?.focus();
+    if (focusTarget.kind === 'cancel') cancelControl.current?.focus();
+    if (focusTarget.kind === 'dialog') dialogHeading.current?.focus();
+    setFocusTarget(null);
+  }, [focusTarget]);
+
+  const selectedId = panel.kind === 'item' ? panel.id : null;
+  const selected =
+    itemRead.data?.id === selectedId && itemRead.data !== null
+      ? itemRead.data
+      : (list?.items.find((item) => item.id === selectedId) ?? null);
+
+  const replaceItem = (item: WorkItem) => {
+    setList((current) =>
+      current === null
+        ? current
+        : {
+            ...current,
+            items: current.items.map((candidate) =>
+              candidate.id === item.id ? item : candidate,
+            ),
+          },
+    );
+    setItemRead({ data: item, error: false, loading: false });
+  };
+
+  const readItem = async (id: string) => {
+    setItemRead((current) => ({ ...current, error: false, loading: true }));
+    try {
+      const item = await boardClient.item(id);
+      replaceItem(item);
+    } catch {
+      setItemRead((current) => ({ ...current, error: true, loading: false }));
     }
   };
 
-  useEffect(() => {
-    void refresh();
-  }, [projectId]);
+  const readComments = async (id: string) => {
+    setComments((current) => ({ ...current, error: false, loading: true }));
+    try {
+      setComments({
+        data: await boardClient.comments(id),
+        error: false,
+        loading: false,
+      });
+    } catch {
+      setComments((current) => ({ ...current, error: true, loading: false }));
+    }
+  };
+
+  const readHistory = async (id: string) => {
+    setHistory((current) => ({ ...current, error: false, loading: true }));
+    try {
+      setHistory({
+        data: await boardClient.history(id),
+        error: false,
+        loading: false,
+      });
+    } catch {
+      setHistory((current) => ({ ...current, error: true, loading: false }));
+    }
+  };
+
+  const resetDetail = () => {
+    setTab('overview');
+    setItemRead(idle);
+    setComments(idle);
+    setHistory(idle);
+    setComment('');
+    setPriority('P2');
+    setRoute('grooming_ready');
+    setSaveRetry(null);
+    setRouteRefused(false);
+    setConfirming(false);
+  };
+
+  const openItem = (id: string) => {
+    resetDetail();
+    setNotice(null);
+    setPanel({ kind: 'item', id });
+    void readItem(id);
+  };
+
+  const openDraft = () => {
+    resetDetail();
+    setNotice(null);
+    setPanel({ kind: 'draft' });
+  };
+
+  const closePanel = () => {
+    const id = selectedId;
+    resetDetail();
+    setPanel({ kind: 'none' });
+    if (id !== null) setFocusTarget({ kind: 'row', id });
+  };
+
+  const chooseTab = (next: Tab) => {
+    setTab(next);
+    if (selectedId === null) return;
+    if (next === 'discussion') void readComments(selectedId);
+    if (next === 'history') void readHistory(selectedId);
+  };
 
   const save = async () => {
     if (!title.trim()) return;
     setSaving(true);
-    setError(false);
+    setSaveRetry(null);
     try {
       const item = await boardClient.create(projectId, {
         description,
         title: title.trim(),
       });
-      setItems((current) => [...(current ?? []), item]);
-      setSelected(item);
-      setDraft(false);
       setTitle('');
       setDescription('');
+      resetDetail();
+      setPanel({ kind: 'item', id: item.id });
+      setItemRead({ data: item, error: false, loading: false });
+      setNotice('Work item added. It is ready for you to review.');
+      await loadList(filters);
     } catch {
-      setError(true);
+      setSaveRetry(() => () => void save());
     } finally {
       setSaving(false);
     }
@@ -77,18 +349,21 @@ export function ProjectBoard({
   const triage = async () => {
     if (selected === null) return;
     setSaving(true);
-    setError(false);
+    setSaveRetry(null);
+    setRouteRefused(false);
+    setNotice(null);
     try {
-      const item = await boardClient.triage(selected.id, priority, route);
-      setItems(
-        (current) =>
-          current?.map((candidate) =>
-            candidate.id === item.id ? item : candidate,
-          ) ?? [item],
-      );
-      setSelected(item);
-    } catch {
-      setError(true);
+      replaceItem(await boardClient.triage(selected.id, priority, route));
+      setNotice('Priority and next step updated.');
+    } catch (error) {
+      if (
+        error instanceof BoardRequestError &&
+        error.code === 'route_unavailable'
+      ) {
+        setRouteRefused(true);
+      } else {
+        setSaveRetry(() => () => void triage());
+      }
     } finally {
       setSaving(false);
     }
@@ -96,24 +371,86 @@ export function ProjectBoard({
 
   const cancel = async () => {
     if (selected === null) return;
+    const id = selected.id;
     setSaving(true);
+    setSaveRetry(null);
     try {
-      const item = await boardClient.cancel(selected.id);
-      setItems(
-        (current) =>
-          current?.map((candidate) =>
-            candidate.id === item.id ? item : candidate,
-          ) ?? [item],
-      );
-      setSelected(item);
+      replaceItem(await boardClient.cancel(id));
       setConfirming(false);
-      window.setTimeout(() => cancelButton.current?.focus());
+      setFocusTarget({ kind: 'row', id });
     } catch {
-      setError(true);
+      setConfirming(false);
+      setSaveRetry(() => () => void cancel());
     } finally {
       setSaving(false);
     }
   };
+
+  const postComment = async () => {
+    if (selectedId === null || !comment.trim()) return;
+    setSaving(true);
+    setSaveRetry(null);
+    try {
+      const added = await boardClient.addComment(selectedId, comment.trim());
+      setComments((current) => ({
+        ...current,
+        data: [...(current.data ?? []), added],
+      }));
+      setComment('');
+    } catch {
+      setSaveRetry(() => () => void postComment());
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const loadMore = async () => {
+    if (list === null || list.nextCursor === null) return;
+    setLoadingMore(true);
+    setMoreError(false);
+    try {
+      const next = await boardClient.list(projectId, filters, {
+        cursor: list.nextCursor,
+        snapshot: list.snapshot,
+      });
+      setList((current) =>
+        current === null
+          ? next
+          : {
+              ...current,
+              items: [...current.items, ...next.items],
+              nextCursor: next.nextCursor,
+            },
+      );
+    } catch {
+      setMoreError(true);
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
+  const closeDialog = () => {
+    setConfirming(false);
+    setFocusTarget({ kind: 'cancel' });
+  };
+
+  const panelOpen = panel.kind !== 'none';
+  const escape = useRef<() => void>(() => undefined);
+  escape.current = () => {
+    if (confirming) closeDialog();
+    else if (panelOpen) closePanel();
+  };
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      escape.current();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  const updateFilters = (change: Partial<BoardFilters>) =>
+    setFilters((current) => ({ ...current, ...change }));
 
   return (
     <main className="mx-auto w-full max-w-320 px-5 py-10 sm:py-14">
@@ -126,113 +463,274 @@ export function ProjectBoard({
             See what is waiting, in progress and finished.
           </p>
         </div>
-        <button
-          className="primary-button"
-          onClick={() => setDraft(true)}
-          type="button"
-        >
+        <button className="primary-button" onClick={openDraft} type="button">
           Add work item
         </button>
       </div>
-      {error ? (
-        <p
-          className="mt-5 rounded-lg bg-red-50 p-3 text-[var(--danger)] dark:bg-red-950"
-          role="alert"
+      <div className="mt-6 flex flex-wrap gap-3">
+        <input
+          aria-label="Search work items"
+          className="auth-input mt-0 min-w-0 flex-[2_1_14rem]"
+          onChange={(event) => updateFilters({ search: event.target.value })}
+          placeholder="Search work items"
+          type="search"
+          value={filters.search}
+        />
+        <select
+          aria-label="Filter by state"
+          className="auth-input mt-0 w-auto flex-[1_1_10rem]"
+          onChange={(event) => updateFilters({ state: event.target.value })}
+          value={filters.state}
         >
-          Cerebra couldn’t{' '}
-          {items === null ? 'load this board' : 'save your changes'}. Try again.{' '}
-          <button
-            className="underline"
-            onClick={() => void refresh()}
-            type="button"
-          >
-            Try again
-          </button>
-        </p>
-      ) : null}
-      <div className="mt-7 grid gap-5 lg:grid-cols-[1.4fr_.9fr]">
-        <section className="card p-0" aria-label="Work items">
-          <div className="flex items-center justify-between border-b border-[var(--border)] p-5">
+          <option value="">All states</option>
+          {workItemStates.map((state) => (
+            <option key={state} value={state}>
+              {stateLabel(state)}
+            </option>
+          ))}
+        </select>
+        <select
+          aria-label="Filter by priority"
+          className="auth-input mt-0 w-auto flex-[1_1_10rem]"
+          onChange={(event) => updateFilters({ priority: event.target.value })}
+          value={filters.priority}
+        >
+          <option value="">All priorities</option>
+          {['P0', 'P1', 'P2', 'P3'].map((value) => (
+            <option key={value} value={value}>
+              {value}
+            </option>
+          ))}
+          <option value="none">No priority</option>
+        </select>
+        <select
+          aria-label="Sort work items"
+          className="auth-input mt-0 w-auto flex-[1_1_12rem]"
+          onChange={(event) =>
+            updateFilters({ sort: event.target.value as BoardFilters['sort'] })
+          }
+          value={filters.sort}
+        >
+          <option value="newest">Newest first</option>
+          <option value="oldest">Oldest first</option>
+          <option value="priority">Highest priority first</option>
+        </select>
+      </div>
+      <p aria-live="polite" className="mt-4 empty:hidden" role="status">
+        {notice}
+      </p>
+      <div className="mt-5 grid gap-5 lg:grid-cols-[1.4fr_.9fr]">
+        <section
+          aria-label="Work items"
+          className={`card p-0 ${panelOpen ? 'hidden lg:block' : ''}`}
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border)] p-5">
             <h2 className="text-lg font-bold">Work items</h2>
             <span className="text-sm text-[var(--muted)]">
-              {items?.length ?? 'Loading…'}
-              {items ? ' items' : ''}
+              {list !== null && listLoading ? 'Loading… ' : ''}
+              {list !== null
+                ? `${list.total} ${list.total === 1 ? 'item' : 'items'}`
+                : ''}
             </span>
           </div>
-          {items === null ? (
-            <p className="p-5 text-[var(--muted)]">Loading…</p>
-          ) : items.length === 0 ? (
-            <div className="p-6">
-              <p>
-                Nothing is on this board yet. Add your first work item to get
-                started.
-              </p>
+          {listError ? (
+            <p className="auth-error m-5" role="alert">
+              Cerebra couldn’t load this board. Try again.{' '}
               <button
-                className="primary-button mt-5"
-                onClick={() => setDraft(true)}
+                className="font-bold underline"
+                onClick={() => void loadList(filters)}
                 type="button"
               >
-                Add work item
+                Try again
               </button>
-            </div>
+            </p>
+          ) : null}
+          {arrivals > 0 ? (
+            <p className="m-5 rounded-lg bg-[var(--accent-muted)] p-3 text-sm">
+              {arrivals === 1
+                ? '1 new work item'
+                : `${arrivals} new work items`}{' '}
+              —{' '}
+              <button
+                className="font-bold underline"
+                onClick={() => void loadList(filters)}
+                type="button"
+              >
+                Refresh list
+              </button>
+            </p>
+          ) : null}
+          {list === null ? (
+            listError ? null : (
+              <div
+                aria-busy="true"
+                className="m-5 h-40 animate-pulse rounded-lg bg-[var(--accent-muted)] motion-reduce:animate-none"
+              >
+                <span className="sr-only">Loading…</span>
+              </div>
+            )
+          ) : list.items.length === 0 ? (
+            isFiltered(filters) ? (
+              <div className="p-6">
+                <p>No work items match these filters.</p>
+                <button
+                  className="secondary-button mt-5"
+                  onClick={() =>
+                    setFilters({ ...emptyFilters, sort: filters.sort })
+                  }
+                  type="button"
+                >
+                  Clear filters
+                </button>
+              </div>
+            ) : (
+              <div className="p-6">
+                <p>
+                  Nothing is on this board yet. Add your first work item to get
+                  started.
+                </p>
+                <button
+                  className="primary-button mt-5"
+                  onClick={openDraft}
+                  type="button"
+                >
+                  Add work item
+                </button>
+              </div>
+            )
           ) : (
             <div>
-              {items.map((item) => (
+              {list.items.map((item) => (
                 <button
-                  className={`flex w-full items-center gap-3 border-b border-[var(--border)] p-4 text-left last:border-0 ${selected?.id === item.id ? 'bg-[var(--accent-muted)]' : ''}`}
+                  aria-current={selectedId === item.id ? 'true' : undefined}
+                  className={`flex w-full items-center gap-3 border-b border-[var(--border)] p-4 text-left outline-none last:border-0 focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-[var(--focus)] ${selectedId === item.id ? 'bg-[var(--accent-muted)]' : ''}`}
                   key={item.id}
-                  onClick={() => setSelected(item)}
+                  onClick={() => openItem(item.id)}
+                  ref={(element) => {
+                    if (element === null) rows.current.delete(item.id);
+                    else rows.current.set(item.id, element);
+                  }}
                   type="button"
                 >
                   <span className="rounded bg-amber-100 px-2 py-1 text-xs font-bold text-amber-950 dark:bg-amber-900 dark:text-amber-50">
                     {item.priority ?? '—'}
                   </span>
-                  <span className="min-w-0 flex-1">
-                    <strong className="block truncate">{item.title}</strong>
-                    <span className="text-sm text-[var(--muted)]">
-                      {label(item.state)}
-                    </span>
-                  </span>
+                  <strong className="min-w-0 flex-1 break-words">
+                    {item.title}
+                  </strong>
                   <span className="rounded-full bg-[var(--accent-muted)] px-2 py-1 text-xs font-bold">
-                    {label(item.state)}
+                    {stateLabel(item.state)}
                   </span>
                 </button>
               ))}
+              {list.nextCursor !== null ? (
+                <div className="p-4">
+                  {moreError ? (
+                    <p className="auth-error mt-0 mb-3" role="alert">
+                      Cerebra couldn’t load this board. Try again.
+                    </p>
+                  ) : null}
+                  <button
+                    className="secondary-button w-full"
+                    disabled={loadingMore}
+                    onClick={() => void loadMore()}
+                    type="button"
+                  >
+                    {loadingMore
+                      ? 'Loading more work items…'
+                      : moreError
+                        ? 'Try again'
+                        : 'Show more work items'}
+                  </button>
+                </div>
+              ) : null}
             </div>
           )}
         </section>
-        <section className="card min-h-80" aria-label="Selected work item">
-          {draft ? (
+        <section
+          aria-label="Selected work item"
+          className={`card ${panelOpen ? 'fixed inset-0 z-20 overflow-y-auto rounded-none lg:static lg:rounded-2xl' : 'hidden min-h-80 lg:block'}`}
+        >
+          {panelOpen ? (
+            <div className="mb-4 flex flex-wrap justify-between gap-3">
+              <button
+                className="secondary-button lg:hidden"
+                onClick={closePanel}
+                type="button"
+              >
+                Back to board
+              </button>
+              <button
+                className="secondary-button ml-auto hidden lg:inline-block"
+                onClick={closePanel}
+                type="button"
+              >
+                Close
+              </button>
+            </div>
+          ) : null}
+          {saveRetry !== null ? (
+            <p className="auth-error mt-0 mb-4" role="alert">
+              Cerebra couldn’t save your changes. Try again.{' '}
+              <button
+                className="font-bold underline"
+                onClick={saveRetry}
+                type="button"
+              >
+                Try again
+              </button>
+            </p>
+          ) : null}
+          {panel.kind === 'draft' ? (
             <NewWorkItem
               description={description}
-              onCancel={() => setDraft(false)}
+              onCancel={closePanel}
               onDescription={setDescription}
               onSave={() => void save()}
               onTitle={setTitle}
               saving={saving}
               title={title}
             />
-          ) : selected ? (
+          ) : selected !== null ? (
             <ItemDetail
-              cancelButton={cancelButton}
+              cancelControl={cancelControl}
+              comment={comment}
+              comments={comments}
               confirming={confirming}
-              onCancel={() => setConfirming(true)}
-              onConfirmCancel={() => void cancel()}
-              onKeep={() => {
-                setConfirming(false);
-                window.setTimeout(() => cancelButton.current?.focus());
+              dialogHeading={dialogHeading}
+              history={history}
+              item={selected}
+              itemRead={itemRead}
+              onCancel={() => {
+                setConfirming(true);
+                setFocusTarget({ kind: 'dialog' });
               }}
+              onComment={setComment}
+              onConfirmCancel={() => void cancel()}
+              onKeep={closeDialog}
+              onPostComment={() => void postComment()}
               onPriority={setPriority}
-              onRoute={setRoute}
+              onRetryComments={() => void readComments(selected.id)}
+              onRetryHistory={() => void readHistory(selected.id)}
+              onRetryItem={() => void readItem(selected.id)}
+              onRoute={(next) => {
+                setRoute(next);
+                setRouteRefused(false);
+              }}
+              onSaveForLater={closePanel}
+              onTab={chooseTab}
               onTriage={() => void triage()}
               priority={priority}
               route={route}
+              routeRefused={routeRefused}
               saving={saving}
-              item={selected}
+              tab={tab}
             />
+          ) : panel.kind === 'item' ? (
+            <p className="text-[var(--muted)]">Loading…</p>
           ) : (
             <p className="text-[var(--muted)]">
-              Select a work item to inspect it.
+              Select a work item to see its details.
             </p>
           )}
         </section>
@@ -260,16 +758,23 @@ function NewWorkItem({
 }): ReactNode {
   return (
     <form
+      aria-labelledby="new-work-item-heading"
       onSubmit={(event) => {
         event.preventDefault();
         onSave();
       }}
     >
-      <p className="text-sm font-bold text-[var(--accent)]">New work item</p>
+      <h2
+        className="text-sm font-bold text-[var(--accent)]"
+        id="new-work-item-heading"
+      >
+        New work item
+      </h2>
       <label className="auth-label" htmlFor="work-title">
         What needs to change?
       </label>
       <input
+        autoFocus
         className="auth-input"
         id="work-title"
         onChange={(event) => onTitle(event.target.value)}
@@ -280,15 +785,19 @@ function NewWorkItem({
         Optional
       </label>
       <textarea
+        aria-describedby="work-description-hint"
         className="auth-input min-h-28"
         id="work-description"
         onChange={(event) => onDescription(event.target.value)}
         value={description}
       />
-      <p className="mt-2 text-sm text-[var(--muted)]">
+      <p
+        className="mt-2 text-sm text-[var(--muted)]"
+        id="work-description-hint"
+      >
         Add enough context for a useful review. You can fill in the rest later.
       </p>
-      <div className="mt-6 flex gap-3">
+      <div className="mt-6 flex flex-wrap gap-3">
         <button className="primary-button" disabled={saving} type="submit">
           Add work item
         </button>
@@ -300,116 +809,356 @@ function NewWorkItem({
   );
 }
 
+function ReadFailure({
+  onRetry,
+  surface,
+}: {
+  readonly onRetry: () => void;
+  readonly surface: string;
+}): ReactNode {
+  return (
+    <p className="auth-error" role="alert">
+      Cerebra couldn’t load this {surface}. Try again.{' '}
+      <button className="font-bold underline" onClick={onRetry} type="button">
+        Try again
+      </button>
+    </p>
+  );
+}
+
 function ItemDetail({
-  cancelButton,
+  cancelControl,
+  comment,
+  comments,
   confirming,
+  dialogHeading,
+  history,
   item,
+  itemRead,
   onCancel,
+  onComment,
   onConfirmCancel,
   onKeep,
+  onPostComment,
   onPriority,
+  onRetryComments,
+  onRetryHistory,
+  onRetryItem,
   onRoute,
+  onSaveForLater,
+  onTab,
   onTriage,
   priority,
   route,
+  routeRefused,
   saving,
+  tab,
 }: {
-  readonly cancelButton: React.RefObject<HTMLButtonElement | null>;
+  readonly cancelControl: RefObject<HTMLButtonElement | null>;
+  readonly comment: string;
+  readonly comments: Remote<readonly BoardComment[]>;
   readonly confirming: boolean;
+  readonly dialogHeading: RefObject<HTMLHeadingElement | null>;
+  readonly history: Remote<readonly HistoryEntry[]>;
   readonly item: WorkItem;
+  readonly itemRead: Remote<WorkItem>;
   readonly onCancel: () => void;
+  readonly onComment: (value: string) => void;
   readonly onConfirmCancel: () => void;
   readonly onKeep: () => void;
+  readonly onPostComment: () => void;
   readonly onPriority: (value: Priority) => void;
+  readonly onRetryComments: () => void;
+  readonly onRetryHistory: () => void;
+  readonly onRetryItem: () => void;
   readonly onRoute: (value: BoardRoute) => void;
+  readonly onSaveForLater: () => void;
+  readonly onTab: (value: Tab) => void;
   readonly onTriage: () => void;
   readonly priority: Priority;
   readonly route: BoardRoute;
+  readonly routeRefused: boolean;
   readonly saving: boolean;
+  readonly tab: Tab;
 }): ReactNode {
+  const tabs: readonly { readonly label: string; readonly value: Tab }[] = [
+    { label: 'Overview', value: 'overview' },
+    { label: 'Discussion', value: 'discussion' },
+    { label: 'History', value: 'history' },
+  ];
+  const ended = item.state === 'cancelled' || item.state === 'done';
+
   return (
     <>
       <p className="text-sm font-bold uppercase tracking-widest text-[var(--muted)]">
-        {label(item.state)}
+        {stateLabel(item.state)}
+        {itemRead.loading ? (
+          <span className="ml-2 font-normal normal-case tracking-normal">
+            Loading…
+          </span>
+        ) : null}
       </p>
-      <h2 className="mt-2 text-xl font-bold">{item.title}</h2>
-      <p className="mt-3 text-[var(--muted)]">
-        {item.description || 'No additional context yet.'}
-      </p>
-      {item.state === 'new' ? (
-        <div className="mt-7 border-t border-[var(--border)] pt-5">
-          <h3 className="font-bold">Review new work</h3>
-          <p className="mt-1 text-sm text-[var(--muted)]">
-            Choose its importance and where it should go next.
-          </p>
-          <label className="auth-label" htmlFor="priority">
-            Priority
-          </label>
-          <select
-            className="auth-input"
-            id="priority"
-            onChange={(event) => onPriority(event.target.value as Priority)}
-            value={priority}
-          >
-            {['P1', 'P2', 'P3'].map((value) => (
-              <option key={value}>{value}</option>
-            ))}
-          </select>
-          <label className="auth-label" htmlFor="route">
-            Where should this go next?
-          </label>
-          <select
-            className="auth-input"
-            id="route"
-            onChange={(event) => onRoute(event.target.value as BoardRoute)}
-            value={route}
-          >
-            <option value="grooming_ready">Groom the outcome</option>
-            <option value="design_ready">Send to design</option>
-            <option value="build_ready">Send to build</option>
-          </select>
+      <h2 className="mt-2 text-xl font-bold break-words">{item.title}</h2>
+      {itemRead.error ? (
+        <ReadFailure onRetry={onRetryItem} surface="work item" />
+      ) : null}
+      <div
+        aria-label="Selected work item sections"
+        className="mt-5 flex flex-wrap gap-1 border-b border-[var(--border)]"
+        role="tablist"
+      >
+        {tabs.map((candidate) => (
           <button
-            className="primary-button mt-6"
-            disabled={saving}
-            onClick={onTriage}
+            aria-controls={`work-item-${candidate.value}`}
+            aria-selected={tab === candidate.value}
+            className={`-mb-px border-b-2 px-3 py-2 font-bold outline-none focus-visible:ring-3 focus-visible:ring-[var(--focus)] ${tab === candidate.value ? 'border-[var(--accent)]' : 'border-transparent text-[var(--muted)]'}`}
+            id={`work-item-tab-${candidate.value}`}
+            key={candidate.value}
+            onClick={() => onTab(candidate.value)}
+            role="tab"
             type="button"
           >
-            Set priority and continue
+            {candidate.label}
           </button>
-        </div>
-      ) : null}
-      <button
-        className="mt-7 text-sm font-bold text-[var(--danger)] underline"
-        onClick={onCancel}
-        ref={cancelButton}
-        type="button"
+        ))}
+      </div>
+      <div
+        aria-labelledby={`work-item-tab-${tab}`}
+        className="pt-5"
+        id={`work-item-${tab}`}
+        role="tabpanel"
       >
-        Cancel this work item
-      </button>
-      {confirming ? (
-        <div
-          aria-modal="true"
-          className="mt-5 rounded-lg border border-[var(--border)] p-4"
-          role="dialog"
-        >
-          <h3 tabIndex={-1}>Cancel this work item</h3>
-          <p className="mt-2 text-sm text-[var(--muted)]">
-            This ends the item.
-          </p>
-          <div className="mt-4 flex gap-3">
-            <button className="secondary-button" onClick={onKeep} type="button">
-              Keep work item
-            </button>
-            <button
-              className="primary-button"
-              onClick={onConfirmCancel}
-              type="button"
+        {tab === 'overview' ? (
+          <>
+            <p className="text-[var(--muted)] whitespace-pre-wrap break-words">
+              {item.description || 'No description yet.'}
+            </p>
+            <p className="mt-3 text-sm">
+              <span className="font-bold">Priority</span>{' '}
+              {item.priority ?? 'Not set'}
+            </p>
+            {item.state === 'new' ? (
+              <div className="mt-6 border-t border-[var(--border)] pt-5">
+                <h3 className="font-bold">Review new work</h3>
+                <p className="mt-1 text-sm text-[var(--muted)]">
+                  Choose its importance and where it should go next.
+                </p>
+                <fieldset className="mt-4">
+                  <legend className="text-sm font-bold">Priority</legend>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {(['P1', 'P2', 'P3'] as const).map((value) => (
+                      <label
+                        className="flex items-center gap-2 rounded-lg border border-[var(--control-border)] px-3 py-2 has-checked:border-[var(--accent)] has-checked:bg-[var(--accent-muted)]"
+                        key={value}
+                      >
+                        <input
+                          checked={priority === value}
+                          name="triage-priority"
+                          onChange={() => onPriority(value)}
+                          type="radio"
+                          value={value}
+                        />
+                        {value}
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+                <fieldset className="mt-4">
+                  <legend className="text-sm font-bold">
+                    Where should this go next?
+                  </legend>
+                  <div className="mt-2 grid gap-2">
+                    {routes.map((option) => (
+                      <label
+                        className="flex gap-3 rounded-lg border border-[var(--control-border)] p-3 has-checked:border-[var(--accent)] has-checked:bg-[var(--accent-muted)]"
+                        key={option.value}
+                      >
+                        <input
+                          aria-describedby={`route-${option.value}-hint`}
+                          checked={route === option.value}
+                          className="mt-1"
+                          name="triage-route"
+                          onChange={() => onRoute(option.value)}
+                          type="radio"
+                          value={option.value}
+                        />
+                        <span>
+                          <strong className="block">{option.label}</strong>
+                          <span
+                            className="text-sm text-[var(--muted)]"
+                            id={`route-${option.value}-hint`}
+                          >
+                            {option.description}
+                          </span>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+                {routeRefused ? (
+                  <p className="auth-error" role="alert">
+                    That next step is not available for this project. Choose
+                    another route.
+                  </p>
+                ) : null}
+                <div className="mt-6 flex flex-wrap gap-3">
+                  <button
+                    className="primary-button"
+                    disabled={saving}
+                    onClick={onTriage}
+                    type="button"
+                  >
+                    Set priority and continue
+                  </button>
+                  <button
+                    className="secondary-button"
+                    onClick={onSaveForLater}
+                    type="button"
+                  >
+                    Save for later
+                  </button>
+                </div>
+              </div>
+            ) : null}
+            {ended ? null : (
+              <button
+                className="mt-7 text-sm font-bold text-[var(--danger)] underline outline-none focus-visible:ring-3 focus-visible:ring-[var(--focus)]"
+                onClick={onCancel}
+                ref={cancelControl}
+                type="button"
+              >
+                Cancel this work item
+              </button>
+            )}
+            {confirming ? (
+              <div
+                aria-labelledby="cancel-dialog-heading"
+                aria-modal="true"
+                className="mt-5 rounded-lg border border-[var(--border)] p-4"
+                role="dialog"
+              >
+                <h3
+                  className="font-bold outline-none"
+                  id="cancel-dialog-heading"
+                  ref={dialogHeading}
+                  tabIndex={-1}
+                >
+                  Cancel this work item
+                </h3>
+                <p className="mt-2 text-sm text-[var(--muted)]">
+                  This ends the work item. It stays on the board as Cancelled.
+                </p>
+                <div className="mt-4 flex flex-wrap gap-3">
+                  <button
+                    className="secondary-button"
+                    onClick={onKeep}
+                    type="button"
+                  >
+                    Keep work item
+                  </button>
+                  <button
+                    className="primary-button"
+                    disabled={saving}
+                    onClick={onConfirmCancel}
+                    type="button"
+                  >
+                    Cancel work item
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </>
+        ) : tab === 'discussion' ? (
+          <>
+            {comments.loading && comments.data !== null ? (
+              <p className="text-sm text-[var(--muted)]">Loading…</p>
+            ) : null}
+            {comments.error ? (
+              <ReadFailure onRetry={onRetryComments} surface="discussion" />
+            ) : comments.data === null ? (
+              <p className="text-[var(--muted)]">Loading…</p>
+            ) : comments.data.length === 0 ? (
+              <p className="text-[var(--muted)]">No discussion yet.</p>
+            ) : (
+              <ul className="grid gap-3">
+                {comments.data.map((entry) => (
+                  <li
+                    className="rounded-lg border border-[var(--border)] p-3"
+                    key={entry.id}
+                  >
+                    <p className="whitespace-pre-wrap break-words">
+                      {entry.body}
+                    </p>
+                    <p className="mt-1 text-xs text-[var(--muted)]">
+                      {formatTime(entry.createdAt)}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <form
+              className="mt-5"
+              onSubmit={(event) => {
+                event.preventDefault();
+                onPostComment();
+              }}
             >
-              Cancel work item
-            </button>
-          </div>
-        </div>
-      ) : null}
+              <label className="auth-label mt-0" htmlFor="work-comment">
+                Add a comment
+              </label>
+              <textarea
+                className="auth-input min-h-20"
+                id="work-comment"
+                onChange={(event) => onComment(event.target.value)}
+                value={comment}
+              />
+              <button
+                className="primary-button mt-3"
+                disabled={saving || !comment.trim()}
+                type="submit"
+              >
+                Post comment
+              </button>
+            </form>
+          </>
+        ) : (
+          <>
+            {history.loading && history.data !== null ? (
+              <p className="text-sm text-[var(--muted)]">Loading…</p>
+            ) : null}
+            {history.error ? (
+              <ReadFailure onRetry={onRetryHistory} surface="history" />
+            ) : history.data === null ? (
+              <p className="text-[var(--muted)]">Loading…</p>
+            ) : history.data.length === 0 ? (
+              <p className="text-[var(--muted)]">
+                No changes have been recorded yet.
+              </p>
+            ) : (
+              <ol className="grid gap-3">
+                {history.data.map((entry, index) => (
+                  <li
+                    className="border-l-2 border-[var(--border)] pl-3"
+                    key={`${entry.createdAt}-${index}`}
+                  >
+                    <p className="font-bold">
+                      {stateLabel(entry.fromState)} →{' '}
+                      {stateLabel(entry.toState)}
+                    </p>
+                    <p className="text-xs text-[var(--muted)]">
+                      {actorLabel(entry.actorRole)} ·{' '}
+                      {formatTime(entry.createdAt)}
+                    </p>
+                    {entry.reason ? (
+                      <p className="mt-1 text-sm">{entry.reason}</p>
+                    ) : null}
+                  </li>
+                ))}
+              </ol>
+            )}
+          </>
+        )}
+      </div>
     </>
   );
 }

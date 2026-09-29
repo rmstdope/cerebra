@@ -155,6 +155,7 @@ describe('board lifecycle mutations', { concurrent: false }, () => {
       const page = await board.listWorkItems(projectId, { limit: 2 });
       expect(ids(page)).toEqual([third, second]);
       expect(page.nextCursor).not.toBeNull();
+      expect(page.total).toBe(3);
 
       const arrival = await file('Delta board');
       const next = await board.listWorkItems(projectId, {

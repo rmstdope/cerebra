@@ -320,7 +320,12 @@ test('lists a board page with its query and snapshot', async () => {
     board: fakeBoard({
       listWorkItems: async (projectId, query) => {
         queries.push({ projectId, query });
-        return { items: [boardItem], nextCursor: '25', snapshot: '7' };
+        return {
+          items: [boardItem],
+          nextCursor: '25',
+          snapshot: '7',
+          total: 26,
+        };
       },
     }),
   });
@@ -341,6 +346,7 @@ test('lists a board page with its query and snapshot', async () => {
     ],
     nextCursor: '25',
     snapshot: '7',
+    total: 26,
   });
   expect(queries).toEqual([
     {
