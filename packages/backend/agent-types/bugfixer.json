@@ -26,7 +26,9 @@
     "comment",
     "transition",
     "wait_for_navigator",
-    "submit_plan"
+    "create_item",
+    "submit_plan",
+    "report_checks"
   ],
   "triggers": [
     {

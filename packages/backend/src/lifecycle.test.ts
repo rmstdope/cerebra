@@ -3,6 +3,7 @@ import { describe, expect, test } from 'vitest';
 import {
   createWorkItem,
   recordHeadings,
+  recordProblem,
   runEndedRequest,
   transition,
   type LifecycleContext,
@@ -35,6 +36,7 @@ const pullRequest = {
   branch: 'web-12-export',
   head: '0123456789abcdef0123456789abcdef01234567',
 };
+const delivered = { checks: 'passed', planRecorded: true } as const;
 const approved = { kind: 'review', verdict: 'approved', findings: [] };
 const changesRequested = {
   kind: 'review',
@@ -104,6 +106,7 @@ describe('lifecycle transitions', () => {
         createWorkItem({
           state: from,
           holderRunId: workingStates.has(from) ? 'run-1' : null,
+          ...(from === 'building' ? { build: delivered } : {}),
         }),
         {
           actor: {
@@ -676,6 +679,60 @@ describe('the record an agent transition requires', () => {
       ok: false,
       reason: `The pull_request record has no valid ${field}.`,
     });
+  });
+
+  test.each([
+    [
+      { checks: 'passed', planRecorded: false },
+      'Record the plan with submit_plan before handing the item to review.',
+    ],
+    [
+      { checks: null, planRecorded: true },
+      'Report passing checks with report_checks before handing the item to review.',
+    ],
+    [
+      { checks: 'failed', planRecorded: true },
+      'The latest checks failed; correct them and report passing checks with report_checks before handing the item to review.',
+    ],
+    [
+      undefined,
+      'Record the plan with submit_plan before handing the item to review.',
+    ],
+  ] as const)(
+    'refuses building -> review_ready with build evidence %o',
+    (build, reason) => {
+      expect(
+        transition(
+          createWorkItem({
+            build,
+            holderRunId: 'run-1',
+            priority: 'P1',
+            state: 'building',
+          }),
+          by('builder', 'review_ready', { record: pullRequest }),
+          context,
+        ),
+      ).toEqual({ ok: false, reason });
+    },
+  );
+
+  test('accepts a plan record under its exact headings', () => {
+    expect(recordHeadings.plan).toEqual([
+      'Context',
+      'Files to change, and what to reuse',
+      'Increments',
+      'The test plan',
+      'User-facing decisions',
+      'Out of scope',
+      'Validation',
+      'Known traps',
+    ]);
+    expect(recordProblem('plan', markdown(recordHeadings.plan))).toBe(
+      undefined,
+    );
+    expect(recordProblem('plan', markdown(['Context']))).toBe(
+      'The plan record is missing its "## Files to change, and what to reuse" section.',
+    );
   });
 
   test('refuses an approval that carries a blocking finding', () => {

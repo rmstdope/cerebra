@@ -529,6 +529,258 @@ describe('board tools', { concurrent: false }, () => {
     });
   });
 
+  describe('building and handing over to review', () => {
+    const plan = [
+      'Context',
+      'Files to change, and what to reuse',
+      'Increments',
+      'The test plan',
+      'User-facing decisions',
+      'Out of scope',
+      'Validation',
+      'Known traps',
+    ]
+      .map((heading) => `## ${heading}\n\nNone.\n`)
+      .join('\n');
+    const pullRequest = (change: object = {}) => ({
+      branch: 'WEB-1-export-xlsx',
+      head: '0123456789abcdef0123456789abcdef01234567',
+      kind: 'pull_request',
+      title: 'Export as XLSX',
+      url: 'https://github.com/acme/website/pull/482',
+      ...change,
+    });
+
+    async function building(
+      board: Board,
+      item: Fixture['item'],
+      builder: ToolCaller,
+    ): Promise<string> {
+      const id = await item({ state: 'build_ready' });
+      const claimed = await board.transition(id, {
+        actor: { role: 'backend', runId: builder.runId },
+        record: { kind: 'claim', role: 'builder' },
+        to: 'building',
+      });
+      if (!claimed.ok) throw new Error(claimed.reason);
+      return id;
+    }
+
+    test('records the plan and checks, then opens the linked pull request', async () => {
+      await withBoard(async ({ board, caller, item, released, tools }) => {
+        const wolverine = await caller('Storm', 'builder');
+        const heldId = await building(board, item, wolverine);
+
+        expect(
+          await tools.call(wolverine, 'submit_plan', { markdown: plan }),
+        ).toEqual({ ok: true, value: { id: heldId, recorded: 'plan' } });
+        expect(
+          await tools.call(wolverine, 'report_checks', {
+            passed: true,
+            summary: 'pnpm run check passed.',
+          }),
+        ).toEqual({ ok: true, value: { id: heldId, recorded: 'checks' } });
+        expect(
+          await tools.call(wolverine, 'transition', {
+            record: pullRequest(),
+            to: 'review_ready',
+          }),
+        ).toEqual({ ok: true, value: { id: heldId, state: 'review_ready' } });
+
+        expect(await board.listRecords(heldId)).toMatchObject([
+          { kind: 'claim' },
+          { kind: 'plan', record: { kind: 'plan', markdown: plan } },
+          {
+            kind: 'checks',
+            record: { passed: true, summary: 'pnpm run check passed.' },
+          },
+          { kind: 'pull_request', record: pullRequest() },
+        ]);
+        expect(released).toEqual([wolverine.runId]);
+      });
+    });
+
+    test('refuses a plan without its headings, or from a run that is not building', async () => {
+      await withBoard(async ({ board, caller, item, tools }) => {
+        const wolverine = await caller('Storm', 'builder');
+        const jubilee = await caller('Jubilee', 'groomer');
+        await item({ heldBy: jubilee });
+
+        expect(
+          await tools.call(wolverine, 'submit_plan', { markdown: plan }),
+        ).toMatchObject({ code: 'nothing_held', ok: false });
+        const heldId = await building(board, item, wolverine);
+        expect(
+          await tools.call(wolverine, 'submit_plan', {
+            markdown: '## Context\n\nWhy.',
+          }),
+        ).toEqual({
+          code: 'invalid_arguments',
+          message:
+            'The plan record is missing its "## Files to change, and what to reuse" section.',
+          ok: false,
+        });
+        expect(
+          await tools.call(wolverine, 'report_checks', { passed: 'yes' }),
+        ).toMatchObject({ code: 'invalid_arguments', ok: false });
+        expect(
+          await tools.call(jubilee, 'submit_plan', { markdown: plan }),
+        ).toMatchObject({ code: 'tool_not_allowed', ok: false });
+        expect(
+          await tools.call(jubilee, 'report_checks', { passed: true }),
+        ).toMatchObject({ code: 'tool_not_allowed', ok: false });
+        expect(await board.listRecords(heldId)).toMatchObject([
+          { kind: 'claim' },
+        ]);
+      });
+    });
+
+    test('refuses to hand over before a plan and passing checks', async () => {
+      await withBoard(async ({ board, caller, item, tools }) => {
+        const wolverine = await caller('Storm', 'builder');
+        const heldId = await building(board, item, wolverine);
+        const handOver = () =>
+          tools.call(wolverine, 'transition', {
+            record: pullRequest(),
+            to: 'review_ready',
+          });
+
+        expect(await handOver()).toMatchObject({
+          code: 'refused',
+          message: expect.stringContaining('submit_plan'),
+        });
+        await tools.call(wolverine, 'submit_plan', { markdown: plan });
+        await tools.call(wolverine, 'report_checks', {
+          passed: false,
+          summary: 'Two tests fail.',
+        });
+        expect(await handOver()).toMatchObject({
+          code: 'refused',
+          message: expect.stringContaining('The latest checks failed'),
+        });
+        expect(await board.getWorkItem(heldId)).toMatchObject({
+          state: 'building',
+        });
+      });
+    });
+
+    test.each([
+      [{ branch: 'export-xlsx' }, 'The branch must be named after WEB-1'],
+      [{ branch: 'WEB-10-export' }, 'The branch must be named after WEB-1'],
+      [
+        { url: 'https://github.com/other/website/pull/482' },
+        'The pull request must be in acme/website',
+      ],
+      [
+        { url: 'http://github.com/acme/website/pull/482' },
+        'The pull_request record has no valid url.',
+      ],
+      [
+        { url: 'https://github.com/acme/website/pull/482/files' },
+        'The pull_request record has no valid url.',
+      ],
+      [
+        { url: 'https://gitlab.com/acme/website/-/merge_requests/482' },
+        'The pull_request record has no valid url.',
+      ],
+    ])('refuses a pull request record with %o', async (change, message) => {
+      await withBoard(async ({ board, caller, item, tools }) => {
+        const wolverine = await caller('Storm', 'builder');
+        const heldId = await building(board, item, wolverine);
+        await tools.call(wolverine, 'submit_plan', { markdown: plan });
+        await tools.call(wolverine, 'report_checks', { passed: true });
+
+        expect(
+          await tools.call(wolverine, 'transition', {
+            record: pullRequest(change),
+            to: 'review_ready',
+          }),
+        ).toMatchObject({
+          code: 'refused',
+          message: expect.stringContaining(message),
+          ok: false,
+        });
+        expect(await board.getWorkItem(heldId)).toMatchObject({
+          state: 'building',
+        });
+      });
+    });
+
+    test('refuses a pull request when the project names no GitHub repository', async () => {
+      await withBoard(async ({ board, caller, database, item, tools }) => {
+        const wolverine = await caller('Storm', 'builder');
+        const heldId = await building(board, item, wolverine);
+        await tools.call(wolverine, 'submit_plan', { markdown: plan });
+        await tools.call(wolverine, 'report_checks', { passed: true });
+        await database
+          .updateTable('projects')
+          .set({ remote: 'https://example.com/acme/website.git' })
+          .execute();
+
+        expect(
+          await tools.call(wolverine, 'transition', {
+            record: pullRequest(),
+            to: 'review_ready',
+          }),
+        ).toMatchObject({
+          code: 'refused',
+          message: expect.stringContaining(
+            "This project's repository is not on GitHub",
+          ),
+          ok: false,
+        });
+        expect(await board.getWorkItem(heldId)).toMatchObject({
+          state: 'building',
+        });
+      });
+    });
+
+    test('accepts a branch named exactly after the item', async () => {
+      await withBoard(async ({ board, caller, item, tools }) => {
+        const wolverine = await caller('Storm', 'builder');
+        await building(board, item, wolverine);
+        await tools.call(wolverine, 'submit_plan', { markdown: plan });
+        await tools.call(wolverine, 'report_checks', { passed: true });
+
+        expect(
+          await tools.call(wolverine, 'transition', {
+            record: pullRequest({ branch: 'web-1', title: undefined }),
+            to: 'review_ready',
+          }),
+        ).toMatchObject({ ok: true, value: { state: 'review_ready' } });
+      });
+    });
+  });
+
+  test('files an item as the type it names, a feature by default', async () => {
+    await withBoard(async ({ board, caller, tools }) => {
+      const wolverine = await caller('Storm', 'builder');
+
+      const bug = await tools.call(wolverine, 'create_item', {
+        title: 'Crash on empty export',
+        type: 'bug',
+      });
+      const feature = await tools.call(wolverine, 'create_item', {
+        title: 'Export as ODS',
+      });
+
+      expect(
+        await board.getWorkItem((bug as { value: { id: string } }).value.id),
+      ).toMatchObject({ type: 'bug' });
+      expect(
+        await board.getWorkItem(
+          (feature as { value: { id: string } }).value.id,
+        ),
+      ).toMatchObject({ type: 'feature' });
+      expect(
+        await tools.call(wolverine, 'create_item', {
+          title: 'Chore',
+          type: 'chore',
+        }),
+      ).toMatchObject({ code: 'invalid_arguments', ok: false });
+    });
+  });
+
   describe('refusals', () => {
     test('refuses a tool the type is not allowed', async () => {
       await withBoard(async ({ caller, tools }) => {

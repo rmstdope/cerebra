@@ -21,6 +21,13 @@ import {
   type WorkItem,
 } from './board';
 import {
+  browserDeliveryActivityClient,
+  DeliveryActivity,
+  deliveryStates,
+  rememberedDeliveryFocus,
+  type DeliveryActivityClient,
+} from './delivery-activity';
+import {
   browserAutomaticStartsClient,
   reasonText,
   type AutomaticStartStatus,
@@ -247,6 +254,8 @@ export function ProjectBoard({
   arrivalsIntervalMs = 30_000,
   automaticStartsClient = browserAutomaticStartsClient,
   boardClient = browserBoardClient,
+  deliveryClient = browserDeliveryActivityClient,
+  deliveryIntervalMs = 10_000,
   onClose,
   openRequest = null,
   projectId,
@@ -256,6 +265,8 @@ export function ProjectBoard({
   readonly arrivalsIntervalMs?: number;
   readonly automaticStartsClient?: AutomaticStartsClient;
   readonly boardClient?: BoardClient;
+  readonly deliveryClient?: DeliveryActivityClient;
+  readonly deliveryIntervalMs?: number;
   /** Called when an open item or draft is closed, so a caller can return to where it came from. */
   readonly onClose?: () => void;
   /** Opens an item from elsewhere, such as the navigator queue; a new object reopens it. */
@@ -668,6 +679,14 @@ export function ProjectBoard({
     if (openRequest !== null) openFromRequest.current(openRequest);
   }, [openRequest]);
 
+  const reopenForFocus = useRef<() => void>(() => undefined);
+  reopenForFocus.current = () => {
+    const focus = rememberedDeliveryFocus();
+    if (openRequest === null && focus !== null) openItem(focus.itemId);
+  };
+  // Back from a delivery link lands on a fresh board; reopen the item whose link was followed.
+  useEffect(() => reopenForFocus.current(), []);
+
   const updateFilters = (change: Partial<BoardFilters>) =>
     setFilters((current) => ({ ...current, ...change }));
 
@@ -1017,6 +1036,17 @@ export function ProjectBoard({
               comment={comment}
               comments={comments}
               confirming={confirming}
+              delivery={
+                deliveryStates.has(selected.state) ? (
+                  <DeliveryActivity
+                    client={deliveryClient}
+                    intervalMs={deliveryIntervalMs}
+                    itemId={selected.id}
+                    key={selected.id}
+                    state={selected.state}
+                  />
+                ) : null
+              }
               dialogHeading={dialogHeading}
               history={history}
               item={selected}
@@ -1151,6 +1181,7 @@ function ItemDetail({
   comment,
   comments,
   confirming,
+  delivery,
   dialogHeading,
   history,
   item,
@@ -1178,6 +1209,7 @@ function ItemDetail({
   readonly comment: string;
   readonly comments: Remote<readonly BoardComment[]>;
   readonly confirming: boolean;
+  readonly delivery: ReactNode;
   readonly dialogHeading: RefObject<HTMLHeadingElement | null>;
   readonly history: Remote<readonly HistoryEntry[]>;
   readonly item: WorkItem;
@@ -1257,6 +1289,7 @@ function ItemDetail({
               <span className="font-bold">Priority</span>{' '}
               {item.priority ?? 'Not set'}
             </p>
+            {delivery}
             {item.state === 'new' ? (
               <div className="mt-6 border-t border-[var(--border)] pt-5">
                 <h3 className="font-bold">Review new work</h3>
