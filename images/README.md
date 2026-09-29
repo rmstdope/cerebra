@@ -49,7 +49,8 @@ podman build -f images/agent.Containerfile -t cerebro-agent .
 
 The supervisor starts it with `CEREBRA_GATEWAY_URL` (the backend's `/runner` endpoint) and
 `CEREBRA_RUN_TOKEN` (the run's token); the runner connects, receives `start`, and exits 0 when
-the run completed or was stopped, 1 otherwise.
+the run completed or was stopped, 1 otherwise. The `start` message names the backend's `/mcp`
+endpoint as the agent's `cerebra` MCP server, with the same token as its bearer.
 
 ## `podman-compose.yml`
 
@@ -63,6 +64,7 @@ Cerebra can't run agents yet. The other settings, with the values compose gives 
 | `CEREBRA_INTERNAL_NETWORK` | `cerebro-internal`      | Joins the main container and agents only.                       |
 | `CEREBRA_EGRESS_NETWORK`   | `cerebro-egress`        | Agents' way out; `./cerebra start` creates it.                  |
 | `CEREBRA_GATEWAY_URL`      | `ws://main:4317/runner` | Where a runner reaches the backend.                             |
+| `CEREBRA_MCP_URL`          | `http://main:4317/mcp`  | Where an agent reaches its board tools.                         |
 
 Postgres sits on a separate `database` network, so agents cannot reach it. The data volume is
 named `cerebra-data` exactly, because the engine mounts it by that name; an instance created before

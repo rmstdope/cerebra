@@ -57,7 +57,9 @@ export {
   type BoardFilters,
   type BoardHistoryEntry,
   type BoardPage,
+  type BoardProvenance,
   type BoardQuery,
+  type BoardRecord,
   type BoardRoute,
   type BoardSort,
   type BoardWorkItem,
@@ -183,6 +185,22 @@ export {
   type RunnerGatewayOptions,
   type RunnerListener,
 } from './runner-gateway.js';
+export {
+  createBoardTools,
+  resolveCaller,
+  type BoardTools,
+  type ToolCaller,
+  type ToolDescriptor,
+  type ToolOutcome,
+  type ToolRefusalCode,
+} from './board-tools.js';
+export {
+  createMcpEndpoint,
+  mcpPath,
+  type McpEndpoint,
+  type McpEndpointOptions,
+  type McpTools,
+} from './mcp.js';
 export {
   createRunStore,
   type Conversation,

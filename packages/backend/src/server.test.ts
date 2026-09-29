@@ -4,7 +4,9 @@ import {
   DuplicateDestinationError,
   ProjectNotFoundError,
   WorkItemNotFoundError,
+  createMcpEndpoint,
   createServer,
+  hashRunToken,
   type CredentialService,
   type Board,
   GitHubAccessError,
@@ -1056,4 +1058,53 @@ test('names a duplicate destination so the dialog can mark it', async () => {
       '“GH_TOKEN” is already used. Choose a different name or change the existing credential.',
   });
   expect(malformed.statusCode).toBe(400);
+});
+
+test('serves the board tools to a run token without a navigator session', async () => {
+  const server = await createServer({
+    auth: {
+      ...authenticatedAuth,
+      status: async () => ({
+        reason: 'signed-out' as const,
+        state: 'unauthenticated' as const,
+      }),
+    },
+    mcp: createMcpEndpoint({
+      authenticate: async (tokenHash) =>
+        tokenHash === hashRunToken('run-token') ? { runId: 'run-1' } : null,
+      tools: {
+        call: async () => ({ ok: true, value: {} }),
+        list: () => [],
+      },
+    }),
+  });
+  servers.push(server);
+
+  const response = await server.inject({
+    body: { id: 1, jsonrpc: '2.0', method: 'tools/list' },
+    headers: { authorization: 'Bearer run-token' },
+    method: 'POST',
+    url: '/mcp',
+  });
+
+  expect(response.statusCode).toBe(200);
+  expect(response.json()).toEqual({
+    id: 1,
+    jsonrpc: '2.0',
+    result: { tools: [] },
+  });
+});
+
+test('has no board tools endpoint when agents cannot run', async () => {
+  const server = await createServer({ auth: authenticatedAuth });
+  servers.push(server);
+
+  const response = await server.inject({
+    body: { id: 1, jsonrpc: '2.0', method: 'ping' },
+    headers: { authorization: 'Bearer run-token' },
+    method: 'POST',
+    url: '/mcp',
+  });
+
+  expect(response.statusCode).toBe(404);
 });

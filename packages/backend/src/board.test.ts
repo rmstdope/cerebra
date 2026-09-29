@@ -9,6 +9,7 @@ import {
 } from './board.js';
 import { createDatabase } from './database.js';
 import { migrateToLatest } from './migrations/index.js';
+import { withTestDatabase } from './test-support.js';
 
 const databaseUrl = process.env.DATABASE_URL;
 
@@ -429,5 +430,74 @@ describe('board lifecycle mutations', { concurrent: false }, () => {
       await database.destroy();
       await dropSchema(schema);
     }
+  });
+});
+
+describe('provenance and records', { concurrent: false }, () => {
+  test('keeps who filed an item and the item it was discovered from', async () => {
+    await withTestDatabase(async (database) => {
+      const board = createBoard(database);
+      const projectId = crypto.randomUUID();
+      const heldId = crypto.randomUUID();
+      const filedId = crypto.randomUUID();
+      const navigatorsId = crypto.randomUUID();
+      await board.createProject({ id: projectId, name: 'Test project' });
+      await board.createWorkItem({
+        id: heldId,
+        priority: 'P1',
+        projectId,
+        state: 'grooming_ready',
+      });
+      const claimed = await board.claim(heldId, 'groomer');
+      if (!claimed.ok) throw new Error(claimed.reason);
+      const runId = claimed.item.holderRunId ?? '';
+      await database
+        .updateTable('runs')
+        .set({ agent_name: 'Jubilee' })
+        .where('id', '=', runId)
+        .execute();
+
+      await board.createWorkItem({
+        discoveredFromId: heldId,
+        filedByRunId: runId,
+        id: filedId,
+        projectId,
+        title: 'Export as XLSX too',
+      });
+      await board.createWorkItem({ id: navigatorsId, projectId });
+
+      expect(await board.getProvenance(filedId)).toEqual({
+        discoveredFromId: heldId,
+        filedBy: { agentName: 'Jubilee', role: 'groomer', runId },
+      });
+      expect(await board.getProvenance(navigatorsId)).toEqual({
+        discoveredFromId: null,
+        filedBy: null,
+      });
+      await expect(
+        board.getProvenance(crypto.randomUUID()),
+      ).rejects.toBeInstanceOf(WorkItemNotFoundError);
+    });
+  });
+
+  test('lists an item’s records in the order they were appended', async () => {
+    await withTestDatabase(async (database) => {
+      const board = createBoard(database);
+      const projectId = crypto.randomUUID();
+      const itemId = crypto.randomUUID();
+      await board.createProject({ id: projectId, name: 'Test project' });
+      await board.createWorkItem({ id: itemId, projectId });
+      await board.triage(itemId, 'P2', 'build_ready');
+      await board.claim(itemId, 'builder');
+
+      const records = await board.listRecords(itemId);
+
+      expect(records.map((entry) => entry.kind)).toEqual(['triage', 'claim']);
+      expect(records[1]?.record).toEqual({ kind: 'claim', role: 'builder' });
+      expect(records[0]?.createdAt).toBeInstanceOf(Date);
+      await expect(
+        board.listRecords(crypto.randomUUID()),
+      ).rejects.toBeInstanceOf(WorkItemNotFoundError);
+    });
   });
 });

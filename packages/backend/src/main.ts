@@ -4,6 +4,7 @@ import {
 } from './agent-types.js';
 import { createAuthService } from './auth.js';
 import { createBoard } from './board.js';
+import { createBoardTools, resolveCaller } from './board-tools.js';
 import { createEnvelopeCipher } from './credential-cipher.js';
 import { createCredentialService } from './credentials.js';
 import { createDatabase } from './database.js';
@@ -18,6 +19,7 @@ import {
 import { createPodmanEngine } from './podman-engine.js';
 import { createRunnerGateway } from './runner-gateway.js';
 import { createRunStore } from './runs.js';
+import { createMcpEndpoint } from './mcp.js';
 import { createServer } from './server.js';
 import { createSupervisor, directoryPreparer } from './supervisor.js';
 
@@ -58,14 +60,16 @@ try {
           }),
           gatewayUrl:
             process.env.CEREBRA_GATEWAY_URL ?? 'ws://main:4317/runner',
+          mcpUrl: process.env.CEREBRA_MCP_URL ?? 'http://main:4317/mcp',
           log: (message) => console.error(message),
           prepareDirectories: directoryPreparer(dataDirectory),
           runs: createRunStore(database),
         });
   await supervisor?.recoverAfterRestart();
+  const board = createBoard(database);
   const server = await createServer({
     auth: createAuthService(database),
-    board: createBoard(database),
+    board,
     conversations: supervisor,
     credentials,
     fleet,
@@ -83,6 +87,13 @@ try {
       supervisor === undefined
         ? undefined
         : createRunnerGateway(supervisor.gateway),
+    mcp:
+      supervisor === undefined
+        ? undefined
+        : createMcpEndpoint({
+            authenticate: (tokenHash) => resolveCaller(database, tokenHash),
+            tools: createBoardTools({ board, database }),
+          }),
     runs: supervisor,
     uiDirectory: new URL('../../ui/dist', import.meta.url).pathname,
   });

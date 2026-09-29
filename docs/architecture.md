@@ -217,6 +217,25 @@ streamable HTTP, authenticated by the run token. The runner configures the SDK w
 A tool never takes a run or item id the token already implies, and every call is checked against
 the calling type's allowed tools and the lifecycle.
 
+The endpoint is `POST /mcp` on the main container, stateless: each request is one JSON-RPC
+message answered with one JSON response, with no session and no event stream (`GET` and `DELETE`
+answer 405). It sits outside `/api`, so the navigator's session does not apply; a missing or
+ended run's token answers 401, and a request carrying an `Origin` header, which only a browser
+sends, answers 403. The supervisor's `start` message names it as the `cerebra` MCP server, with
+the run token as its bearer.
+
+`tools/list` answers the tools the calling type allows that exist so far. Every `tools/call` is
+checked, in order, against the type's allowed tools, the run's project (an item of another
+project is refused, not hidden), the item the run holds, and the lifecycle, whose pure transition
+function also refuses a transition without the record it needs (`spec.md` §4.4, §4.11), and an
+agent's record on a move that takes none, so an agent cannot write a record of the backend's kind. A refusal
+is a tool result with `isError` set and `{ "error": code, "message": … }` as its text, so the
+agent can read why; an unexpected failure is a JSON-RPC internal error that names nothing.
+`transition` and `wait_for_navigator` act only on the item the run holds, re-checked under the
+item's row lock. `create_item` always files into `new` with no priority, whatever the agent
+passes, and records the filing run (`work_items.filed_by_run_id`) and the item it held
+(`work_items.discovered_from_id`) as the item's provenance (`spec.md` §4.10, D35).
+
 ## 6. Dispatcher and scheduler
 
 The **dispatcher** runs when an item changes state, a run ends, an agent is enabled or a limit
