@@ -1078,7 +1078,8 @@ describe('runs the dispatcher starts', { concurrent: false }, () => {
         role: 'builder',
       });
       expect(runner.sent[0]).toMatchObject({
-        firstMessage: 'Fix export timeout\n\nExports time out after a minute.',
+        firstMessage:
+          'WEB-1 (feature): Fix export timeout\n\nExports time out after a minute.',
         interactive: false,
         type: 'start',
       });

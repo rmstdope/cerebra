@@ -11,13 +11,15 @@ import { sql, type Kysely } from 'kysely';
 
 import {
   WorkItemNotFoundError,
+  recordForHeldItem,
   transitionLocked,
   type Board,
   type BoardQuery,
 } from './board.js';
-import { liveRunStates, type Database } from './database.js';
+import { liveRunStates, workItemTypes, type Database } from './database.js';
 import {
   queueFor,
+  recordProblem,
   workItemStates,
   type Priority,
   type WorkItemState,
@@ -287,6 +289,69 @@ export function createBoardTools({
     }
   }
 
+  /** Appends a builder's record to the item it holds while building (spec §4.11). */
+  async function recordHeld(
+    caller: ToolCaller,
+    record: Readonly<Record<string, unknown>> & { readonly kind: string },
+  ): Promise<{ readonly id: string; readonly recorded: string }> {
+    const itemId = await requireHeld(caller);
+    const result = await recordForHeldItem(
+      database,
+      itemId,
+      caller.runId,
+      record,
+    );
+    if (!result.ok) {
+      throw new Refusal(result.code, result.reason);
+    }
+    return { id: itemId, recorded: record.kind };
+  }
+
+  /**
+   * A builder's pull request is the held item's: its branch is named after the item's key and it
+   * is opened in the project's repository (spec §4.11, §8).
+   */
+  async function requireLinkedPullRequest(
+    caller: ToolCaller,
+    record: Arguments | undefined,
+  ): Promise<void> {
+    if (record?.kind !== 'pull_request') {
+      // The lifecycle refuses a missing record itself.
+      return;
+    }
+    const itemId = await requireHeld(caller);
+    const row = await database
+      .selectFrom('work_items')
+      .innerJoin('projects', 'projects.id', 'work_items.project_id')
+      .select(['work_items.key', 'projects.remote'])
+      .where('work_items.id', '=', itemId)
+      .executeTakeFirstOrThrow();
+    const nothingMoved = 'Nothing was moved.';
+    const key = row.key.toLowerCase();
+    const branch =
+      typeof record.branch === 'string' ? record.branch.toLowerCase() : '';
+    if (branch !== key && !branch.startsWith(`${key}-`)) {
+      throw new Refusal(
+        'refused',
+        `The branch must be named after ${row.key}: ${row.key} or ${row.key}-<short-description>. ${nothingMoved}`,
+      );
+    }
+    const repository = repositoryOf(row.remote);
+    const url = typeof record.url === 'string' ? record.url : '';
+    const pulled =
+      /^https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/pull\/\d+$/.exec(url)?.[1];
+    if (
+      repository !== null &&
+      pulled !== undefined &&
+      pulled.toLowerCase() !== repository.toLowerCase()
+    ) {
+      throw new Refusal(
+        'refused',
+        `The pull request must be in ${repository}, this project's repository. ${nothingMoved}`,
+      );
+    }
+  }
+
   const tools: Record<string, Tool> = {
     get_item: {
       descriptor: {
@@ -352,6 +417,7 @@ export function createBoardTools({
           properties: {
             description: { type: 'string' },
             title: { type: 'string', minLength: 1 },
+            type: { enum: [...workItemTypes] },
           },
           required: ['title'],
         },
@@ -361,6 +427,7 @@ export function createBoardTools({
         if (title === '') {
           throw invalid('title must not be empty.');
         }
+        const type = optionalOneOf(args, 'type', workItemTypes);
         const id = crypto.randomUUID();
         const discoveredFromId = await heldItem(caller);
         await board.createWorkItem({
@@ -370,6 +437,7 @@ export function createBoardTools({
           id,
           projectId: caller.projectId,
           title,
+          type,
         });
         return { id, priority: null, state: 'new' };
       },
@@ -436,6 +504,12 @@ export function createBoardTools({
           await requireHeld(caller);
           await requireConfirmed(caller, to, record as Arguments | undefined);
         }
+        if (caller.role === 'builder' && to === 'review_ready') {
+          await requireLinkedPullRequest(
+            caller,
+            record as Arguments | undefined,
+          );
+        }
         const moved = await moveHeld(caller, () => ({
           actor: { role: caller.role, runId: caller.runId },
           reason,
@@ -451,6 +525,52 @@ export function createBoardTools({
           ...moved,
           message: `Recorded. ${title} now waits for ${waitsFor}.`,
         };
+      },
+    },
+    submit_plan: {
+      descriptor: {
+        name: 'submit_plan',
+        description:
+          'Record the plan for the item this run is building, before writing any code: Markdown under the plan record’s ## headings (Context; Files to change, and what to reuse; Increments; The test plan; User-facing decisions; Out of scope; Validation; Known traps).',
+        inputSchema: {
+          type: 'object',
+          properties: { markdown: { type: 'string', minLength: 1 } },
+          required: ['markdown'],
+        },
+      },
+      async run(caller, args) {
+        const markdown = text(args, 'markdown');
+        const problem = recordProblem('plan', markdown);
+        if (problem !== undefined) {
+          throw invalid(problem);
+        }
+        return recordHeld(caller, { kind: 'plan', markdown });
+      },
+    },
+    report_checks: {
+      descriptor: {
+        name: 'report_checks',
+        description:
+          'Report the result of running the project’s checks on the item this run is building. The newest report must have passed before the item can move to review_ready.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            passed: { type: 'boolean' },
+            summary: { type: 'string' },
+          },
+          required: ['passed'],
+        },
+      },
+      async run(caller, args) {
+        if (typeof args.passed !== 'boolean') {
+          throw invalid('passed must be a boolean.');
+        }
+        const summary = optionalText(args, 'summary')?.trim() ?? '';
+        return recordHeld(caller, {
+          kind: 'checks',
+          passed: args.passed,
+          summary,
+        });
       },
     },
     wait_for_navigator: {
@@ -516,6 +636,13 @@ export function createBoardTools({
       }
     },
   };
+}
+
+/** `owner/name` of a GitHub remote, https or ssh, or null for anything else. */
+function repositoryOf(remote: string): string | null {
+  return (
+    /github\.com[/:]([^/\s]+\/[^/\s]+?)(?:\.git)?\/?$/.exec(remote)?.[1] ?? null
+  );
 }
 
 function refusal(code: ToolRefusalCode, message: string): ToolOutcome {

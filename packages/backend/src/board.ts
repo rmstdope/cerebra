@@ -5,13 +5,14 @@ import {
   type Transaction,
 } from 'kysely';
 
-import type { Database } from './database.js';
+import type { Database, WorkItemType } from './database.js';
 import {
   createWorkItem,
   runEndedRequest,
   transition,
   type LifecycleContext,
   type LifecycleRole,
+  type BuildEvidence,
   type Priority,
   type TransitionRequest,
   type TransitionResult,
@@ -39,15 +40,19 @@ interface CreateWorkItem {
   readonly projectId: string;
   readonly state?: WorkItemState;
   readonly title?: string;
+  readonly type?: WorkItemType;
 }
 
 export interface BoardWorkItem {
   readonly createdAt: Date;
   readonly description: string;
   readonly id: string;
+  /** The project's prefix and the item's number, `web-42` (spec §4.1). */
+  readonly key: string;
   readonly priority: WorkItem['priority'];
   readonly state: WorkItemState;
   readonly title: string;
+  readonly type: WorkItemType;
   readonly updatedAt: Date;
 }
 
@@ -69,6 +74,42 @@ export interface BoardRecord {
   readonly createdAt: Date;
   readonly kind: string;
   readonly record: unknown;
+}
+
+/** One step of an item's delivery story (spec §4.11): a plan, a checks report, a pull request. */
+export type DeliveryEvent = {
+  readonly agentName: string | null;
+  readonly at: Date;
+  readonly id: string;
+  readonly runId: string | null;
+} & (
+  | { readonly kind: 'plan' }
+  | { readonly kind: 'checks'; readonly passed: boolean }
+  | {
+      readonly kind: 'pull_request';
+      readonly number: number;
+      readonly title: string | null;
+      readonly url: string;
+    }
+);
+
+/** What the item waits on now, after its last delivery event; null when nothing is shown. */
+export type DeliveryCurrent = {
+  readonly kind: 'waiting_for_review';
+  /** The agent that is, or will next be, reviewing; null when the project has none enabled. */
+  readonly reviewer: string | null;
+} | null;
+
+export interface DeliveryActivity {
+  readonly current: DeliveryCurrent;
+  /** Pass as `before` to read the 50 events preceding these; null when none precede them. */
+  readonly earlierCursor: string | null;
+  readonly events: readonly DeliveryEvent[];
+  readonly latestChecks: Extract<DeliveryEvent, { kind: 'checks' }> | null;
+  readonly latestPullRequest: Extract<
+    DeliveryEvent,
+    { kind: 'pull_request' }
+  > | null;
 }
 
 export interface BoardProvenance {
@@ -170,6 +211,10 @@ export interface Board {
     query: BoardFilters & { readonly snapshot: string },
   ): Promise<number>;
   createProject(input: CreateProject): Promise<void>;
+  deliveryActivity(
+    itemId: string,
+    page?: { readonly before?: string },
+  ): Promise<DeliveryActivity>;
   createWorkItem(input: CreateWorkItem): Promise<void>;
   getHistory(itemId: string): Promise<readonly BoardHistoryEntry[]>;
   getProvenance(itemId: string): Promise<BoardProvenance>;
@@ -232,6 +277,7 @@ export function createBoard(database: Kysely<Database>): Board {
       state = 'new',
       title = '',
       description = '',
+      type = 'feature',
     }) {
       await assertProjectExists(database, projectId);
       const item = createWorkItem({ priority, state });
@@ -260,9 +306,64 @@ export function createBoard(database: Kysely<Database>): Board {
             rounds: item.rounds,
             discovered_from_id: discoveredFromId ?? null,
             filed_by_run_id: filedByRunId ?? null,
+            type,
           })
           .execute();
       });
+    },
+
+    async deliveryActivity(itemId, page = {}) {
+      await assertWorkItemExists(database, itemId);
+      const pageSize = 50;
+      const deliveryKinds = ['plan', 'checks', 'pull_request'];
+      const base = database
+        .selectFrom('work_item_records')
+        .leftJoin('runs', 'runs.id', 'work_item_records.run_id')
+        .select([
+          'work_item_records.id',
+          'work_item_records.created_at',
+          'work_item_records.kind',
+          'work_item_records.payload',
+          'work_item_records.run_id',
+          'runs.agent_name',
+        ])
+        .where('work_item_records.work_item_id', '=', itemId)
+        .where('work_item_records.kind', 'in', deliveryKinds);
+      const before =
+        page.before !== undefined && /^\d+$/.test(page.before)
+          ? Number(page.before)
+          : undefined;
+      const rows = await (
+        before === undefined
+          ? base
+          : base.where('work_item_records.id', '<', before)
+      )
+        .orderBy('work_item_records.id', 'desc')
+        .limit(pageSize + 1)
+        .execute();
+      const shown = rows.slice(0, pageSize).reverse();
+      const latest = async (kind: string) => {
+        const row = await base
+          .where('work_item_records.kind', '=', kind)
+          .orderBy('work_item_records.id', 'desc')
+          .limit(1)
+          .executeTakeFirst();
+        return row === undefined ? null : toDeliveryEvent(row);
+      };
+      const [latestChecks, latestPullRequest, current] = await Promise.all([
+        latest('checks'),
+        latest('pull_request'),
+        deliveryCurrent(database, itemId),
+      ]);
+      return {
+        current,
+        earlierCursor:
+          rows.length > pageSize ? String(shown[0]?.id ?? '') : null,
+        events: shown.map(toDeliveryEvent),
+        latestChecks: latestChecks as DeliveryActivity['latestChecks'],
+        latestPullRequest:
+          latestPullRequest as DeliveryActivity['latestPullRequest'],
+      };
     },
 
     async getProvenance(itemId) {
@@ -624,9 +725,11 @@ const boardColumns = [
   'created_at',
   'description',
   'id',
+  'key',
   'priority',
   'state',
   'title',
+  'type',
   'updated_at',
 ] as const;
 
@@ -698,20 +801,136 @@ function toBoardWorkItem(row: {
   readonly created_at: Date;
   readonly description: string;
   readonly id: string;
+  readonly key: string;
   readonly priority: WorkItem['priority'];
   readonly state: WorkItemState;
   readonly title: string;
+  readonly type: WorkItemType;
   readonly updated_at: Date;
 }): BoardWorkItem {
   return {
     createdAt: row.created_at,
     description: row.description,
     id: row.id,
+    key: row.key,
     priority: row.priority,
     state: row.state,
     title: row.title,
+    type: row.type,
     updatedAt: row.updated_at,
   };
+}
+
+function toDeliveryEvent(row: {
+  readonly agent_name: string | null;
+  readonly created_at: Date;
+  readonly id: number;
+  readonly kind: string;
+  readonly payload: unknown;
+  readonly run_id: string | null;
+}): DeliveryEvent {
+  const common = {
+    agentName: row.agent_name,
+    at: row.created_at,
+    id: String(row.id),
+    runId: row.run_id,
+  };
+  const payload = (
+    typeof row.payload === 'object' && row.payload !== null ? row.payload : {}
+  ) as Record<string, unknown>;
+  if (row.kind === 'checks') {
+    return { ...common, kind: 'checks', passed: payload.passed === true };
+  }
+  if (row.kind === 'pull_request') {
+    const url = typeof payload.url === 'string' ? payload.url : '';
+    const title =
+      typeof payload.title === 'string' && payload.title.trim() !== ''
+        ? payload.title.trim()
+        : null;
+    return {
+      ...common,
+      kind: 'pull_request',
+      number: Number(/\/pull\/(\d+)$/.exec(url)?.[1] ?? 0),
+      title,
+      url,
+    };
+  }
+  return { ...common, kind: 'plan' };
+}
+
+async function deliveryCurrent(
+  database: Kysely<Database>,
+  itemId: string,
+): Promise<DeliveryCurrent> {
+  const item = await database
+    .selectFrom('work_items')
+    .leftJoin('runs', 'runs.id', 'work_items.holder_run_id')
+    .select(['work_items.project_id', 'work_items.state', 'runs.agent_name'])
+    .where('work_items.id', '=', itemId)
+    .executeTakeFirstOrThrow();
+  if (item.state === 'reviewing' && item.agent_name !== null) {
+    return { kind: 'waiting_for_review', reviewer: item.agent_name };
+  }
+  if (item.state !== 'review_ready' && item.state !== 'reviewing') {
+    return null;
+  }
+  const reviewer = await database
+    .selectFrom('agents')
+    .innerJoin('agent_types', 'agent_types.id', 'agents.agent_type_id')
+    .select('agents.name')
+    .where('agents.project_id', '=', item.project_id)
+    .where('agents.enabled', '=', true)
+    .where('agent_types.role', '=', 'reviewer')
+    .orderBy('agents.created_sequence')
+    .limit(1)
+    .executeTakeFirst();
+  return { kind: 'waiting_for_review', reviewer: reviewer?.name ?? null };
+}
+
+/**
+ * Appends a record to the item a run holds while building (spec §4.11), under the row lock, so a
+ * plan or checks report can only come from the run that holds the item right now.
+ */
+export async function recordForHeldItem(
+  database: Kysely<Database>,
+  itemId: string,
+  runId: string,
+  record: Readonly<Record<string, unknown>> & { readonly kind: string },
+): Promise<
+  | { readonly ok: true }
+  | {
+      readonly code: 'nothing_held' | 'refused';
+      readonly ok: false;
+      readonly reason: string;
+    }
+> {
+  return database.transaction().execute(async (transaction) => {
+    const { item } = await getLockedItem(transaction, itemId);
+    if (item.holderRunId !== runId) {
+      return {
+        code: 'nothing_held' as const,
+        ok: false as const,
+        reason: 'This run no longer holds its work item.',
+      };
+    }
+    if (item.state !== 'building') {
+      return {
+        code: 'refused' as const,
+        ok: false as const,
+        reason: `A ${record.kind} is recorded while building; this item is ${item.state}.`,
+      };
+    }
+    await transaction
+      .insertInto('work_item_records')
+      .values({
+        kind: record.kind,
+        payload: JSON.stringify(record),
+        run_id: runId,
+        work_item_id: itemId,
+      })
+      .execute();
+    return { ok: true as const };
+  });
 }
 
 /**
@@ -782,6 +1001,11 @@ async function getLockedItem(
     throw new WorkItemNotFoundError(itemId);
   }
 
+  const build =
+    row.state === 'building' && row.holder_run_id !== null
+      ? await buildEvidenceOf(database, itemId, row.holder_run_id)
+      : undefined;
+
   return {
     item: {
       attempts: row.attempts,
@@ -792,6 +1016,7 @@ async function getLockedItem(
       waitingKind: row.waiting_kind,
       waitingReason: row.waiting_reason,
       returnState: row.return_state,
+      ...(build === undefined ? {} : { build }),
     },
     context: {
       stages: {
@@ -801,6 +1026,33 @@ async function getLockedItem(
       },
       supportsSplitting: false,
     },
+  };
+}
+
+/** What the holding run has recorded on the item: a plan, and its newest checks report. */
+async function buildEvidenceOf(
+  database: DatabaseExecutor,
+  itemId: string,
+  runId: string,
+): Promise<BuildEvidence> {
+  const rows = await database
+    .selectFrom('work_item_records')
+    .select(['kind', 'payload'])
+    .where('work_item_id', '=', itemId)
+    .where('run_id', '=', runId)
+    .where('kind', 'in', ['plan', 'checks'])
+    .orderBy('id', 'desc')
+    .execute();
+  const checks = rows.find((row) => row.kind === 'checks');
+  const passed =
+    checks === undefined
+      ? null
+      : (checks.payload as { passed?: unknown } | null)?.passed === true
+        ? 'passed'
+        : 'failed';
+  return {
+    checks: passed,
+    planRecorded: rows.some((row) => row.kind === 'plan'),
   };
 }
 
@@ -862,6 +1114,7 @@ async function persistTransition(
               ? effect.record.kind
               : 'unspecified',
           payload: JSON.stringify(effect.record),
+          run_id: request.actor.runId ?? null,
         })
         .execute();
     }

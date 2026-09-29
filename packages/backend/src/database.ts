@@ -138,6 +138,7 @@ export interface Database {
     id: Generated<number>;
     kind: string;
     payload: unknown;
+    run_id: Generated<string | null>;
     work_item_id: string;
   };
   work_items: {
@@ -149,12 +150,15 @@ export interface Database {
     filed_sequence: Generated<string>;
     holder_run_id: string | null;
     id: string;
+    /** Assigned by the database when filed: the project's prefix and next number. */
+    key: Generated<string>;
     priority: Priority | null;
     project_id: string;
     return_state: WorkItemState | null;
     rounds: number;
     state: WorkItemState;
     title: string;
+    type: Generated<WorkItemType>;
     updated_at: Generated<Date>;
     waiting_kind: WaitingKind | null;
     waiting_reason: string | null;
@@ -176,6 +180,7 @@ export interface Database {
     github_token_iv: Generated<string>;
     github_token_tag: Generated<string>;
     id: string;
+    item_sequence: Generated<string>;
     key_prefix: Generated<string>;
     max_attempts: Generated<number>;
     max_concurrent_runs: Generated<number>;
@@ -186,6 +191,16 @@ export interface Database {
     verify_enabled: Generated<boolean>;
   };
 }
+
+/** What kind of work an item is (spec §4.1); a `bug` goes to the bugfixer. */
+export type WorkItemType = 'feature' | 'bug' | 'task' | 'refactoring';
+
+export const workItemTypes: readonly WorkItemType[] = [
+  'feature',
+  'bug',
+  'task',
+  'refactoring',
+];
 
 export type RunState =
   'starting' | 'active' | 'awaiting_input' | 'finished' | 'failed';

@@ -38,6 +38,16 @@ export interface WorkItem {
   readonly waitingKind: WaitingKind | null;
   readonly waitingReason: string | null;
   readonly returnState: WorkItemState | null;
+  /**
+   * What the holding run has recorded while building (spec §4.4, §4.11): whether it recorded a
+   * plan, and the result of the last checks it reported. Absent means neither.
+   */
+  readonly build?: BuildEvidence;
+}
+
+export interface BuildEvidence {
+  readonly checks: 'failed' | 'passed' | null;
+  readonly planRecorded: boolean;
 }
 
 export interface LifecycleContext {
@@ -113,6 +123,16 @@ export const recordHeadings = {
     'The words, exactly',
     'What was considered and rejected',
     'The mockup',
+  ],
+  plan: [
+    'Context',
+    'Files to change, and what to reuse',
+    'Increments',
+    'The test plan',
+    'User-facing decisions',
+    'Out of scope',
+    'Validation',
+    'Known traps',
   ],
 } as const;
 
@@ -335,6 +355,13 @@ export function transition(
     }
   }
 
+  if (rule.from === 'building' && rule.to === 'review_ready') {
+    const unbuilt = buildProblem(item.build);
+    if (unbuilt !== undefined) {
+      return refusal(unbuilt);
+    }
+  }
+
   // An agent's record is evidence for the move it asks for, never a record of the backend's kind.
   const agentMove = rule.role !== 'backend' && rule.role !== 'navigator';
   const takesRecord = rule.requires !== undefined && rule.requires !== 'reason';
@@ -552,6 +579,28 @@ function missingEvidence(
     case 'review_changes':
       return reviewProblem(requires, record, needs);
   }
+}
+
+function buildProblem(build: BuildEvidence | undefined): string | undefined {
+  const handOver = 'before handing the item to review.';
+  if (build?.planRecorded !== true) {
+    return `Record the plan with submit_plan ${handOver}`;
+  }
+  if (build.checks === null) {
+    return `Report passing checks with report_checks ${handOver}`;
+  }
+  if (build.checks === 'failed') {
+    return `The latest checks failed; correct them and report passing checks with report_checks ${handOver}`;
+  }
+  return undefined;
+}
+
+/** What is wrong with a Markdown record's headings (spec §4.11), or undefined when nothing is. */
+export function recordProblem(
+  kind: keyof typeof recordHeadings,
+  markdown: unknown,
+): string | undefined {
+  return markdownProblem(kind, markdown);
 }
 
 function markdownProblem(

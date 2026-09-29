@@ -574,6 +574,17 @@ export const createServer = async ({
   );
 
   server.get(
+    '/api/work-items/:itemId/delivery-activity',
+    boardRoute<{ itemId: string }>(async (board, { itemId }, request) => {
+      const { before } = request.query as { before?: unknown };
+      return board.deliveryActivity(
+        itemId,
+        typeof before === 'string' && before !== '' ? { before } : {},
+      );
+    }),
+  );
+
+  server.get(
     '/api/work-items/:itemId/comments',
     boardRoute<{ itemId: string }>(async (board, { itemId }) =>
       board.listComments(itemId),

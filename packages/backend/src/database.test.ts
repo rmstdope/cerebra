@@ -104,6 +104,10 @@ describe('database migrations', { concurrent: false }, () => {
           migrationName: '20261003000000_add_dispatcher',
           status: 'Success',
         }),
+        expect.objectContaining({
+          migrationName: '20261004000000_add_builder_delivery',
+          status: 'Success',
+        }),
       ]);
       expect(
         await database.introspection.getTables({
@@ -396,6 +400,90 @@ describe('database migrations', { concurrent: false }, () => {
           VALUES (${assistant}, 1, '{"kind":"message","text":"Again"}')
         `.execute(database),
       ).rejects.toThrow();
+    } finally {
+      await database.destroy();
+      await dropSchema(schema);
+    }
+  });
+  test('gives every item a key and type, and keeps the run a record came from', async () => {
+    const schema = await createSchema();
+    const database = createDatabase(databaseUrl, schema);
+    const web = crypto.randomUUID();
+    const bare = crypto.randomUUID();
+    const [first, second, third] = [
+      crypto.randomUUID(),
+      crypto.randomUUID(),
+      crypto.randomUUID(),
+    ];
+
+    try {
+      await migrateTo(database, '20261003000000_add_dispatcher', schema);
+      await sql`
+        INSERT INTO projects (id, name, key_prefix)
+        VALUES (${web}, 'Web', 'web'), (${bare}, 'Bare', NULL)
+      `.execute(database);
+      await sql`
+        INSERT INTO work_items (id, project_id, state) VALUES (${second}, ${web}, 'new')
+      `.execute(database);
+      await sql`
+        INSERT INTO work_items (id, project_id, state) VALUES (${first}, ${bare}, 'new')
+      `.execute(database);
+      await sql`
+        INSERT INTO work_items (id, project_id, state) VALUES (${third}, ${web}, 'new')
+      `.execute(database);
+
+      await migrateToLatest(database, schema);
+
+      const keys = await database
+        .selectFrom('work_items')
+        .select(['id', 'key', 'type'])
+        .execute();
+      expect(new Map(keys.map((row) => [row.id, [row.key, row.type]]))).toEqual(
+        new Map([
+          [second, ['web-1', 'feature']],
+          [third, ['web-2', 'feature']],
+          [first, ['item-1', 'feature']],
+        ]),
+      );
+
+      const next = crypto.randomUUID();
+      await sql`
+        INSERT INTO work_items (id, project_id, state, type)
+        VALUES (${next}, ${web}, 'new', 'bug')
+      `.execute(database);
+      expect(
+        await database
+          .selectFrom('work_items')
+          .select(['key', 'type'])
+          .where('id', '=', next)
+          .executeTakeFirstOrThrow(),
+      ).toEqual({ key: 'web-3', type: 'bug' });
+      await expect(
+        sql`
+          INSERT INTO work_items (id, project_id, state, type)
+          VALUES (${crypto.randomUUID()}, ${web}, 'new', 'chore')
+        `.execute(database),
+      ).rejects.toThrow();
+      await expect(
+        sql`UPDATE work_items SET key = 'web-1' WHERE id = ${third}`.execute(
+          database,
+        ),
+      ).rejects.toThrow();
+
+      const run = crypto.randomUUID();
+      await sql`
+        INSERT INTO runs (id, role, status) VALUES (${run}, 'builder', 'active')
+      `.execute(database);
+      await sql`
+        INSERT INTO work_item_records (work_item_id, kind, payload, run_id)
+        VALUES (${next}, 'plan', '{}', ${run})
+      `.execute(database);
+      expect(
+        await database
+          .selectFrom('work_item_records')
+          .select('run_id')
+          .executeTakeFirstOrThrow(),
+      ).toEqual({ run_id: run });
     } finally {
       await database.destroy();
       await dropSchema(schema);

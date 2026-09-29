@@ -2,7 +2,7 @@ import type { Kysely } from 'kysely';
 import { describe, expect, test } from 'vitest';
 
 import { createBoard } from './board.js';
-import type { Database } from './database.js';
+import type { Database, WorkItemType } from './database.js';
 import {
   createDispatcher,
   type DispatchedRun,
@@ -41,10 +41,12 @@ async function fileItem(
     priority = 'P2',
     state = 'build_ready',
     minutesAgo = 0,
+    type,
   }: {
     priority?: Priority;
     state?: WorkItemState;
     minutesAgo?: number;
+    type?: WorkItemType;
   } = {},
 ): Promise<string> {
   const id = crypto.randomUUID();
@@ -55,6 +57,7 @@ async function fileItem(
     projectId,
     state,
     title,
+    type,
   });
   await database
     .updateTable('work_items')
@@ -114,7 +117,7 @@ describe('the dispatcher', () => {
       expect(launched).toEqual([
         {
           agentId: run.agent_id,
-          firstMessage: 'Fix export\n\nAbout Fix export.',
+          firstMessage: 'WEB-1 (feature): Fix export\n\nAbout Fix export.',
           runId: run.id,
           token: expect.any(String),
         },
@@ -129,6 +132,27 @@ describe('the dispatcher', () => {
           work_item_id: itemId,
         },
       ]);
+    });
+  });
+
+  test('gives a bug to the bugfixer, never to a producer', async () => {
+    await withTestDatabase(async (database) => {
+      const projectId = await registerTestProject(database);
+      const itemId = await fileItem(database, projectId, 'Crash on export', {
+        type: 'bug',
+      });
+      const { dispatcher, launched } = dispatcherFor(database);
+
+      await dispatcher.dispatch();
+
+      expect(launched).toEqual([
+        expect.objectContaining({
+          agentId: await agentNamed(database, projectId, 'Bishop'),
+          firstMessage:
+            'WEB-1 (bug): Crash on export\n\nAbout Crash on export.',
+        }),
+      ]);
+      expect((await itemState(database, itemId)).state).toBe('building');
     });
   });
 

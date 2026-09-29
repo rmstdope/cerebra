@@ -5,6 +5,7 @@ import {
   createBoard,
   filingLockKey,
   ProjectNotFoundError,
+  recordForHeldItem,
   WorkItemNotFoundError,
 } from './board.js';
 import { createDatabase } from './database.js';
@@ -565,6 +566,210 @@ describe('provenance and records', { concurrent: false }, () => {
         },
         [originalId]: null,
       });
+    });
+  });
+  test('keys each item within its project and keeps the type it was filed as', async () => {
+    await withTestDatabase(async (database) => {
+      const board = createBoard(database);
+      const projectId = await registerTestProject(database);
+      const feature = crypto.randomUUID();
+      const bug = crypto.randomUUID();
+      await board.createWorkItem({ id: feature, projectId, title: 'Export' });
+      await board.createWorkItem({
+        id: bug,
+        projectId,
+        title: 'Crash',
+        type: 'bug',
+      });
+
+      expect(await board.getWorkItem(feature)).toMatchObject({
+        key: 'WEB-1',
+        type: 'feature',
+      });
+      expect(
+        (await board.listWorkItems(projectId)).items.map((item) => [
+          item.key,
+          item.type,
+        ]),
+      ).toEqual([
+        ['WEB-2', 'bug'],
+        ['WEB-1', 'feature'],
+      ]);
+    });
+  });
+
+  test('hands an item to review only after its holder recorded a plan and passing checks', async () => {
+    await withTestDatabase(async (database) => {
+      const board = createBoard(database);
+      const projectId = await registerTestProject(database);
+      const itemId = crypto.randomUUID();
+      await board.createWorkItem({ id: itemId, projectId, title: 'Export' });
+      await board.triage(itemId, 'P2', 'build_ready');
+      const claimed = await board.claim(itemId, 'builder');
+      if (!claimed.ok) throw new Error(claimed.reason);
+      const runId = claimed.item.holderRunId ?? '';
+      const handOver = () =>
+        board.transition(itemId, {
+          actor: { role: 'builder', runId },
+          record: {
+            branch: 'WEB-1-export',
+            head: '0123456789abcdef0123456789abcdef01234567',
+            kind: 'pull_request',
+            url: 'https://github.com/acme/website/pull/7',
+          },
+          to: 'review_ready',
+        });
+
+      expect(await handOver()).toMatchObject({
+        ok: false,
+        reason: expect.stringContaining('submit_plan'),
+      });
+      expect(
+        await recordForHeldItem(database, itemId, crypto.randomUUID(), {
+          kind: 'plan',
+          markdown: '',
+        }),
+      ).toMatchObject({ code: 'nothing_held', ok: false });
+      expect(
+        await recordForHeldItem(database, itemId, runId, {
+          kind: 'plan',
+          markdown: 'plan',
+        }),
+      ).toEqual({ ok: true });
+      expect(await handOver()).toMatchObject({
+        ok: false,
+        reason: expect.stringContaining('report_checks'),
+      });
+      await recordForHeldItem(database, itemId, runId, {
+        kind: 'checks',
+        passed: false,
+        summary: 'lint failed',
+      });
+      expect(await handOver()).toMatchObject({
+        ok: false,
+        reason: expect.stringContaining('The latest checks failed'),
+      });
+      await recordForHeldItem(database, itemId, runId, {
+        kind: 'checks',
+        passed: true,
+        summary: 'all green',
+      });
+
+      expect(await handOver()).toMatchObject({
+        ok: true,
+        item: { state: 'review_ready' },
+      });
+      const records = await database
+        .selectFrom('work_item_records')
+        .select(['kind', 'run_id'])
+        .where('kind', 'in', ['plan', 'checks', 'pull_request'])
+        .orderBy('id')
+        .execute();
+      expect(records).toEqual([
+        { kind: 'plan', run_id: runId },
+        { kind: 'checks', run_id: runId },
+        { kind: 'checks', run_id: runId },
+        { kind: 'pull_request', run_id: runId },
+      ]);
+      expect(
+        await recordForHeldItem(database, itemId, runId, {
+          kind: 'checks',
+          passed: true,
+        }),
+      ).toMatchObject({ code: 'nothing_held', ok: false });
+    });
+  });
+
+  test('tells an item’s delivery story in order, fifty events at a time', async () => {
+    await withTestDatabase(async (database) => {
+      const board = createBoard(database);
+      const projectId = await registerTestProject(database);
+      const itemId = crypto.randomUUID();
+      await board.createWorkItem({ id: itemId, projectId, title: 'Export' });
+
+      expect(await board.deliveryActivity(itemId)).toEqual({
+        current: null,
+        earlierCursor: null,
+        events: [],
+        latestChecks: null,
+        latestPullRequest: null,
+      });
+
+      await board.triage(itemId, 'P2', 'build_ready');
+      const claimed = await board.claim(itemId, 'builder');
+      if (!claimed.ok) throw new Error(claimed.reason);
+      const runId = claimed.item.holderRunId ?? '';
+      await database
+        .updateTable('runs')
+        .set({ agent_name: 'Wolverine' })
+        .where('id', '=', runId)
+        .execute();
+      await recordForHeldItem(database, itemId, runId, {
+        kind: 'plan',
+        markdown: 'plan',
+      });
+      for (let index = 0; index < 54; index += 1) {
+        await recordForHeldItem(database, itemId, runId, {
+          kind: 'checks',
+          passed: index % 2 === 1,
+        });
+      }
+      await board.transition(itemId, {
+        actor: { role: 'builder', runId },
+        record: {
+          branch: 'WEB-1-export',
+          head: '0123456789abcdef0123456789abcdef01234567',
+          kind: 'pull_request',
+          title: 'Export invoices',
+          url: 'https://github.com/acme/website/pull/482',
+        },
+        to: 'review_ready',
+      });
+
+      const latest = await board.deliveryActivity(itemId);
+      expect(latest.events).toHaveLength(50);
+      expect(latest.events.at(-1)).toMatchObject({
+        agentName: 'Wolverine',
+        kind: 'pull_request',
+        number: 482,
+        runId,
+        title: 'Export invoices',
+        url: 'https://github.com/acme/website/pull/482',
+      });
+      expect(latest.current).toEqual({
+        kind: 'waiting_for_review',
+        reviewer: 'Emma',
+      });
+      expect(latest.latestChecks).toMatchObject({
+        kind: 'checks',
+        passed: true,
+      });
+      expect(latest.latestPullRequest).toMatchObject({ number: 482 });
+      expect(latest.earlierCursor).not.toBeNull();
+
+      const earlier = await board.deliveryActivity(itemId, {
+        before: latest.earlierCursor ?? '',
+      });
+      expect(earlier.earlierCursor).toBeNull();
+      expect(earlier.events.map((event) => event.kind)).toEqual([
+        'plan',
+        'checks',
+        'checks',
+        'checks',
+        'checks',
+        'checks',
+      ]);
+      expect(earlier.events[0]).toMatchObject({ agentName: 'Wolverine' });
+      expect(
+        [...earlier.events, ...latest.events].map((event) => Number(event.id)),
+      ).toEqual(
+        [...earlier.events, ...latest.events]
+          .map((event) => Number(event.id))
+          .toSorted((a, b) => a - b),
+      );
+      await expect(
+        board.deliveryActivity(crypto.randomUUID()),
+      ).rejects.toBeInstanceOf(WorkItemNotFoundError);
     });
   });
 });

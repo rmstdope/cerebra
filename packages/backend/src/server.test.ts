@@ -531,6 +531,60 @@ test('counts matching arrivals after a snapshot', async () => {
   expect(response.json()).toEqual({ count: 2 });
 });
 
+test('reads an item’s delivery activity, earlier pages by cursor', async () => {
+  const pages: unknown[] = [];
+  const server = await createServer({
+    auth: authenticatedAuth,
+    board: fakeBoard({
+      deliveryActivity: async (itemId, page) => {
+        pages.push({ itemId, page });
+        return {
+          current: { kind: 'waiting_for_review', reviewer: 'Emma' },
+          earlierCursor: '12',
+          events: [
+            {
+              agentName: 'Storm',
+              at: new Date('2026-10-04T10:14:00.000Z'),
+              id: '13',
+              kind: 'plan',
+              runId: 'run-1',
+            },
+          ],
+          latestChecks: null,
+          latestPullRequest: null,
+        };
+      },
+    }),
+  });
+  servers.push(server);
+
+  const latest = await server.inject(
+    '/api/work-items/item-1/delivery-activity',
+  );
+  await server.inject('/api/work-items/item-1/delivery-activity?before=12');
+
+  expect(latest.statusCode).toBe(200);
+  expect(latest.json()).toEqual({
+    current: { kind: 'waiting_for_review', reviewer: 'Emma' },
+    earlierCursor: '12',
+    events: [
+      {
+        agentName: 'Storm',
+        at: '2026-10-04T10:14:00.000Z',
+        id: '13',
+        kind: 'plan',
+        runId: 'run-1',
+      },
+    ],
+    latestChecks: null,
+    latestPullRequest: null,
+  });
+  expect(pages).toEqual([
+    { itemId: 'item-1', page: {} },
+    { itemId: 'item-1', page: { before: '12' } },
+  ]);
+});
+
 test('returns an unavailable route as an explicit refusal', async () => {
   const server = await createServer({
     auth: authenticatedAuth,
@@ -564,6 +618,7 @@ test('answers an unknown work item with 404, never an empty body', async () => {
   const server = await createServer({
     auth: authenticatedAuth,
     board: fakeBoard({
+      deliveryActivity: missing,
       getHistory: missing,
       getWorkItem: missing,
       listComments: missing,
@@ -575,6 +630,7 @@ test('answers an unknown work item with 404, never an empty body', async () => {
     '/api/work-items/item-9',
     '/api/work-items/item-9/history',
     '/api/work-items/item-9/comments',
+    '/api/work-items/item-9/delivery-activity',
   ]) {
     const response = await server.inject(url);
     expect(response.statusCode).toBe(404);

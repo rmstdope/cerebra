@@ -205,7 +205,14 @@ export function createDispatcher({
         ? []
         : await database
             .selectFrom('work_items')
-            .select(['id', 'project_id', 'priority', 'state', 'updated_at'])
+            .select([
+              'id',
+              'project_id',
+              'priority',
+              'state',
+              'type',
+              'updated_at',
+            ])
             .where('holder_run_id', 'is', null)
             .where('state', 'in', [...queueStates] as never[])
             .orderBy('updated_at')
@@ -227,7 +234,7 @@ export function createDispatcher({
         priority: item.priority,
         projectId: item.project_id,
         state: item.state,
-        type: null,
+        type: item.type,
       })),
       projects: projects.map((project) => ({
         id: project.id,
@@ -332,7 +339,7 @@ export function createDispatcher({
           if (!claimed.ok) throw new PairingRefused(claimed.reason);
           const item = await transaction
             .selectFrom('work_items')
-            .select(['title', 'description'])
+            .select(['description', 'key', 'title', 'type'])
             .where('id', '=', pairing.itemId)
             .executeTakeFirstOrThrow();
           await transaction
@@ -348,7 +355,10 @@ export function createDispatcher({
             .execute();
           return {
             agentId: pairing.agentId,
-            firstMessage: [item.title, item.description]
+            firstMessage: [
+              `${item.key} (${item.type}): ${item.title}`,
+              item.description,
+            ]
               .filter((part) => part.trim() !== '')
               .join('\n\n'),
             runId,
