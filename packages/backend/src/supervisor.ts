@@ -1,16 +1,20 @@
 import { mkdir, chown } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import type {
-  AgentEvent,
-  Answers,
-  DownMessage,
-  StartMessage,
-  UpMessage,
+import {
+  maxFetchBytes,
+  type AgentEvent,
+  type Answers,
+  type DownMessage,
+  type FilesMessage,
+  type RunFile,
+  type StartMessage,
+  type UpMessage,
 } from '@cerebra/shared';
 import type { Kysely } from 'kysely';
 
 import type { AgentRole } from './agent-types.js';
+import type { RunCheckouts } from './checkouts.js';
 import type { CredentialService } from './credentials.js';
 import type { Database, RunState } from './database.js';
 import { ContainerNotFoundError, type ContainerEngine } from './engine.js';
@@ -46,6 +50,11 @@ export interface Supervisor extends RunControl {
   answer(runId: string, questionId: string, answers: Answers): Promise<void>;
   stopRun(runId: string): Promise<void>;
   subscribe(runId: string, listener: (update: RunUpdate) => void): () => void;
+  /** Reads files from a live run's checkout, through its runner (architecture §5.2). */
+  fetchFiles(
+    runId: string,
+    paths: readonly string[],
+  ): Promise<readonly RunFile[]>;
   /** Fails every run a previous backend left live (architecture §5.3). */
   recoverAfterRestart(): Promise<void>;
   readonly gateway: RunnerGatewayOptions<RunRecord>;
@@ -56,6 +65,8 @@ export interface SupervisorOptions {
   readonly engine: ContainerEngine;
   readonly credentials: Pick<CredentialService, 'resolveForRun'>;
   readonly runs: RunStore;
+  /** Makes each run's checkout before its container, and removes it when the run ends. */
+  readonly checkouts: RunCheckouts;
   /** Where a runner reaches the gateway, from inside its container. */
   readonly gatewayUrl: string;
   /** Where a runner reaches the board tools (architecture §5.4), from inside its container. */
@@ -66,6 +77,8 @@ export interface SupervisorOptions {
   ) => Promise<void>;
   readonly connectTimeoutMs?: number;
   readonly stopTimeoutMs?: number;
+  /** How long a runner has to answer `fetch_files`. */
+  readonly fileRequestTimeoutMs?: number;
   /** How often an ending is tried before it is left to the next restart's recovery. */
   readonly endAttempts?: number;
   readonly endRetryMs?: number;
@@ -83,6 +96,14 @@ export class RunEndedError extends Error {
   public constructor() {
     super('This conversation has ended.');
     this.name = 'RunEndedError';
+  }
+}
+
+/** A file request the runner refused, answered wrongly, or did not answer in time. */
+export class FileRequestError extends Error {
+  public constructor(message: string) {
+    super(message);
+    this.name = 'FileRequestError';
   }
 }
 
@@ -117,20 +138,59 @@ interface LiveRun {
   connectTimer: ReturnType<typeof setTimeout> | null;
   stopTimer: ReturnType<typeof setTimeout> | null;
   readonly pending: DownMessage[];
+  /** File requests waiting for the runner's answer, by request id. */
+  readonly fileRequests: Map<string, FileRequest>;
   start: StartMessage;
   /** Serialises the handling of one run's messages so events keep their order. */
   work: Promise<void>;
 }
 
+interface FileRequest {
+  readonly paths: readonly string[];
+  readonly timer: ReturnType<typeof setTimeout>;
+  resolve(files: readonly RunFile[]): void;
+  reject(error: Error): void;
+}
+
+/** Checks a runner's answer is exactly the files asked for, within the byte limit. */
+function checkedFiles(
+  request: FileRequest,
+  message: FilesMessage,
+): readonly RunFile[] {
+  if ('error' in message) throw new FileRequestError(message.error);
+  const asked = [...request.paths].sort();
+  const answered = message.files.map((file) => file.path).sort();
+  if (
+    asked.length !== answered.length ||
+    asked.some((path, index) => path !== answered[index])
+  ) {
+    throw new FileRequestError(
+      'The runner answered with other files than asked for.',
+    );
+  }
+  const bytes = message.files.reduce(
+    (total, file) => total + Buffer.byteLength(file.content, 'base64'),
+    0,
+  );
+  if (bytes > maxFetchBytes) {
+    throw new FileRequestError(
+      'The runner answered with more than the files may come to.',
+    );
+  }
+  return message.files;
+}
+
 const stoppedReason = 'The navigator stopped the run.';
 
-/** Creates the per-run directories the engine mounts, owned by the agent user when possible. */
+/**
+ * Creates the per-agent directories the engine mounts, owned by the agent user when possible.
+ * The run's checkout is made by the run checkouts, not here.
+ */
 export function directoryPreparer(
   dataDirectory: string,
 ): (runId: string, agentId: string) => Promise<void> {
-  return async (runId, agentId) => {
+  return async (_runId, agentId) => {
     const paths = [
-      join(dataDirectory, 'runs', runId, 'checkout'),
       join(dataDirectory, 'agents', agentId, 'home'),
       join(dataDirectory, 'agents', agentId, 'cli-state'),
     ];
@@ -170,11 +230,13 @@ export function createSupervisor({
   engine,
   credentials,
   runs,
+  checkouts,
   gatewayUrl,
   mcpUrl,
   prepareDirectories,
   connectTimeoutMs = 60_000,
   stopTimeoutMs = 30_000,
+  fileRequestTimeoutMs = 30_000,
   endAttempts = 5,
   endRetryMs = 1_000,
   log = () => {},
@@ -210,6 +272,16 @@ export function createSupervisor({
     }
   }
 
+  async function removeCheckout(runId: string): Promise<void> {
+    try {
+      await checkouts.remove(runId);
+    } catch (error) {
+      log(
+        `Run ${runId}: its checkout could not be removed: ${failureText(error)}`,
+      );
+    }
+  }
+
   /** Records a run's ending, retrying so a passing database fault cannot leave it live. */
   async function recordEnding(runId: string, ending: EndRun): Promise<boolean> {
     for (let attempt = 1; ; attempt += 1) {
@@ -231,6 +303,11 @@ export function createSupervisor({
     if (entry !== undefined) {
       if (entry.connectTimer !== null) clearTimeout(entry.connectTimer);
       if (entry.stopTimer !== null) clearTimeout(entry.stopTimer);
+      for (const request of entry.fileRequests.values()) {
+        clearTimeout(request.timer);
+        request.reject(new RunEndedError());
+      }
+      entry.fileRequests.clear();
     }
     entry?.connection?.close();
     try {
@@ -244,6 +321,8 @@ export function createSupervisor({
     } finally {
       const run = await runs.get(runId).catch(() => null);
       await removeContainer(runId, run?.containerId ?? null);
+      // Only once no container can still write to it.
+      await removeCheckout(runId);
     }
   }
 
@@ -323,6 +402,12 @@ export function createSupervisor({
     if (typeof definition.image !== 'string') {
       throw new Error('The agent type names no image.');
     }
+    await checkouts.create({ projectId, runId: run.id });
+    // Stopped while the checkout was being made: the ending removed nothing yet made.
+    if (!live.has(run.id)) {
+      await removeCheckout(run.id);
+      return;
+    }
     await prepareDirectories(run.id, agentId);
     if (!live.has(run.id)) return;
     await clearEarlierContainers(agentId);
@@ -364,8 +449,26 @@ export function createSupervisor({
     }
   }
 
+  function answerFiles(runId: string, message: FilesMessage): void {
+    const request = live.get(runId)?.fileRequests.get(message.requestId);
+    if (request === undefined) {
+      log(`Run ${runId}: an answer to no file request was ignored.`);
+      return;
+    }
+    live.get(runId)?.fileRequests.delete(message.requestId);
+    clearTimeout(request.timer);
+    try {
+      request.resolve(checkedFiles(request, message));
+    } catch (error) {
+      request.reject(error as Error);
+    }
+  }
+
   async function handle(runId: string, message: UpMessage): Promise<void> {
-    if (message.type !== 'event') return;
+    if (message.type === 'files') {
+      answerFiles(runId, message);
+      return;
+    }
     const event: AgentEvent = message.event;
     const record = await runs.append(runId, event);
     publish(runId, { type: 'event', ...record });
@@ -487,6 +590,7 @@ export function createSupervisor({
       const entry: LiveRun = {
         connection: null,
         connectTimer: null,
+        fileRequests: new Map(),
         pending: [],
         start: {
           backend: 'claude',
@@ -584,6 +688,21 @@ export function createSupervisor({
       deliver(await liveRun(runId), { answers, questionId, type: 'answer' });
     },
 
+    async fetchFiles(runId, paths) {
+      const entry = await liveRun(runId);
+      const requestId = crypto.randomUUID();
+      return new Promise<readonly RunFile[]>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          entry.fileRequests.delete(requestId);
+          reject(
+            new FileRequestError('The run did not send the files in time.'),
+          );
+        }, fileRequestTimeoutMs);
+        entry.fileRequests.set(requestId, { paths, reject, resolve, timer });
+        deliver(entry, { paths: [...paths], requestId, type: 'fetch_files' });
+      });
+    },
+
     subscribe(runId, listener) {
       const set = listeners.get(runId) ?? new Set();
       set.add(listener);
@@ -603,6 +722,15 @@ export function createSupervisor({
           state: 'failed',
         });
         await removeContainer(run.id, run.containerId);
+        await removeCheckout(run.id);
+      }
+      // Directories a crash left between a checkout and its run's record, or its removal.
+      try {
+        await checkouts.sweep(new Set(live.keys()));
+      } catch (error) {
+        log(
+          `The checkouts of ended runs could not be swept: ${failureText(error)}`,
+        );
       }
     },
   };

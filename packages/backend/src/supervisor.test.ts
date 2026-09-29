@@ -1,4 +1,10 @@
-import type { DownMessage, EventMessage } from '@cerebra/shared';
+import {
+  maxFetchBytes,
+  type DownMessage,
+  type EventMessage,
+  type FilesMessage,
+  type RunFile,
+} from '@cerebra/shared';
 import type { Kysely } from 'kysely';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -6,6 +12,7 @@ import { join } from 'node:path';
 
 import { describe, expect, test } from 'vitest';
 
+import { CheckoutError, type RunCheckouts } from './checkouts.js';
 import type { Database } from './database.js';
 import { EngineError } from './engine.js';
 import { createFakeEngine, type FakeEngine } from './fake-engine.js';
@@ -15,6 +22,7 @@ import {
   AgentUnavailableError,
   createSupervisor,
   directoryPreparer,
+  FileRequestError,
   RunEndedError,
   RunNotFoundError,
   RunStartError,
@@ -36,7 +44,37 @@ const goodCredentials: Resolve = async () => ({
   ok: true,
 });
 
+/**
+ * A fake of the run checkouts that records each call, and whether the run's container existed
+ * when it was made: `create <run> <project> [container]`, `remove <run> [container]`, `sweep <live>`.
+ */
+function recordingCheckouts(
+  engine: () => FakeEngine,
+  calls: string[],
+  overrides: Partial<RunCheckouts> = {},
+): RunCheckouts {
+  const container = (runId: string) =>
+    containerOf(engine(), runId) === undefined ? 'no container' : 'container';
+  return {
+    async create(input) {
+      calls.push(
+        `create ${input.runId} ${input.projectId} ${container(input.runId)}`,
+      );
+      await overrides.create?.(input);
+    },
+    async remove(runId) {
+      calls.push(`remove ${runId} ${container(runId)}`);
+      await overrides.remove?.(runId);
+    },
+    async sweep(live) {
+      calls.push(`sweep ${[...live].join(',')}`);
+      await overrides.sweep?.(live);
+    },
+  };
+}
+
 interface Harness {
+  readonly checkouts: string[];
   readonly database: Kysely<Database>;
   readonly engine: FakeEngine;
   readonly logs: string[];
@@ -55,15 +93,20 @@ interface Harness {
 
 async function withSupervisor(
   run: (harness: Harness) => Promise<void>,
-  options: Partial<SupervisorOptions> = {},
+  options: Partial<SupervisorOptions> & {
+    readonly checkoutsDoing?: Partial<RunCheckouts>;
+  } = {},
 ): Promise<void> {
+  const { checkoutsDoing, ...supervisorOptions } = options;
   await withTestDatabase(async (database) => {
     const projectId = await registerTestProject(database);
     const engine = createFakeEngine();
     const runs = createRunStore(database);
     const logs: string[] = [];
     const prepared: string[] = [];
+    const checkouts: string[] = [];
     const supervisor = createSupervisor({
+      checkouts: recordingCheckouts(() => engine, checkouts, checkoutsDoing),
       credentials: { resolveForRun: goodCredentials },
       database,
       engine,
@@ -74,10 +117,11 @@ async function withSupervisor(
         prepared.push(`${runId} ${agentId}`);
       },
       runs,
-      ...options,
+      ...supervisorOptions,
     });
     await run({
       agent: (name) => agentNamed(database, projectId, name),
+      checkouts,
       async connect(runId) {
         const token = engine.requestFor(`cerebra-run-${runId}`)?.body.Env;
         const hash = hashRunToken(tokenOf(token));
@@ -158,11 +202,23 @@ function mountsOf(engine: FakeEngine, runId: string): Record<string, string> {
 describe('the run supervisor', { concurrent: false }, () => {
   test('starts an assistant in its own container with the token and gateway, never logging a secret', async () => {
     await withSupervisor(
-      async ({ agent, engine, logs, prepared, runs, supervisor }) => {
+      async ({
+        agent,
+        checkouts,
+        engine,
+        logs,
+        prepared,
+        projectId,
+        runs,
+        supervisor,
+      }) => {
         const agentId = await agent('Cerebro');
 
         const { runId } = await supervisor.start(agentId);
 
+        expect(checkouts).toEqual([
+          `create ${runId} ${projectId} no container`,
+        ]);
         const request = engine.requestFor(`cerebra-run-${runId}`);
         expect(request?.body.Image).toBe('cerebro-agent');
         expect(request?.body.Env).toEqual(
@@ -379,9 +435,17 @@ describe('the run supervisor', { concurrent: false }, () => {
     });
   });
 
-  test('a completed result finishes the run, removes its container and adds its cost', async () => {
+  test('a completed result finishes the run, removes its container, then its checkout, and adds its cost', async () => {
     await withSupervisor(
-      async ({ agent, connect, database, engine, runs, supervisor }) => {
+      async ({
+        agent,
+        checkouts,
+        connect,
+        database,
+        engine,
+        runs,
+        supervisor,
+      }) => {
         const { runId } = await supervisor.start(await agent('Cerebro'));
         const runner = await connect(runId);
 
@@ -394,6 +458,7 @@ describe('the run supervisor', { concurrent: false }, () => {
         expect((await runs.get(runId))?.state).toBe('finished');
         expect(runner.closed()).toBe(true);
         expect(containerOf(engine, runId)).toBeUndefined();
+        expect(checkouts.at(-1)).toBe(`remove ${runId} no container`);
         const row = await database
           .selectFrom('runs')
           .select('cost_usd')
@@ -531,6 +596,7 @@ describe('the run supervisor', { concurrent: false }, () => {
         },
       };
       const supervisor = createSupervisor({
+        checkouts: recordingCheckouts(() => createFakeEngine(), []),
         credentials: { resolveForRun: goodCredentials },
         database,
         endRetryMs: 1,
@@ -552,10 +618,12 @@ describe('the run supervisor', { concurrent: false }, () => {
     });
   });
 
-  test('recovery after a restart fails every live run and removes its container', async () => {
+  test('recovery after a restart fails every live run, removes its container and checkout, and sweeps the rest', async () => {
     await withSupervisor(async ({ agent, database, engine, runs }) => {
       const agentId = await agent('Cerebro');
+      const calls: string[] = [];
       const before = createSupervisor({
+        checkouts: recordingCheckouts(() => engine, []),
         credentials: { resolveForRun: goodCredentials },
         database,
         engine,
@@ -567,6 +635,7 @@ describe('the run supervisor', { concurrent: false }, () => {
       const { runId } = await before.start(agentId);
 
       const after = createSupervisor({
+        checkouts: recordingCheckouts(() => engine, calls),
         credentials: { resolveForRun: goodCredentials },
         database,
         engine,
@@ -582,6 +651,224 @@ describe('the run supervisor', { concurrent: false }, () => {
         state: 'failed',
       });
       expect(containerOf(engine, runId)).toBeUndefined();
+      expect(calls).toEqual([`remove ${runId} no container`, 'sweep ']);
+    });
+  });
+
+  test('a checkout that cannot be made fails the start with its reason and makes no container', async () => {
+    await withSupervisor(
+      async ({ agent, checkouts, engine, prepared, runs, supervisor }) => {
+        const failure = await supervisor
+          .start(await agent('Cerebro'))
+          .catch((error) => error);
+
+        expect(failure).toBeInstanceOf(RunStartError);
+        const runId = (failure as RunStartError).runId;
+        expect(await runs.get(runId)).toMatchObject({
+          failure: 'The branch main is not on GitHub.',
+          startFailed: true,
+          state: 'failed',
+        });
+        expect(containerOf(engine, runId)).toBeUndefined();
+        expect(prepared).toEqual([]);
+        expect(checkouts.at(-1)).toBe(`remove ${runId} no container`);
+      },
+      {
+        checkoutsDoing: {
+          create: async () => {
+            throw new CheckoutError('The branch main is not on GitHub.');
+          },
+        },
+      },
+    );
+  });
+
+  test('a run stopped while its checkout is being made has the checkout removed once it is made', async () => {
+    let release: () => void = () => undefined;
+    const made = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await withSupervisor(
+      async ({ agent, checkouts, engine, runs, supervisor }) => {
+        const cerebroId = await agent('Cerebro');
+        const starting = supervisor.start(cerebroId);
+        await settle();
+
+        await supervisor.stop(cerebroId);
+        release();
+        const { runId } = await starting;
+
+        expect((await runs.get(runId))?.state).toBe('finished');
+        expect(containerOf(engine, runId)).toBeUndefined();
+        expect(checkouts.at(-1)).toBe(`remove ${runId} no container`);
+        expect(
+          checkouts.filter((call) => call.startsWith('remove')),
+        ).toHaveLength(2);
+      },
+      { checkoutsDoing: { create: () => made } },
+    );
+  });
+
+  test('a checkout that cannot be removed is logged, and the run still ends', async () => {
+    await withSupervisor(
+      async ({ agent, logs, runs, supervisor }) => {
+        const { runId } = await supervisor.start(await agent('Cerebro'));
+
+        await supervisor.stopRun(runId);
+
+        expect((await runs.get(runId))?.state).toBe('finished');
+        expect(logs).toContain(
+          `Run ${runId}: its checkout could not be removed: Device busy.`,
+        );
+      },
+      {
+        checkoutsDoing: {
+          remove: async () => {
+            throw new Error('Device busy.');
+          },
+        },
+      },
+    );
+  });
+});
+
+const page: RunFile = {
+  content: Buffer.from('<h1>Hi</h1>').toString('base64'),
+  contentType: 'text/html; charset=utf-8',
+  path: 'mockups/home.html',
+};
+
+function fetchRequest(sent: readonly DownMessage[]) {
+  const request = sent.at(-1);
+  if (request?.type !== 'fetch_files') {
+    throw new Error('The runner was not asked for files.');
+  }
+  return request;
+}
+
+describe('fetching files from a run’s checkout', { concurrent: false }, () => {
+  test('asks the runner for the paths and answers what it sends back', async () => {
+    await withSupervisor(async ({ agent, connect, supervisor }) => {
+      const { runId } = await supervisor.start(await agent('Cerebro'));
+      const runner = await connect(runId);
+
+      const fetching = supervisor.fetchFiles(runId, ['mockups/home.html']);
+      await settle();
+      const request = fetchRequest(runner.sent);
+      expect(request.paths).toEqual(['mockups/home.html']);
+      runner.listener.message({
+        files: [{ ...page, path: 'mockups/other.html' }],
+        requestId: crypto.randomUUID(),
+        type: 'files',
+      } satisfies FilesMessage);
+      runner.listener.message({
+        files: [page],
+        requestId: request.requestId,
+        type: 'files',
+      } satisfies FilesMessage);
+
+      await expect(fetching).resolves.toEqual([page]);
+    });
+  });
+
+  test('passes on the runner’s refusal', async () => {
+    await withSupervisor(async ({ agent, connect, supervisor }) => {
+      const { runId } = await supervisor.start(await agent('Cerebro'));
+      const runner = await connect(runId);
+
+      const fetching = supervisor.fetchFiles(runId, ['../secret']);
+      await settle();
+      runner.listener.message({
+        error: 'The path ../secret is outside the checkout.',
+        requestId: fetchRequest(runner.sent).requestId,
+        type: 'files',
+      });
+
+      await expect(fetching).rejects.toThrow(
+        new FileRequestError('The path ../secret is outside the checkout.'),
+      );
+    });
+  });
+
+  test('refuses an answer that is not the files asked for', async () => {
+    await withSupervisor(async ({ agent, connect, supervisor }) => {
+      const { runId } = await supervisor.start(await agent('Cerebro'));
+      const runner = await connect(runId);
+
+      const fetching = supervisor.fetchFiles(runId, ['mockups/home.html']);
+      await settle();
+      runner.listener.message({
+        files: [{ ...page, path: 'mockups/other.html' }],
+        requestId: fetchRequest(runner.sent).requestId,
+        type: 'files',
+      });
+
+      await expect(fetching).rejects.toThrow(
+        new FileRequestError(
+          'The runner answered with other files than asked for.',
+        ),
+      );
+    });
+  });
+
+  test('refuses an answer larger than the files may come to', async () => {
+    await withSupervisor(async ({ agent, connect, supervisor }) => {
+      const { runId } = await supervisor.start(await agent('Cerebro'));
+      const runner = await connect(runId);
+
+      const fetching = supervisor.fetchFiles(runId, ['mockups/home.html']);
+      await settle();
+      runner.listener.message({
+        files: [
+          {
+            ...page,
+            content: Buffer.alloc(maxFetchBytes + 1).toString('base64'),
+          },
+        ],
+        requestId: fetchRequest(runner.sent).requestId,
+        type: 'files',
+      });
+
+      await expect(fetching).rejects.toThrow(
+        new FileRequestError(
+          'The runner answered with more than the files may come to.',
+        ),
+      );
+    });
+  });
+
+  test('gives up on a runner that does not answer in time', async () => {
+    await withSupervisor(
+      async ({ agent, connect, supervisor }) => {
+        const { runId } = await supervisor.start(await agent('Cerebro'));
+        await connect(runId);
+
+        await expect(
+          supervisor.fetchFiles(runId, ['mockups/home.html']),
+        ).rejects.toThrow(
+          new FileRequestError('The run did not send the files in time.'),
+        );
+      },
+      { fileRequestTimeoutMs: 20 },
+    );
+  });
+
+  test('stops waiting when the run ends, and refuses an ended run', async () => {
+    await withSupervisor(async ({ agent, connect, supervisor }) => {
+      const { runId } = await supervisor.start(await agent('Cerebro'));
+      const runner = await connect(runId);
+
+      const fetching = supervisor.fetchFiles(runId, ['mockups/home.html']);
+      runner.listener.closed({ code: 1006 });
+      await settle();
+
+      await expect(fetching).rejects.toBeInstanceOf(RunEndedError);
+      await expect(
+        supervisor.fetchFiles(runId, ['mockups/home.html']),
+      ).rejects.toBeInstanceOf(RunEndedError);
+      await expect(
+        supervisor.fetchFiles(crypto.randomUUID(), ['a']),
+      ).rejects.toBeInstanceOf(RunNotFoundError);
     });
   });
   test("a start removes every container an earlier run of the same agent left behind, and no other agent's", async () => {
