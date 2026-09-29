@@ -470,6 +470,7 @@ describe('App', () => {
             id: 'agent-1',
             name: 'Magma',
             role: 'producer',
+            running: true,
             typeId: 'type-producer',
           },
         ],

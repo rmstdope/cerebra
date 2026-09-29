@@ -234,6 +234,35 @@ describe('the fleet', { concurrent: false }, () => {
     });
   });
 
+  test('a person with a live run but no held item is running, not idle', async () => {
+    await withFleet(async ({ database, fleet }) => {
+      const projectId = await registerProject(database);
+      const people = (await fleet.read(projectId)).people;
+      const storm = people.find((person) => person.name === 'Storm');
+      expect(storm?.running).toBe(false);
+      await database
+        .insertInto('runs')
+        .values({
+          agent_id: storm?.id,
+          id: crypto.randomUUID(),
+          role: 'builder',
+        })
+        .execute();
+
+      const after = (await fleet.read(projectId)).people.find(
+        (person) => person.name === 'Storm',
+      );
+
+      expect(after).toMatchObject({
+        activity: { kind: 'available' },
+        running: true,
+      });
+      await expect(fleet.removeAgent(storm?.id ?? '')).rejects.toBeInstanceOf(
+        AgentHoldsWorkError,
+      );
+    });
+  });
+
   test('people are added, renamed, disabled and removed', async () => {
     await withFleet(async ({ database, fleet }) => {
       const projectId = await registerProject(database);

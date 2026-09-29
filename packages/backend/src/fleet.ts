@@ -35,6 +35,8 @@ export interface FleetPerson {
   readonly id: string;
   readonly name: string;
   readonly role: AgentRole;
+  /** True while the person has a live run, whether or not it holds work. */
+  readonly running: boolean;
   readonly typeId: string;
 }
 
@@ -296,6 +298,7 @@ export function createFleet(database: Kysely<Database>): Fleet {
         'agents.enabled',
         'agents.agent_type_id',
         'agent_types.role',
+        'runs.id as run_id',
         'work_items.id as item_id',
         'work_items.title as item_title',
       ])
@@ -324,6 +327,7 @@ export function createFleet(database: Kysely<Database>): Fleet {
         id: row.id,
         name: row.name,
         role: row.role,
+        running: row.run_id !== null || existing?.running === true,
         typeId: row.agent_type_id,
       });
     }

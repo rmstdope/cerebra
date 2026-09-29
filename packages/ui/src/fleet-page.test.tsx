@@ -30,6 +30,8 @@ function person(
     id: `agent-${name.toLowerCase()}`,
     name,
     role,
+    running:
+      extra.activity !== undefined && extra.activity.kind !== 'available',
     typeId: `type-${role}`,
     ...extra,
   };
@@ -164,6 +166,7 @@ test('shows every person in stable order with the agreed words for their state',
     storm.getByText('Storm asked which export format to support first.'),
   ).toBeTruthy();
   expect(storm.getByRole('button', { name: 'Open chat' })).toBeTruthy();
+  expect(storm.getByRole('button', { name: 'View work' })).toBeTruthy();
   expect(storm.getByRole('button', { name: 'Stop' })).toBeTruthy();
 
   const magma = within(card('Magma'));
@@ -191,7 +194,7 @@ test('shows every person in stable order with the agreed words for their state',
   );
 });
 
-test('an available person whose role starts from work says so', async () => {
+test('an available person whose role starts from work shows only the agreed words', async () => {
   renderFleet(
     createClient({
       read: async () => ({
@@ -201,15 +204,57 @@ test('an available person whose role starts from work says so', async () => {
     }),
   );
 
-  expect(
-    within(await screen.findByRole('article', { name: 'Emma' })).getByText(
-      'Starts when work is ready for a reviewer.',
-    ),
-  ).toBeTruthy();
+  const emma = await screen.findByRole('article', { name: 'Emma' });
+  expect(within(emma).getByText('Available')).toBeTruthy();
+  expect(within(emma).getByText('No work in hand')).toBeTruthy();
+  expect(emma.textContent).not.toContain('Starts when');
+});
+
+test('a person running without held work offers Stop, not Start, and cannot be removed', async () => {
+  renderFleet(
+    createClient({
+      read: async () => ({
+        ...fleet,
+        people: [person('Emma', 'reviewer', { running: true })],
+      }),
+    }),
+  );
+
+  const emma = within(await screen.findByRole('article', { name: 'Emma' }));
+  expect(emma.getByText('Working now')).toBeTruthy();
+  expect(emma.queryByRole('button', { name: 'Start' })).toBeNull();
+  expect(emma.getByRole('button', { name: 'Stop' })).toBeTruthy();
+
+  await userEvent.click(emma.getByRole('button', { name: /More actions/ }));
+  await userEvent.click(screen.getByRole('menuitem', { name: 'Remove' }));
+  expect(screen.queryByRole('dialog')).toBeNull();
+  expect(screen.getByText('Stop this work before removing Emma.')).toBeTruthy();
+});
+
+test('Open chat on a running assistant opens its conversation without starting another run', async () => {
+  const started: string[] = [];
+  const opened: string[] = [];
+  renderFleet(
+    createClient({
+      read: async () => ({
+        ...fleet,
+        people: [person('Astra', 'assistant', { running: true })],
+      }),
+      start: async (agentId) => void started.push(agentId),
+    }),
+    { onOpenChat: (entry) => opened.push(entry.id) },
+  );
+
+  const astra = within(await screen.findByRole('article', { name: 'Astra' }));
+  expect(astra.getByText('Ready to talk')).toBeTruthy();
+  await userEvent.click(astra.getByRole('button', { name: 'Open chat' }));
+  expect(started).toEqual([]);
+  expect(opened).toEqual(['agent-astra']);
 });
 
 test('several waiting people are counted and Open chat opens the first of them', async () => {
   const started: string[] = [];
+  const opened: string[] = [];
   const waiting = (name: string) =>
     person(name, 'producer', {
       activity: {
@@ -226,6 +271,7 @@ test('several waiting people are counted and Open chat opens the first of them',
       }),
       start: async (agentId) => void started.push(agentId),
     }),
+    { onOpenChat: (entry) => opened.push(entry.id) },
   );
   const notice = await screen.findByRole('status');
 
@@ -233,7 +279,9 @@ test('several waiting people are counted and Open chat opens the first of them',
   await userEvent.click(
     within(notice).getByRole('button', { name: 'Open chat' }),
   );
-  expect(started).toEqual(['agent-storm']);
+  expect(started).toEqual([]);
+  expect(opened).toEqual(['agent-storm']);
+  expect(notice.textContent).not.toContain('is waiting for an answer');
 });
 
 test('loading keeps the heading and shows six placeholders', () => {

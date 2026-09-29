@@ -60,6 +60,7 @@ function modelLabel(model: AgentModel): string {
 
 function statusOf(person: FleetPerson): Exclude<StatusFilter, ''> {
   if (person.activity.kind !== 'available') return person.activity.kind;
+  if (person.running) return 'working';
   return person.enabled ? 'available' : 'disabled';
 }
 
@@ -413,6 +414,13 @@ function PersonCard({
         </button>
         <button
           className={link}
+          onClick={() => onViewWork(activity.item.id)}
+          type="button"
+        >
+          View work
+        </button>
+        <button
+          className={link}
           onClick={(event) => onStop(event.currentTarget)}
           type="button"
         >
@@ -456,13 +464,23 @@ function PersonCard({
         Open chat
       </button>
     );
+  } else if (person.running) {
+    statusText = 'Working now';
+    heading = 'No work in hand';
+    detail = null;
+    actions = (
+      <button
+        className={link}
+        onClick={(event) => onStop(event.currentTarget)}
+        type="button"
+      >
+        Stop
+      </button>
+    );
   } else {
     statusText = 'Available';
     heading = 'No work in hand';
-    detail =
-      startMode === 'manual'
-        ? 'Available when needed'
-        : `Starts when work is ready for a ${roleWord(person.role)}.`;
+    detail = startMode === 'manual' ? 'Available when needed' : null;
     actions = (
       <button className={link} onClick={onStart} type="button">
         Start
@@ -664,6 +682,15 @@ export function FleetPage({
     }
   };
 
+  const openChat = (person: FleetPerson) => {
+    if (person.running) {
+      setProblem(null);
+      onOpenChat?.(person);
+      return;
+    }
+    void startPerson(person, true);
+  };
+
   const closeConfirmation = () => {
     const trigger = confirmation?.trigger;
     setConfirmation(null);
@@ -723,7 +750,7 @@ export function FleetPage({
       return;
     }
     if (action === 'remove') {
-      if (person.activity.kind !== 'available') {
+      if (person.running || person.activity.kind !== 'available') {
         setProblem({ title: `Stop this work before removing ${person.name}.` });
         return;
       }
@@ -908,12 +935,9 @@ export function FleetPage({
               ? '1 agent needs you.'
               : `${waiting.length} agents need you.`}
           </strong>
-          {waiting.length === 1 ? (
-            <span>{waiting[0].name} is waiting for an answer.</span>
-          ) : null}
           <button
             className="font-bold text-[var(--accent)] underline underline-offset-4"
-            onClick={() => void startPerson(waiting[0], true)}
+            onClick={() => openChat(waiting[0])}
             type="button"
           >
             Open chat
@@ -1094,7 +1118,7 @@ export function FleetPage({
                     onMenu={(action, trigger) =>
                       void onMenu(person, action, trigger)
                     }
-                    onOpenChat={() => void startPerson(person, true)}
+                    onOpenChat={() => openChat(person)}
                     onStart={() => void startPerson(person, false)}
                     onStop={(trigger) =>
                       setConfirmation({ kind: 'stop', person, trigger })
@@ -1119,11 +1143,9 @@ export function FleetPage({
           </h2>
           <p className="mt-3 text-[var(--muted)]">
             {confirmation.kind === 'stop'
-              ? `${confirmation.person.name} will stop working on ‘${
-                  confirmation.person.activity.kind === 'available'
-                    ? ''
-                    : confirmation.person.activity.item.title
-                }.’`
+              ? confirmation.person.activity.kind === 'available'
+                ? `${confirmation.person.name} will stop working.`
+                : `${confirmation.person.name} will stop working on ‘${confirmation.person.activity.item.title}.’`
               : `${confirmation.person.name} has no work in hand. This removes ${confirmation.person.name} from this project.`}
           </p>
           <div className="mt-6 flex flex-wrap gap-3">

@@ -32,6 +32,8 @@ export interface FleetPerson {
   readonly id: string;
   readonly name: string;
   readonly role: AgentRole;
+  /** True while the person has a live run, whether or not it holds work. */
+  readonly running: boolean;
   readonly typeId: string;
 }
 

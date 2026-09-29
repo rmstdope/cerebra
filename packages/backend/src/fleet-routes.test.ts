@@ -40,6 +40,7 @@ const storm: FleetPerson = {
   id: 'agent-1',
   name: 'Storm',
   role: 'producer',
+  running: false,
   typeId: 'type-producer',
 };
 
