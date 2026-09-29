@@ -29,9 +29,11 @@ const workItem: WorkItem = {
   createdAt: '2026-09-29T00:00:00.000Z',
   description: 'Make the board easy to use.',
   id: 'item-1',
+  key: 'WEB-1',
   priority: null,
   state: 'new',
   title: 'Show the board',
+  type: 'feature',
   updatedAt: '2026-09-29T00:00:00.000Z',
 };
 
@@ -285,6 +287,172 @@ test('keeps entered details when saving fails and retries with Try again', async
     await screen.findByText('Work item added. It is ready for you to review.'),
   ).toBeTruthy();
   expect(attempts).toBe(2);
+});
+
+function typeOption(name: string): HTMLInputElement {
+  return within(screen.getByRole('group', { name: 'Type' })).getByRole(
+    'radio',
+    { name },
+  ) as HTMLInputElement;
+}
+
+async function submitNewWorkItem(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(
+    within(screen.getByRole('form', { name: 'New work item' })).getByRole(
+      'button',
+      { name: 'Add work item' },
+    ),
+  );
+}
+
+test('files the chosen type, and chooses Feature again after adding', async () => {
+  const user = userEvent.setup();
+  const filed: unknown[] = [];
+  renderBoard(
+    createClient({
+      create: async (_projectId, input) => {
+        filed.push(input);
+        return { ...workItem, id: 'item-2', title: input.title };
+      },
+    }),
+  );
+
+  await screen.findByRole('button', { name: /Show the board/ });
+  await user.click(screen.getByRole('button', { name: 'Add work item' }));
+  expect(typeOption('Feature').checked).toBe(true);
+  expect(document.activeElement).toBe(
+    screen.getByLabelText('What needs to change?'),
+  );
+  await user.type(screen.getByLabelText('What needs to change?'), 'Login');
+  await user.click(typeOption('Bug'));
+  await submitNewWorkItem(user);
+
+  expect(
+    await screen.findByText('Work item added. It is ready for you to review.'),
+  ).toBeTruthy();
+  expect(filed).toEqual([{ description: '', title: 'Login', type: 'bug' }]);
+  await user.click(
+    screen.getAllByRole('button', { name: 'Add work item' })[0]!,
+  );
+  expect(typeOption('Feature').checked).toBe(true);
+});
+
+test('keeps the chosen type when saving fails', async () => {
+  const user = userEvent.setup();
+  const filed: unknown[] = [];
+  let attempts = 0;
+  renderBoard(
+    createClient({
+      create: async (_projectId, input) => {
+        attempts += 1;
+        if (attempts === 1) throw new Error('down');
+        filed.push(input);
+        return { ...workItem, id: 'item-2', title: input.title };
+      },
+    }),
+  );
+
+  await screen.findByRole('button', { name: /Show the board/ });
+  await user.click(screen.getByRole('button', { name: 'Add work item' }));
+  await user.type(screen.getByLabelText('What needs to change?'), 'Tidy');
+  await user.click(typeOption('Refactoring'));
+  await submitNewWorkItem(user);
+
+  expect(
+    await screen.findByText('Cerebra couldn’t save your changes. Try again.'),
+  ).toBeTruthy();
+  expect(typeOption('Refactoring').checked).toBe(true);
+  await user.click(screen.getByRole('button', { name: 'Try again' }));
+  expect(
+    await screen.findByText('Work item added. It is ready for you to review.'),
+  ).toBeTruthy();
+  expect(filed).toEqual([
+    { description: '', title: 'Tidy', type: 'refactoring' },
+  ]);
+});
+
+test('offers the four types as one keyboard group announced as Type', async () => {
+  const user = userEvent.setup();
+  renderBoard(createClient());
+
+  await screen.findByRole('button', { name: /Show the board/ });
+  await user.click(screen.getByRole('button', { name: 'Add work item' }));
+  const group = screen.getByRole('group', { name: 'Type' });
+  expect(
+    within(group)
+      .getAllByRole('radio')
+      .map((radio) => radio.getAttribute('value')),
+  ).toEqual(['feature', 'bug', 'task', 'refactoring']);
+  for (const name of ['Feature', 'Bug', 'Task', 'Refactoring']) {
+    expect(typeOption(name)).toBeTruthy();
+  }
+  expect(group.getAttribute('aria-describedby')).toBeTruthy();
+  expect(
+    document.getElementById(group.getAttribute('aria-describedby')!)
+      ?.textContent,
+  ).toBe(
+    'Bugs go to the bug fixer; everything else is planned and built as usual.',
+  );
+
+  await user.tab();
+  expect(document.activeElement).toBe(typeOption('Feature'));
+  await user.keyboard('{ArrowRight}');
+  expect(typeOption('Bug').checked).toBe(true);
+  await user.tab();
+  expect(document.activeElement).toBe(screen.getByLabelText(/Optional/));
+});
+
+test("shows each row's key and type tag after the priority and before the title", async () => {
+  const bug: WorkItem = {
+    ...workItem,
+    id: 'item-12',
+    key: 'WEB-12',
+    priority: 'P1',
+    state: 'building',
+    title: 'Login fails after password change',
+    type: 'bug',
+  };
+  const chore: WorkItem = {
+    ...workItem,
+    id: 'item-41',
+    key: 'WEB-41',
+    title: 'Tidy the settings module',
+    type: 'refactoring',
+  };
+  renderBoard(createClient({ list: async () => page([bug, chore]) }));
+
+  const bugRow = await screen.findByRole('button', { name: /Login fails/ });
+  const bugText = bugRow.textContent ?? '';
+  expect(bugText.indexOf('P1')).toBeLessThan(bugText.indexOf('WEB-12'));
+  expect(bugText.indexOf('WEB-12')).toBeLessThan(bugText.indexOf('Bug'));
+  expect(bugText.indexOf('Bug')).toBeLessThan(bugText.indexOf('Login fails'));
+  expect(within(bugRow).getByText('WEB-12')).toBeTruthy();
+  expect(within(bugRow).getByText('Bug')).toBeTruthy();
+
+  const choreRow = screen.getByRole('button', { name: /Tidy the settings/ });
+  const choreText = choreRow.textContent ?? '';
+  expect(choreText.startsWith('—WEB-41Refactoring')).toBe(true);
+});
+
+test('tags every row with its type, features included', async () => {
+  renderBoard(createClient());
+
+  const row = await screen.findByRole('button', { name: /Show the board/ });
+  expect(within(row).getByText('WEB-1')).toBeTruthy();
+  expect(within(row).getByText('Feature')).toBeTruthy();
+});
+
+test("shows the key and type above the item's title", async () => {
+  renderBoard(
+    createClient({
+      item: async () => ({ ...workItem, key: 'WEB-12', type: 'bug' }),
+      list: async () => page([{ ...workItem, key: 'WEB-12', type: 'bug' }]),
+    }),
+  );
+
+  await openItem();
+  const panel = screen.getByRole('region', { name: 'Selected work item' });
+  expect(await within(panel).findByText('WEB-12 · Bug')).toBeTruthy();
 });
 
 test('triages the selected item in place', async () => {

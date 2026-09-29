@@ -12,7 +12,9 @@ import {
 import {
   BoardRequestError,
   browserBoardClient,
+  typeLabel,
   workItemStates,
+  workItemTypes,
   type BoardClient,
   type BoardComment,
   type BoardFilters,
@@ -21,6 +23,7 @@ import {
   type HistoryEntry,
   type Priority,
   type WorkItem,
+  type WorkItemType,
 } from './board';
 import {
   browserDeliveryActivityClient,
@@ -302,6 +305,7 @@ export function ProjectBoard({
   const [history, setHistory] = useState<Remote<readonly HistoryEntry[]>>(idle);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
+  const [workType, setWorkType] = useState<WorkItemType>('feature');
   const [comment, setComment] = useState('');
   const [priority, setPriority] = useState<Priority>('P2');
   const [route, setRoute] = useState<BoardRoute>('grooming_ready');
@@ -517,6 +521,7 @@ export function ProjectBoard({
 
   const openDraft = () => {
     resetDetail();
+    setWorkType('feature');
     setNotice(null);
     shownItem.current = null;
     setPanel({ kind: 'draft' });
@@ -546,9 +551,11 @@ export function ProjectBoard({
       const item = await boardClient.create(projectId, {
         description,
         title: title.trim(),
+        type: workType,
       });
       setTitle('');
       setDescription('');
+      setWorkType('feature');
       resetDetail();
       shownItem.current = item.id;
       setPanel({ kind: 'item', id: item.id });
@@ -929,7 +936,7 @@ export function ProjectBoard({
                         aria-describedby={
                           describedBy === '' ? undefined : describedBy
                         }
-                        className="flex min-w-0 flex-1 items-center gap-3 rounded-lg p-2 text-left outline-none focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-[var(--focus)]"
+                        className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1 rounded-lg p-2 text-left outline-none focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-[var(--focus)] sm:flex-nowrap"
                         onClick={() => openItem(item.id)}
                         ref={(element) => {
                           if (element === null) rows.current.delete(item.id);
@@ -940,7 +947,11 @@ export function ProjectBoard({
                         <span className="rounded bg-amber-100 px-2 py-1 text-xs font-bold text-amber-950 dark:bg-amber-900 dark:text-amber-50">
                           {item.priority ?? '—'}
                         </span>
-                        <strong className="min-w-0 flex-1 break-words">
+                        <span className="shrink-0 font-mono text-xs whitespace-nowrap text-[var(--muted)]">
+                          {item.key}
+                        </span>
+                        <TypeTag type={item.type} />
+                        <strong className="order-last min-w-0 basis-full break-words sm:order-none sm:flex-1 sm:basis-auto">
                           {item.title}
                         </strong>
                         <span className="rounded-full bg-[var(--accent-muted)] px-2 py-1 text-xs font-bold">
@@ -1032,8 +1043,10 @@ export function ProjectBoard({
                 onDescription={setDescription}
                 onSave={() => void save()}
                 onTitle={setTitle}
+                onType={setWorkType}
                 saving={saving}
                 title={title}
+                type={workType}
               />
             ) : selected !== null ? (
               <ItemDetail
@@ -1097,22 +1110,36 @@ export function ProjectBoard({
   );
 }
 
+function TypeTag({ type }: { readonly type: WorkItemType }): ReactNode {
+  return (
+    <span
+      className={`shrink-0 rounded border px-1.5 py-0.5 text-xs whitespace-nowrap ${type === 'bug' ? 'border-[var(--danger)] text-[var(--danger)]' : 'border-[var(--control-border)] text-[var(--muted)]'}`}
+    >
+      {typeLabel(type)}
+    </span>
+  );
+}
+
 function NewWorkItem({
   description,
   onCancel,
   onDescription,
   onSave,
   onTitle,
+  onType,
   saving,
   title,
+  type,
 }: {
   readonly description: string;
   readonly onCancel: () => void;
   readonly onDescription: (value: string) => void;
   readonly onSave: () => void;
   readonly onTitle: (value: string) => void;
+  readonly onType: (value: WorkItemType) => void;
   readonly saving: boolean;
   readonly title: string;
+  readonly type: WorkItemType;
 }): ReactNode {
   return (
     <form
@@ -1139,6 +1166,32 @@ function NewWorkItem({
         required
         value={title}
       />
+      <fieldset aria-describedby="work-type-hint" className="min-w-0">
+        <legend className="auth-label">Type</legend>
+        <div className="grid grid-cols-4 overflow-hidden rounded-lg border border-[var(--control-border)]">
+          {workItemTypes.map((option) => (
+            <label
+              className="min-w-0 border-r border-[var(--control-border)] last:border-r-0"
+              key={option}
+            >
+              <input
+                checked={type === option}
+                className="peer sr-only"
+                name="work-type"
+                onChange={() => onType(option)}
+                type="radio"
+                value={option}
+              />
+              <span className="block cursor-pointer px-1 py-2 text-center text-sm peer-checked:bg-[var(--accent)] peer-checked:font-bold peer-checked:text-white dark:peer-checked:text-slate-950 peer-focus-visible:ring-3 peer-focus-visible:ring-inset peer-focus-visible:ring-[var(--focus)]">
+                {typeLabel(option)}
+              </span>
+            </label>
+          ))}
+        </div>
+      </fieldset>
+      <p className="mt-2 text-sm text-[var(--muted)]" id="work-type-hint">
+        Bugs go to the bug fixer; everything else is planned and built as usual.
+      </p>
       <label className="auth-label" htmlFor="work-description">
         Optional
       </label>
@@ -1260,7 +1313,10 @@ function ItemDetail({
           </span>
         ) : null}
       </p>
-      <h2 className="mt-2 text-xl font-bold break-words">{item.title}</h2>
+      <p className="mt-2 font-mono text-sm text-[var(--muted)]">
+        {item.key} · {typeLabel(item.type)}
+      </p>
+      <h2 className="mt-1 text-xl font-bold break-words">{item.title}</h2>
       {itemRead.error ? (
         <ReadFailure onRetry={onRetryItem} surface="work item" />
       ) : null}

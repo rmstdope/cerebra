@@ -513,6 +513,77 @@ test('refuses an unknown list filter rather than answering with nothing', async 
   expect(response.statusCode).toBe(400);
 });
 
+function filingBoard(filed: unknown[]): Board {
+  return fakeBoard({
+    createWorkItem: async (input) => {
+      filed.push(input);
+    },
+    getWorkItem: async () => boardItem as never,
+  });
+}
+
+test('files a work item with the type the navigator chose', async () => {
+  const filed: unknown[] = [];
+  const server = await createServer({
+    auth: authenticatedAuth,
+    board: filingBoard(filed),
+  });
+  servers.push(server);
+
+  const response = await server.inject({
+    method: 'POST',
+    payload: { title: ' Login fails ', type: 'bug' },
+    url: '/api/projects/project-1/work-items',
+  });
+
+  expect(response.statusCode).toBe(201);
+  expect(filed).toEqual([
+    expect.objectContaining({
+      projectId: 'project-1',
+      title: 'Login fails',
+      type: 'bug',
+    }),
+  ]);
+});
+
+test('files a feature when no type is given', async () => {
+  const filed: { type?: unknown }[] = [];
+  const server = await createServer({
+    auth: authenticatedAuth,
+    board: filingBoard(filed),
+  });
+  servers.push(server);
+
+  const response = await server.inject({
+    method: 'POST',
+    payload: { title: 'Show the board' },
+    url: '/api/projects/project-1/work-items',
+  });
+
+  expect(response.statusCode).toBe(201);
+  expect(filed).toHaveLength(1);
+  expect(filed[0]?.type).toBeUndefined();
+});
+
+test('refuses a work item of an unknown type', async () => {
+  const filed: unknown[] = [];
+  const server = await createServer({
+    auth: authenticatedAuth,
+    board: filingBoard(filed),
+  });
+  servers.push(server);
+
+  const response = await server.inject({
+    method: 'POST',
+    payload: { title: 'Show the board', type: 'epic' },
+    url: '/api/projects/project-1/work-items',
+  });
+
+  expect(response.statusCode).toBe(400);
+  expect(response.json()).toEqual({ error: 'Choose a valid type.' });
+  expect(filed).toEqual([]);
+});
+
 test('counts matching arrivals after a snapshot', async () => {
   const server = await createServer({
     auth: authenticatedAuth,
