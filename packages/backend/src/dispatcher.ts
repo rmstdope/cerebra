@@ -2,6 +2,7 @@ import { sql, type Kysely, type Transaction } from 'kysely';
 
 import type { AgentRole, AgentTrigger } from './agent-types.js';
 import { claimForRun, ProjectNotFoundError } from './board.js';
+import { loadFirstMessage } from './first-message.js';
 import {
   agentGitHubCredentialName,
   modelCredentialName,
@@ -337,11 +338,6 @@ export function createDispatcher({
             role,
           );
           if (!claimed.ok) throw new PairingRefused(claimed.reason);
-          const item = await transaction
-            .selectFrom('work_items')
-            .select(['description', 'key', 'title', 'type'])
-            .where('id', '=', pairing.itemId)
-            .executeTakeFirstOrThrow();
           await transaction
             .insertInto('dispatch_log')
             .values({
@@ -355,12 +351,11 @@ export function createDispatcher({
             .execute();
           return {
             agentId: pairing.agentId,
-            firstMessage: [
-              `${item.key} (${item.type}): ${item.title}`,
-              item.description,
-            ]
-              .filter((part) => part.trim() !== '')
-              .join('\n\n'),
+            firstMessage: await loadFirstMessage(
+              transaction,
+              pairing.itemId,
+              role,
+            ),
             runId,
             token,
           };

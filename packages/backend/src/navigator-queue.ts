@@ -21,6 +21,8 @@ export type QueueEntryKind = 'attention' | 'new' | 'question' | 'review';
 export interface QueueEntry {
   readonly askedBy: string | null;
   readonly availableRoutes: readonly BoardRoute[];
+  /** Whether it waits because it could not merge or finish (spec §4.5): answered on the item. */
+  readonly blocked: boolean;
   readonly description: string;
   readonly id: string;
   readonly kind: QueueEntryKind;
@@ -207,6 +209,7 @@ async function runQuestions(database: Kysely<Database>): Promise<QueueEntry[]> {
       priority: null,
       projectId: row.project_id,
       projectName: projectLabel(row.project_name, row.project_owner),
+      blocked: false,
       run: { id: row.run_id },
       since: row.created_at,
       title: text,
@@ -270,6 +273,22 @@ export function createNavigatorQueue(
             .orderBy('work_item_history.id', 'desc')
             .limit(1)
             .as('asked_by'),
+          builder
+            .selectFrom('work_item_history')
+            .select('work_item_history.created_at')
+            .whereRef('work_item_history.work_item_id', '=', 'work_items.id')
+            .where('work_item_history.to_state', '=', 'waiting')
+            .orderBy('work_item_history.id', 'desc')
+            .limit(1)
+            .as('waiting_since'),
+          builder
+            .selectFrom('work_item_records')
+            .select((records) =>
+              records.fn.max('work_item_records.created_at').as('at'),
+            )
+            .whereRef('work_item_records.work_item_id', '=', 'work_items.id')
+            .where('work_item_records.kind', '=', 'blocked')
+            .as('blocked_at'),
         ])
         .where('work_items.state', 'in', ['new', 'waiting'])
         .execute();
@@ -289,6 +308,13 @@ export function createNavigatorQueue(
           availableRoutes: boardRoutes.filter((route) =>
             isRouteAvailable(route, stages),
           ),
+          // The same test the item's banner uses: a block recorded since it began waiting.
+          blocked:
+            kind === 'attention' &&
+            row.blocked_at !== null &&
+            row.waiting_since !== null &&
+            new Date(row.blocked_at).getTime() >=
+              new Date(row.waiting_since).getTime(),
           description: row.description,
           id: row.id,
           kind,

@@ -164,16 +164,16 @@ span several rows and are the engine's alone.
 | `building` | `review_ready` | builder | The plan is recorded, the builder's latest checks passed, and the pull request is open in the project's repository on a branch named after the item's key (the key, or the key and `-`), its link recorded. |
 | `building` | `design_ready` | builder | The agreed experience cannot be built as written; the reason is recorded. |
 | `reviewing` | `merging` | reviewer | Approved. Under the `code_review` checkpoint the engine sends it to `waiting` instead (below). |
-| `reviewing` | `build_ready` | reviewer | Changes requested; `rounds` +1. |
+| `reviewing` | `build_ready` | reviewer | Changes requested, with at least one blocking finding; `rounds` +1. The review record names the revision reviewed. |
 | `merging` | `verify_ready` | backend | Merged, the verify stage is on and the change touches application paths. |
 | `merging` | `done` | backend | Merged, otherwise. |
-| `merging` | `build_ready` | backend | The merge conflicts or a check fails; `rounds` +1. The conflicting paths or the failing checks are recorded for the next builder. |
+| `merging` | `waiting` | backend | A block (§4.5): a required check failed, the branch conflicts with the default branch, the pull request changed since the approved revision, or GitHub refused the merge (including a pull request closed without merging). The block is recorded; `return_state` `merging`. |
 | `verifying` | `done` | verifier | Passed. A follow-up, if any, is filed as a new item. |
 | `verifying` | `build_ready` | verifier | Failed, the build at fault. Priority becomes P0. |
 | `verifying` | `design_ready` | verifier | Failed, the agreed experience at fault. Priority becomes P0. |
 | any working state | its queue state | backend | The holding run ended without moving the item; `attempts` +1 (§4.5). |
 | any non-terminal state | `waiting` | agent holding it, backend | Something only the navigator can decide; reason recorded. |
-| `waiting` | `return_state`, or any state the navigator picks | navigator | Answered. |
+| `waiting` | `return_state`, or any state the navigator picks | navigator | Answered. A block is answered on the item: *send back to the builder* (`build_ready`, the same pull request continued) or *return to design* (`design_ready`, with a reason; the pull request is closed with it). |
 | `waiting` (code review) | `merging` | backend | The navigator approved the pull request on GitHub (§4.9). |
 | `waiting` (code review) | `build_ready` | backend | The navigator requested changes on GitHub; `rounds` +1. |
 | `done` | `build_ready`, `design_ready` | navigator | Reopened. Closed is not terminal for the navigator. |
@@ -196,10 +196,17 @@ built (the MVP, §14), is refused by the engine.
   it finished without moving the item — the backend moves the item back to its queue state and adds
   one to `attempts`, with the run's last assistant message as a comment. A run that is only
   *parked* (§6.1: `idle`, its container stopped while it waits) has not ended and keeps its item.
-- **`attempts`** counts claims since the item last moved to a different stage. When it reaches the project's
-  `max_attempts`, the item goes to `waiting` instead of back to its queue.
-- **`rounds`** counts trips back to `build_ready` (changes requested, a failed merge) since the
-  item last left `waiting`. A send-back that would reach `max_rounds` goes to `waiting` instead.
+- **`attempts`** counts claims since the item last moved to a different stage (`waiting` is no
+  stage, so a wait keeps the count). When it reaches the project's `max_attempts`, the item goes
+  to `waiting` instead of back to its queue; for a builder that is the block *too many attempts*.
+- **`rounds`** counts reviews that requested changes since the item last left `waiting`. A request
+  that would reach `max_rounds` goes to `waiting` instead, as the block *too many rounds*.
+- **A block** is a wait the backend records because the work cannot go on without the navigator:
+  a required check failed, a merge conflict, changes since approval, GitHub refusing the merge
+  (in GitHub's own words, or because the pull request was closed without merging), too many
+  rounds, or too many attempts. The item's Overview shows it with the navigator's two answers, *send back to the
+  builder* and *return to design*; the queue row opens the item. The merge never goes around a
+  block: nothing merges red, and nothing merges that was not the approved revision.
 
 ### 4.6 Parents
 
@@ -564,8 +571,8 @@ Two kinds are special:
 - **Model credential**: what the type's backend authenticates with (a Claude subscription token, a
   GitHub token with Copilot access). Every run gets the most specific one for its backend without
   declaring it. For Claude that is the navigator's subscription token (D20).
-- **Agent GitHub token**: what a run pushes and opens pull requests with. A project secret
-  given to the types that push, and to the assistant for releases.
+- **Agent GitHub token**: what a run pushes, opens pull requests and posts reviews with. A project
+  secret given to the types that push, to the reviewer, and to the assistant for releases.
 - **Project GitHub token**: what the backend itself uses for the project — fetching the mirror,
   merging, reading pull requests, checks and reviews, pushing the board branch. Never given to a
   run. It may hold the same value as the agent token; it is kept apart so that it can be stronger
@@ -580,8 +587,13 @@ The UI lists names, scopes, when each was last used and by which run, never valu
   trailer and the pull request names the item, so the code leads back to the work.
 - **Navigator reviews.** Under the `code_review` checkpoint the navigator reviews on GitHub, and
   the backend reads the review of the navigator's configured GitHub account (D33).
-- **Merging.** The backend watches pull requests in `merging` and merges each through the GitHub
-  API once its checks are green, then deletes the branch.
+- **Reviews.** The reviewer posts its review on the pull request as a comment with its agent
+  GitHub token, and records its verdict, the revision it reviewed, the review's link and its
+  findings on the item.
+- **Merging.** The backend watches pull requests in `merging` and squash-merges each through the
+  GitHub API, pinned to the approved revision, once every check on it has passed, then deletes the
+  branch. A failed check, a conflict, or a head that moved since approval blocks it instead
+  (§4.5).
 - **Issues.** The inbox agent reads and comments on issues with its own token.
 - **Rework.** An item sent back to `build_ready` keeps its branch and pull request; the next
   builder run continues them, starting from the first message of §6.1 (D25). When an item goes

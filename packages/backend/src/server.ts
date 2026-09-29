@@ -14,6 +14,7 @@ import {
   boardSorts,
   ProjectNotFoundError,
   WorkItemNotFoundError,
+  type AnswerResult,
   type Board,
   type BoardQuery,
   type BoardRoute,
@@ -687,6 +688,45 @@ export const createServer = async ({
           ? board.getWorkItem(itemId)
           : reply.status(409).send({ error: result.reason });
       },
+    ),
+  );
+
+  const answer = (
+    act: (
+      board: Board,
+      itemId: string,
+      body: Record<string, unknown>,
+    ) => Promise<AnswerResult>,
+  ) =>
+    boardRoute<{ itemId: string }>(
+      async (board, { itemId }, request, reply) => {
+        const result = await act(board, itemId, objectBody(request.body) ?? {});
+        if (result.ok) {
+          return board.getWorkItem(itemId);
+        }
+        const code = 'code' in result ? result.code : undefined;
+        return reply
+          .status(code === 'reason_required' ? 400 : 409)
+          .send(
+            code === undefined
+              ? { error: result.reason }
+              : { code, error: result.reason },
+          );
+      },
+    );
+
+  server.post(
+    '/api/work-items/:itemId/send-back',
+    answer((board, itemId) => board.sendBack(itemId)),
+  );
+
+  server.post(
+    '/api/work-items/:itemId/return-to-design',
+    answer((board, itemId, body) =>
+      board.returnToDesign(
+        itemId,
+        typeof body.reason === 'string' ? body.reason : '',
+      ),
     ),
   );
 

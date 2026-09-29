@@ -91,16 +91,109 @@ export type DeliveryEvent = {
       readonly title: string | null;
       readonly url: string;
     }
+  | {
+      readonly kind: 'review';
+      readonly findings: readonly ReviewFinding[];
+      readonly revision: string;
+      readonly url: string | null;
+      readonly verdict: 'approved' | 'changes_requested';
+    }
+  | {
+      readonly kind: 'rework_started';
+      readonly maxRounds: number;
+      readonly round: number;
+    }
+  | ({ readonly kind: 'blocked' } & BlockedDetail)
+  | { readonly kind: 'sent_back' }
+  | { readonly kind: 'returned_to_design'; readonly reason: string }
+  | { readonly kind: 'merged'; readonly base: string; readonly sha: string }
 );
 
+export interface ReviewFinding {
+  readonly file: string;
+  readonly line?: number;
+  readonly problem: string;
+  readonly severity: 'advisory' | 'blocking';
+}
+
+/** Why a merge cannot happen, or a run could not finish (spec §4.5): the item waits for the navigator. */
+export type BlockedReason =
+  | 'changed_since_approval'
+  | 'check_failed'
+  | 'conflict'
+  | 'refused'
+  | 'too_many_attempts'
+  | 'too_many_rounds';
+
+export interface BlockedDetail {
+  /** The default branch the pull request merges into. */
+  readonly base?: string;
+  /** The failed required check's name. */
+  readonly check?: string;
+  /** How many rounds or attempts were used. */
+  readonly count?: number;
+  /** What GitHub said when it refused the merge. */
+  readonly message?: string;
+  readonly reason: BlockedReason;
+  /** The revision the failure or the approval concerns. */
+  readonly revision?: string;
+  /** The agent that approved the revision. */
+  readonly reviewer?: string;
+}
+
+/** The heading a person sees for a block (the item's `waiting_reason`). */
+export function blockedHeading(detail: BlockedDetail): string {
+  switch (detail.reason) {
+    case 'changed_since_approval':
+      return "Can't merge: changed since approval";
+    case 'check_failed':
+      return "Can't merge: a required check failed";
+    case 'conflict':
+      return `Can't merge: the branch conflicts with ${detail.base ?? 'main'}`;
+    case 'refused':
+      return "Can't merge: GitHub refused the merge";
+    case 'too_many_attempts':
+      return 'Stopped: too many attempts';
+    case 'too_many_rounds':
+      return "Can't merge: too many rounds";
+  }
+}
+
 /** What the item waits on now, after its last delivery event; null when nothing is shown. */
-export type DeliveryCurrent = {
-  readonly kind: 'waiting_for_review';
-  /** The agent that is, or will next be, reviewing; null when the project has none enabled. */
-  readonly reviewer: string | null;
-} | null;
+export type DeliveryCurrent =
+  | {
+      readonly kind: 'waiting_for_review';
+      /** The agent that is, or will next be, reviewing; null when the project has none enabled. */
+      readonly reviewer: string | null;
+    }
+  | { readonly kind: 'waiting_for_checks' }
+  | null;
+
+/** The block the item waits on the navigator for; null once it has moved on. */
+export interface DeliveryBlocked {
+  /** Whether the project's design stage is on, so the item can go back to design. */
+  readonly canReturnToDesign: boolean;
+  readonly event: Extract<DeliveryEvent, { kind: 'blocked' }>;
+}
+
+/** The pull request a builder continues, while the item has not gone back to design. */
+export interface LivePullRequest {
+  readonly branch: string;
+  readonly head: string;
+  readonly number: number;
+  readonly url: string;
+}
+
+export type AnswerResult =
+  | TransitionResult
+  | {
+      readonly code: 'not_waiting' | 'reason_required' | 'route_unavailable';
+      readonly ok: false;
+      readonly reason: string;
+    };
 
 export interface DeliveryActivity {
+  readonly blocked: DeliveryBlocked | null;
   readonly current: DeliveryCurrent;
   /** Pass as `before` to read the 50 events preceding these; null when none precede them. */
   readonly earlierCursor: string | null;
@@ -216,6 +309,10 @@ export interface Board {
     page?: { readonly before?: string },
   ): Promise<DeliveryActivity>;
   createWorkItem(input: CreateWorkItem): Promise<void>;
+  /** The navigator returns a blocked item to design, closing its pull request with the reason. */
+  returnToDesign(itemId: string, reason: string): Promise<AnswerResult>;
+  /** The navigator sends a blocked item back to the builder (spec §4.4). */
+  sendBack(itemId: string): Promise<AnswerResult>;
   getHistory(itemId: string): Promise<readonly BoardHistoryEntry[]>;
   getProvenance(itemId: string): Promise<BoardProvenance>;
   listRecords(itemId: string): Promise<readonly BoardRecord[]>;
@@ -315,7 +412,7 @@ export function createBoard(database: Kysely<Database>): Board {
     async deliveryActivity(itemId, page = {}) {
       await assertWorkItemExists(database, itemId);
       const pageSize = 50;
-      const deliveryKinds = ['plan', 'checks', 'pull_request'];
+      const deliveryKinds = [...deliveryRecordKinds];
       const base = database
         .selectFrom('work_item_records')
         .leftJoin('runs', 'runs.id', 'work_item_records.run_id')
@@ -350,12 +447,15 @@ export function createBoard(database: Kysely<Database>): Board {
           .executeTakeFirst();
         return row === undefined ? null : toDeliveryEvent(row);
       };
-      const [latestChecks, latestPullRequest, current] = await Promise.all([
-        latest('checks'),
-        latest('pull_request'),
-        deliveryCurrent(database, itemId),
-      ]);
+      const [latestChecks, latestPullRequest, current, blocked] =
+        await Promise.all([
+          latest('checks'),
+          latest('pull_request'),
+          deliveryCurrent(database, itemId),
+          deliveryBlocked(database, itemId),
+        ]);
       return {
+        blocked,
         current,
         earlierCursor:
           rows.length > pageSize ? String(shown[0]?.id ?? '') : null,
@@ -364,6 +464,42 @@ export function createBoard(database: Kysely<Database>): Board {
         latestPullRequest:
           latestPullRequest as DeliveryActivity['latestPullRequest'],
       };
+    },
+
+    async returnToDesign(itemId, reason) {
+      const trimmed = reason.trim();
+      if (trimmed === '') {
+        return {
+          code: 'reason_required',
+          ok: false,
+          reason:
+            'Give a reason so the designer and the next builder know what to change.',
+        };
+      }
+      // The pull request is read under the item's lock, so the one closed is the one it had.
+      return answerBlocked(database, itemId, async (current, transaction) =>
+        current.context.stages.design
+          ? {
+              actor: { role: 'navigator' },
+              reason: `Returned to design: ${trimmed}`,
+              record: {
+                kind: 'returned_to_design',
+                pullRequest: await livePullRequest(transaction, itemId),
+                reason: trimmed,
+              },
+              to: 'design_ready',
+            }
+          : { ...routeUnavailable },
+      );
+    },
+
+    async sendBack(itemId) {
+      return answerBlocked(database, itemId, () => ({
+        actor: { role: 'navigator' },
+        reason: 'Sent back to the builder',
+        record: { kind: 'sent_back' },
+        to: 'build_ready',
+      }));
     },
 
     async getProvenance(itemId) {
@@ -631,6 +767,24 @@ export async function claimForRun(
       actor: request.actor,
       to: result.item.state,
     });
+    if (
+      role === 'builder' &&
+      (await livePullRequest(database, itemId)) !== null
+    ) {
+      await database
+        .insertInto('work_item_records')
+        .values({
+          kind: 'rework_started',
+          payload: JSON.stringify({
+            kind: 'rework_started',
+            maxRounds: current.context.maxRounds,
+            round: current.item.rounds + 1,
+          }),
+          run_id: runId,
+          work_item_id: itemId,
+        })
+        .execute();
+    }
   }
   return result;
 }
@@ -662,11 +816,14 @@ export interface LockedWorkItem {
 export async function transitionLocked<R extends { readonly ok: false }>(
   database: Kysely<Database>,
   itemId: string,
-  decide: (current: LockedWorkItem) => TransitionRequest | R,
+  decide: (
+    current: LockedWorkItem,
+    transaction: Kysely<Database>,
+  ) => TransitionRequest | R | Promise<TransitionRequest | R>,
 ): Promise<TransitionResult | R> {
   return database.transaction().execute(async (transactionDatabase) => {
     const current = await getLockedItem(transactionDatabase, itemId);
-    const request = decide(current);
+    const request = await decide(current, transactionDatabase);
     if ('ok' in request) {
       return request;
     }
@@ -841,6 +998,61 @@ function toDeliveryEvent(row: {
   if (row.kind === 'checks') {
     return { ...common, kind: 'checks', passed: payload.passed === true };
   }
+  const text = (value: unknown) => (typeof value === 'string' ? value : '');
+  const count = (value: unknown) =>
+    typeof value === 'number' && Number.isInteger(value) ? value : 0;
+  switch (row.kind) {
+    case 'review':
+      return {
+        ...common,
+        findings: Array.isArray(payload.findings)
+          ? (payload.findings as ReviewFinding[])
+          : [],
+        kind: 'review',
+        revision: text(payload.revision),
+        url: typeof payload.url === 'string' ? payload.url : null,
+        verdict:
+          payload.verdict === 'approved' ? 'approved' : 'changes_requested',
+      };
+    case 'rework_started':
+      return {
+        ...common,
+        kind: 'rework_started',
+        maxRounds: count(payload.maxRounds),
+        round: count(payload.round),
+      };
+    case 'blocked':
+      return {
+        ...common,
+        kind: 'blocked',
+        reason: payload.reason as BlockedReason,
+        ...(
+          ['base', 'check', 'message', 'revision', 'reviewer'] as const
+        ).reduce(
+          (detail, field) =>
+            typeof payload[field] === 'string'
+              ? { ...detail, [field]: payload[field] }
+              : detail,
+          {},
+        ),
+        ...(typeof payload.count === 'number' ? { count: payload.count } : {}),
+      };
+    case 'sent_back':
+      return { ...common, kind: 'sent_back' };
+    case 'returned_to_design':
+      return {
+        ...common,
+        kind: 'returned_to_design',
+        reason: text(payload.reason),
+      };
+    case 'merged':
+      return {
+        ...common,
+        base: text(payload.base),
+        kind: 'merged',
+        sha: text(payload.sha),
+      };
+  }
   if (row.kind === 'pull_request') {
     const url = typeof payload.url === 'string' ? payload.url : '';
     const title =
@@ -858,6 +1070,120 @@ function toDeliveryEvent(row: {
   return { ...common, kind: 'plan' };
 }
 
+const deliveryRecordKinds = [
+  'plan',
+  'checks',
+  'pull_request',
+  'review',
+  'rework_started',
+  'blocked',
+  'sent_back',
+  'returned_to_design',
+  'merged',
+] as const;
+
+/**
+ * The pull request a builder continues (spec §4.4): the item's newest pull_request record, unless
+ * the item has since returned to design, which ends it. Null when there is none.
+ */
+export async function livePullRequest(
+  database: DatabaseExecutor,
+  itemId: string,
+): Promise<LivePullRequest | null> {
+  const row = await database
+    .selectFrom('work_item_records')
+    .select(['kind', 'payload'])
+    .where('work_item_id', '=', itemId)
+    .where('kind', 'in', ['pull_request', 'returned_to_design'])
+    .orderBy('id', 'desc')
+    .limit(1)
+    .executeTakeFirst();
+  if (row?.kind !== 'pull_request') return null;
+  const payload = (row.payload ?? {}) as Record<string, unknown>;
+  const url = typeof payload.url === 'string' ? payload.url : '';
+  return {
+    branch: typeof payload.branch === 'string' ? payload.branch : '',
+    head: typeof payload.head === 'string' ? payload.head : '',
+    number: Number(/\/pull\/(\d+)$/.exec(url)?.[1] ?? 0),
+    url,
+  };
+}
+
+/**
+ * The block the item waits on now: its newest blocked record, written in the same transaction as
+ * the move into `waiting` that the item is still in.
+ */
+async function deliveryBlocked(
+  database: Kysely<Database>,
+  itemId: string,
+): Promise<DeliveryBlocked | null> {
+  const item = await database
+    .selectFrom('work_items')
+    .innerJoin('projects', 'projects.id', 'work_items.project_id')
+    .select(['work_items.state', 'projects.design_enabled'])
+    .where('work_items.id', '=', itemId)
+    .executeTakeFirstOrThrow();
+  if (item.state !== 'waiting') return null;
+  const entered = await database
+    .selectFrom('work_item_history')
+    .select('created_at')
+    .where('work_item_id', '=', itemId)
+    .where('to_state', '=', 'waiting')
+    .orderBy('id', 'desc')
+    .limit(1)
+    .executeTakeFirst();
+  const record = await database
+    .selectFrom('work_item_records')
+    .leftJoin('runs', 'runs.id', 'work_item_records.run_id')
+    .select([
+      'work_item_records.id',
+      'work_item_records.created_at',
+      'work_item_records.kind',
+      'work_item_records.payload',
+      'work_item_records.run_id',
+      'runs.agent_name',
+    ])
+    .where('work_item_records.work_item_id', '=', itemId)
+    .where('work_item_records.kind', '=', 'blocked')
+    .orderBy('work_item_records.id', 'desc')
+    .limit(1)
+    .executeTakeFirst();
+  if (
+    entered === undefined ||
+    record === undefined ||
+    record.created_at.getTime() < entered.created_at.getTime()
+  ) {
+    return null;
+  }
+  return {
+    canReturnToDesign: item.design_enabled,
+    event: toDeliveryEvent(record) as DeliveryBlocked['event'],
+  };
+}
+
+/** Answers the item's wait as the navigator, refusing once it no longer waits. */
+async function answerBlocked(
+  database: Kysely<Database>,
+  itemId: string,
+  decide: (
+    current: LockedWorkItem,
+    transaction: Kysely<Database>,
+  ) =>
+    | TransitionRequest
+    | Extract<AnswerResult, { ok: false }>
+    | Promise<TransitionRequest | Extract<AnswerResult, { ok: false }>>,
+): Promise<AnswerResult> {
+  return transitionLocked(database, itemId, (current, transaction) =>
+    current.item.state === 'waiting'
+      ? decide(current, transaction)
+      : {
+          code: 'not_waiting' as const,
+          ok: false as const,
+          reason: 'This item is no longer waiting for you.',
+        },
+  );
+}
+
 async function deliveryCurrent(
   database: Kysely<Database>,
   itemId: string,
@@ -868,6 +1194,9 @@ async function deliveryCurrent(
     .select(['work_items.project_id', 'work_items.state', 'runs.agent_name'])
     .where('work_items.id', '=', itemId)
     .executeTakeFirstOrThrow();
+  if (item.state === 'merging') {
+    return { kind: 'waiting_for_checks' };
+  }
   if (item.state === 'reviewing' && item.agent_name !== null) {
     return { kind: 'waiting_for_review', reviewer: item.agent_name };
   }
@@ -953,10 +1282,26 @@ export async function releaseHeldItem(
     return null;
   }
   const current = await getLockedItem(database, held.id);
-  const request = runEndedRequest(current.item, {
+  const ended = runEndedRequest(current.item, {
     maxAttempts: held.max_attempts,
     reason: options.reason,
   });
+  // A builder that runs out of attempts is a block the navigator answers from the item (spec §4.5).
+  const request: TransitionRequest =
+    ended.waiting !== undefined && current.item.state === 'building'
+      ? {
+          ...ended,
+          record: {
+            count: current.item.attempts + 1,
+            kind: 'blocked',
+            reason: 'too_many_attempts',
+          },
+          waiting: {
+            ...ended.waiting,
+            reason: blockedHeading({ reason: 'too_many_attempts' }),
+          },
+        }
+      : ended;
   const result = transition(current.item, request, current.context);
   if (!result.ok) {
     throw new Error(result.reason);
@@ -991,6 +1336,7 @@ async function getLockedItem(
       'work_items.return_state',
       'projects.design_enabled',
       'projects.grooming_enabled',
+      'projects.max_rounds',
       'projects.verify_enabled',
     ])
     .where('work_items.id', '=', itemId)
@@ -1024,6 +1370,7 @@ async function getLockedItem(
         grooming: row.grooming_enabled,
         verify: row.verify_enabled,
       },
+      maxRounds: row.max_rounds,
       supportsSplitting: false,
     },
   };

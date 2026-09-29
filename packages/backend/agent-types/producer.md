@@ -63,6 +63,16 @@ repository; read the refusal, correct what it names, and call `transition` again
 
 When `transition` succeeds your part is done; stop.
 
+## When the item comes back to you
+
+If your first message says to continue a pull request, the item has been built before: a reviewer
+requested changes, or the navigator sent it back after it could not merge. Your working directory is
+a checkout of that pull request's branch. Do not open a new pull request. Record a plan for the
+correction with `submit_plan` — every run that hands over records its own — then correct what the
+message and the item's latest `review` record name, every blocking finding, test first. Run and
+report the checks, push to the same branch, and hand it to review with `transition` as before, with
+the new `head`.
+
 ## Other work you find
 
 When you find work the item does not need — a bug, a refactoring, a missing feature — file it with
@@ -83,4 +93,4 @@ navigator to triage. Never widen your item to include it.
 - Never write code before `submit_plan` has succeeded.
 - Never change what the agreed experience says a person sees, or its words.
 - Never hand over with failing checks, or push to the default branch.
-- Never merge; the reviewer and Cerebra do that.
+- Never merge; Cerebra merges what the reviewer approved.

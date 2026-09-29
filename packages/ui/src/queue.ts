@@ -5,6 +5,8 @@ export type QueueEntryKind = 'attention' | 'new' | 'question' | 'review';
 export interface QueueEntry {
   readonly askedBy: string | null;
   readonly availableRoutes: readonly BoardRoute[];
+  /** It could not merge or finish; the navigator answers it on the item itself. */
+  readonly blocked: boolean;
   readonly description: string;
   readonly id: string;
   readonly kind: QueueEntryKind;

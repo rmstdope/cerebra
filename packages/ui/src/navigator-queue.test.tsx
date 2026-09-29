@@ -24,6 +24,7 @@ function entry(overrides: Partial<QueueEntry>): QueueEntry {
   return {
     askedBy: null,
     availableRoutes: ['grooming_ready', 'design_ready', 'build_ready'],
+    blocked: false,
     description: '',
     id: 'item',
     kind: 'new',
@@ -815,4 +816,39 @@ test('shows a failed backup above the projects and counts it until it clears', a
   expect(await screen.findByText('You’re all caught up.')).toBeTruthy();
   expect(screen.queryByRole('region', { name: 'Cerebra' })).toBeNull();
   expect(counts.at(-1)).toBe(0);
+});
+
+test('a blocked merge says why with its project, and Open shows the item', async () => {
+  const user = userEvent.setup();
+  const opened: unknown[] = [];
+  const blocked = entry({
+    blocked: true,
+    id: 'blocked',
+    kind: 'attention',
+    projectId: 'project-2',
+    projectName: 'northstar/admin',
+    title: 'Add export button',
+    waitingReason: "Can't merge: a required check failed",
+  });
+  renderQueue(createClient({ list: async () => page([blocked, newWork]) }), {
+    onViewWork: (projectId, itemId, tab) =>
+      opened.push({ itemId, projectId, tab }),
+  });
+
+  const row = (await screen.findByText('Add export button')).closest(
+    '[data-blocked]',
+  );
+  if (row === null) throw new Error('no row');
+  expect(
+    within(row as HTMLElement).getByText(
+      "Can't merge: a required check failed · northstar/admin",
+    ),
+  ).toBeTruthy();
+  await user.click(
+    within(row as HTMLElement).getByRole('button', { name: 'Open' }),
+  );
+
+  expect(opened).toEqual([
+    { itemId: 'blocked', projectId: 'project-2', tab: 'overview' },
+  ]);
 });
