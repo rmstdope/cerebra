@@ -361,7 +361,11 @@ export function ConversationPage({
           if (update.position <= (previous.events.at(-1)?.position ?? 0)) {
             return previous;
           }
-          const { type: _type, ...record } = update;
+          const record: RecordedEvent = {
+            createdAt: update.createdAt,
+            event: update.event,
+            position: update.position,
+          };
           return { ...previous, events: [...previous.events, record] };
         });
         if (update.type === 'event' && update.event.kind === 'user_message') {
