@@ -1,7 +1,10 @@
 import type { Kysely } from 'kysely';
 import { Pool } from 'pg';
 
-import { agentTypesDirectory, readAgentTypeDefinitions } from './agent-types.js';
+import {
+  agentTypesDirectory,
+  readAgentTypeDefinitions,
+} from './agent-types.js';
 import { createDatabase, type Database } from './database.js';
 import { createFleet } from './fleet.js';
 import { migrateToLatest } from './migrations/index.js';

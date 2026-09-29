@@ -455,6 +455,7 @@ test('reads a conversation, and answers 404 for one that does not exist', async 
       },
     ],
     run: {
+      agentId: 'agent-1',
       agentName: 'Astra',
       agentRole: 'assistant',
       endedAt: null,
@@ -475,8 +476,12 @@ test('messages, answers and stop reach the run, checked first', async () => {
   const post = (url: string, payload?: unknown) =>
     server.inject({ method: 'POST', payload: payload as object, url });
 
-  expect((await post('/api/runs/run-1/messages', { text: 'Hi' })).statusCode).toBe(202);
-  expect((await post('/api/runs/run-1/messages', { text: '  ' })).json()).toEqual({
+  expect(
+    (await post('/api/runs/run-1/messages', { text: 'Hi' })).statusCode,
+  ).toBe(202);
+  expect(
+    (await post('/api/runs/run-1/messages', { text: '  ' })).json(),
+  ).toEqual({
     error: 'Write a message.',
   });
   expect(
@@ -499,11 +504,7 @@ test('messages, answers and stop reach the run, checked first', async () => {
     error: 'This conversation has ended.',
   });
   expect((await post('/api/runs/other/stop')).statusCode).toBe(404);
-  expect(calls).toEqual([
-    'send Hi',
-    'answer q-1 {"Which":"This one"}',
-    'stop',
-  ]);
+  expect(calls).toEqual(['send Hi', 'answer q-1 {"Which":"This one"}', 'stop']);
 });
 
 test('the conversation socket replays events after a position, then streams live ones', async () => {
@@ -515,9 +516,7 @@ test('the conversation socket replays events after a position, then streams live
   const socket = new WebSocket(
     `${address.replace('http', 'ws')}/ws/runs/run-1?after=1`,
   );
-  socket.on('message', (value) =>
-    received.push(JSON.parse(value.toString())),
-  );
+  socket.on('message', (value) => received.push(JSON.parse(value.toString())));
   const arrived = async (count: number) => {
     while (received.length < count) {
       await new Promise((resolve) => setTimeout(resolve, 5));

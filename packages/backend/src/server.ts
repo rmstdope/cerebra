@@ -934,8 +934,7 @@ export const createServer = async ({
       }
       const { runId } = request.params as { runId: string };
       const after = Number(
-        new URL(request.url, 'http://localhost').searchParams.get('after') ??
-          0,
+        new URL(request.url, 'http://localhost').searchParams.get('after') ?? 0,
       );
       let last = Number.isInteger(after) && after > 0 ? after : 0;
       let replaying = true;
@@ -1006,6 +1005,7 @@ function conversationBody({ events, run }: Conversation) {
   return {
     events: events.map((record) => updateBody({ type: 'event', ...record })),
     run: {
+      agentId: run.agentId,
       agentName: run.agentName,
       agentRole: run.agentRole,
       endedAt: run.endedAt?.toISOString() ?? null,

@@ -28,10 +28,7 @@ export async function migrateToLatest(
   database: import('kysely').Kysely<Database>,
   schema?: string,
 ): Promise<readonly MigrationResult[]> {
-  const { error, results } = await migrator(
-    database,
-    schema,
-  ).migrateToLatest();
+  const { error, results } = await migrator(database, schema).migrateToLatest();
 
   if (error) {
     throw error;

@@ -201,7 +201,10 @@ export function createRunStore(database: Kysely<Database>): RunStore {
           .where('id', '=', runId)
           .forUpdate()
           .executeTakeFirst();
-        if (run === undefined || !(liveRunStates as readonly RunState[]).includes(run.status)) {
+        if (
+          run === undefined ||
+          !(liveRunStates as readonly RunState[]).includes(run.status)
+        ) {
           return false;
         }
         const last = await transaction
@@ -310,8 +313,7 @@ export function createRunStore(database: Kysely<Database>): RunStore {
   };
 }
 
-const uuid =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function isUuid(value: string): boolean {
   return uuid.test(value);

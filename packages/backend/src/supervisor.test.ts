@@ -128,29 +128,35 @@ const usage = { costUsd: 0.25, models: {} };
 
 describe('the run supervisor', { concurrent: false }, () => {
   test('starts an assistant in its own container with the token and gateway, never logging a secret', async () => {
-    await withSupervisor(async ({ agent, engine, logs, prepared, runs, supervisor }) => {
-      const agentId = await agent('Cerebro');
+    await withSupervisor(
+      async ({ agent, engine, logs, prepared, runs, supervisor }) => {
+        const agentId = await agent('Cerebro');
 
-      const { runId } = await supervisor.start(agentId);
+        const { runId } = await supervisor.start(agentId);
 
-      const request = engine.requestFor(`cerebra-run-${runId}`);
-      expect(request?.body.Image).toBe('cerebro-agent');
-      expect(request?.body.Env).toEqual(
-        expect.arrayContaining([
-          'CLAUDE_CODE_OAUTH_TOKEN=secret-token',
-          'CEREBRA_GATEWAY_URL=ws://main:4317/runner',
-          expect.stringMatching(/^CEREBRA_RUN_TOKEN=.+/),
-        ]),
-      );
-      expect(prepared).toEqual([`${runId} ${agentId}`]);
-      const run = await runs.get(runId);
-      expect(run).toMatchObject({ agentId, role: 'assistant', state: 'starting' });
-      expect(run?.containerId).not.toBeNull();
-      expect((await engine.inspect(run?.containerId ?? ''))?.status).toBe(
-        'running',
-      );
-      expect(logs.join('\n')).not.toContain('secret-token');
-    });
+        const request = engine.requestFor(`cerebra-run-${runId}`);
+        expect(request?.body.Image).toBe('cerebro-agent');
+        expect(request?.body.Env).toEqual(
+          expect.arrayContaining([
+            'CLAUDE_CODE_OAUTH_TOKEN=secret-token',
+            'CEREBRA_GATEWAY_URL=ws://main:4317/runner',
+            expect.stringMatching(/^CEREBRA_RUN_TOKEN=.+/),
+          ]),
+        );
+        expect(prepared).toEqual([`${runId} ${agentId}`]);
+        const run = await runs.get(runId);
+        expect(run).toMatchObject({
+          agentId,
+          role: 'assistant',
+          state: 'starting',
+        });
+        expect(run?.containerId).not.toBeNull();
+        expect((await engine.inspect(run?.containerId ?? ''))?.status).toBe(
+          'running',
+        );
+        expect(logs.join('\n')).not.toContain('secret-token');
+      },
+    );
   });
 
   test('refuses a turned-off agent, a non-interactive one, and a second live run', async () => {
@@ -178,9 +184,9 @@ describe('the run supervisor', { concurrent: false }, () => {
       await expect(supervisor.start(cerebro)).rejects.toBeInstanceOf(
         AgentUnavailableError,
       );
-      await expect(
-        supervisor.start(crypto.randomUUID()),
-      ).rejects.toMatchObject({ name: 'AgentNotFoundError' });
+      await expect(supervisor.start(crypto.randomUUID())).rejects.toMatchObject(
+        { name: 'AgentNotFoundError' },
+      );
     });
   });
 
@@ -265,9 +271,9 @@ describe('the run supervisor', { concurrent: false }, () => {
         resumeSessionId: null,
         type: 'start',
       });
-      expect((runner.sent[0] as { instructions: string }).instructions).toContain(
-        "You are the project's assistant",
-      );
+      expect(
+        (runner.sent[0] as { instructions: string }).instructions,
+      ).toContain("You are the project's assistant");
       expect(runner.sent.slice(1)).toEqual([
         { text: 'Hello', type: 'user_message' },
       ]);
@@ -325,28 +331,32 @@ describe('the run supervisor', { concurrent: false }, () => {
   });
 
   test('a completed result finishes the run, removes its container and adds its cost', async () => {
-    await withSupervisor(async ({ agent, connect, database, engine, runs, supervisor }) => {
-      const { runId } = await supervisor.start(await agent('Cerebro'));
-      const runner = await connect(runId);
+    await withSupervisor(
+      async ({ agent, connect, database, engine, runs, supervisor }) => {
+        const { runId } = await supervisor.start(await agent('Cerebro'));
+        const runner = await connect(runId);
 
-      runner.listener.message(up({ end: 'turn', kind: 'result', usage }));
-      runner.listener.message(up({ end: 'completed', kind: 'result', usage }));
-      await settle();
+        runner.listener.message(up({ end: 'turn', kind: 'result', usage }));
+        runner.listener.message(
+          up({ end: 'completed', kind: 'result', usage }),
+        );
+        await settle();
 
-      expect((await runs.get(runId))?.state).toBe('finished');
-      expect(runner.closed()).toBe(true);
-      expect(containerOf(engine, runId)).toBeUndefined();
-      const row = await database
-        .selectFrom('runs')
-        .select('cost_usd')
-        .where('id', '=', runId)
-        .executeTakeFirstOrThrow();
-      expect(row.cost_usd).toBe(0.5);
-      await expect(supervisor.send(runId, 'More?')).rejects.toBeInstanceOf(
-        RunEndedError,
-      );
-      expect(await supervisor.gateway.authenticate('any')).toBeNull();
-    });
+        expect((await runs.get(runId))?.state).toBe('finished');
+        expect(runner.closed()).toBe(true);
+        expect(containerOf(engine, runId)).toBeUndefined();
+        const row = await database
+          .selectFrom('runs')
+          .select('cost_usd')
+          .where('id', '=', runId)
+          .executeTakeFirstOrThrow();
+        expect(row.cost_usd).toBe(0.5);
+        await expect(supervisor.send(runId, 'More?')).rejects.toBeInstanceOf(
+          RunEndedError,
+        );
+        expect(await supervisor.gateway.authenticate('any')).toBeNull();
+      },
+    );
   });
 
   test('a failed result or a runner that goes away without one fails the run', async () => {

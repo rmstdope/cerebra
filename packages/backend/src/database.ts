@@ -170,11 +170,7 @@ export interface Database {
 }
 
 export type RunState =
-  | 'starting'
-  | 'active'
-  | 'awaiting_input'
-  | 'finished'
-  | 'failed';
+  'starting' | 'active' | 'awaiting_input' | 'finished' | 'failed';
 
 export type LiveRunState = Extract<
   RunState,

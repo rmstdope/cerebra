@@ -4,6 +4,7 @@ import type { BoardClient, WorkItem } from './board';
 import type { CredentialClient } from './credentials';
 import type { FleetClient } from './fleet';
 import type { QueueClient } from './queue';
+import type { ConversationClient } from './runs';
 import { AuthenticationRequiredError } from './instance';
 import {
   cleanup,
@@ -387,7 +388,9 @@ describe('App', () => {
     );
 
     await user.click(
-      await screen.findByRole('button', { name: /Which release should/ }),
+      await within(
+        screen.getByRole('region', { name: 'Navigator queue' }),
+      ).findByRole('button', { name: /Which release should/ }),
     );
     await user.click(screen.getByRole('button', { name: 'Open conversation' }));
 
@@ -538,11 +541,13 @@ describe('App', () => {
               item: { id: 'item-2', title: 'Make sign-in clearer' },
               kind: 'working',
             },
+            conversation: null,
             enabled: true,
             id: 'agent-1',
             name: 'Magma',
             role: 'producer',
             running: true,
+            startFailed: false,
             typeId: 'type-producer',
           },
         ],
@@ -621,6 +626,60 @@ describe('App', () => {
 
     expect(
       await screen.findByRole('heading', { name: 'Your fleet' }),
+    ).toBeTruthy();
+  });
+
+  test('a conversation link opens that conversation and Back to fleet leaves it', async () => {
+    const user = userEvent.setup();
+    const runId = '5b3c4a8e-8f0e-4c7a-9d57-1f2a3b4c5d6e';
+    const read: string[] = [];
+    const conversationClient: ConversationClient = {
+      answer: async () => undefined,
+      read: async (id) => {
+        read.push(id);
+        return {
+          events: [],
+          run: {
+            agentId: 'agent-astra',
+            agentName: 'Astra',
+            agentRole: 'assistant',
+            endedAt: null,
+            failure: null,
+            id,
+            item: null,
+            startedAt: '2026-10-01T09:30:00.000Z',
+            state: 'starting',
+          },
+        };
+      },
+      send: async () => undefined,
+      stop: async () => undefined,
+      subscribe: () => () => undefined,
+    };
+    window.location.hash = `#/conversations/${runId}`;
+
+    render(
+      <App
+        authClient={authenticatedAuth}
+        conversationClient={conversationClient}
+        mediaQuery={new FakeMediaQuery(false)}
+        queueClient={emptyQueue}
+        storage={{ getItem: () => null, setItem: () => undefined }}
+      />,
+    );
+
+    expect(
+      await screen.findByRole('heading', { level: 1, name: 'Astra' }),
+    ).toBeTruthy();
+    expect(read).toEqual([runId]);
+    expect(
+      screen.queryByRole('heading', { name: 'Manage Cerebra' }),
+    ).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'Back to fleet' }));
+    expect(window.location.hash).toBe('');
+    expect(
+      await screen.findByRole('heading', { name: 'Manage Cerebra' }),
     ).toBeTruthy();
   });
 });

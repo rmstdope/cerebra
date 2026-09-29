@@ -58,7 +58,10 @@ export interface SupervisorOptions {
   readonly runs: RunStore;
   /** Where a runner reaches the gateway, from inside its container. */
   readonly gatewayUrl: string;
-  readonly prepareDirectories: (runId: string, agentId: string) => Promise<void>;
+  readonly prepareDirectories: (
+    runId: string,
+    agentId: string,
+  ) => Promise<void>;
   readonly connectTimeoutMs?: number;
   readonly stopTimeoutMs?: number;
   readonly log?: (message: string) => void;
@@ -187,7 +190,9 @@ export function createSupervisor({
       await engine.stop(containerId);
       await engine.remove(containerId);
     } catch (error) {
-      log(`Run ${runId}: its container could not be removed: ${failureText(error)}`);
+      log(
+        `Run ${runId}: its container could not be removed: ${failureText(error)}`,
+      );
     }
   }
 
@@ -276,7 +281,8 @@ export function createSupervisor({
       image: definition.image,
       resources: {
         cpus: Number(definition.resources?.cpus ?? 1),
-        memoryBytes: Number(definition.resources?.memoryMb ?? 2048) * 1024 * 1024,
+        memoryBytes:
+          Number(definition.resources?.memoryMb ?? 2048) * 1024 * 1024,
       },
       runId: run.id,
     });
@@ -311,12 +317,13 @@ export function createSupervisor({
     } else if (event.kind === 'result') {
       await runs.addUsage(runId, {
         costUsd: event.usage.costUsd,
-        ...(event.sessionId === undefined ? {} : { sessionId: event.sessionId }),
+        ...(event.sessionId === undefined
+          ? {}
+          : { sessionId: event.sessionId }),
       });
       if (event.end === 'completed' || event.end === 'stopped') {
         await end(runId, {
-          reason:
-            event.end === 'stopped' ? stoppedReason : 'The run finished.',
+          reason: event.end === 'stopped' ? stoppedReason : 'The run finished.',
           state: 'finished',
         });
       } else if (event.end === 'failed') {

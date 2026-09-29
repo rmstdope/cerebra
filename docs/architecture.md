@@ -190,9 +190,19 @@ becomes `idle` and keeps its item, its conversation stays in the named agent's C
 and the navigator's next message or answer resumes it in a new container with the same session. In
 the MVP nothing is parked, and a waiting run keeps its container (`spec.md` §6.1, §14).
 
+A run that cannot start (missing credentials, a container the engine refuses, a runner that does
+not connect within a minute) ends `failed` with the reason, and nothing the navigator sent is
+kept waiting on it. A runner that disconnects without a final result fails its run; a run the
+navigator stops is sent `stop` and is ended `finished` once the runner reports its result, or
+after thirty seconds. Every ending closes the connection, releases any held item through the
+lifecycle, and stops and removes the container. A named agent has at most one live run, which the
+database enforces.
+
 On startup the supervisor reconciles every run the database thinks is live against the engine's
 containers: a container still running is left to its runner, which reconnects; a run whose
-container is gone is failed, and the item it held goes back to its queue (`spec.md` §4.5).
+container is gone is failed, and the item it held goes back to its queue (`spec.md` §4.5). In the
+MVP (D1) no runner reconnects: every live run is failed on startup ("Cerebra restarted while the
+run was live."), its item goes back to its queue, and a new conversation begins separately.
 
 ### 5.4 The agents' tools
 
@@ -332,7 +342,10 @@ end of a turn or a run, with what it spent). The runner's fields are pinned in
 
 A single-page application served by the main container. It reads over REST and subscribes over
 one WebSocket per open view: run events for a chat, item changes for a board. Postgres
-`LISTEN/NOTIFY` fans a committed change out to every subscriber. Agent output is rendered as text:
+`LISTEN/NOTIFY` fans a committed change out to every subscriber. In the MVP one backend process
+owns every run, so a chat's socket (`/ws/runs/:id?after=n`) replays the recorded events after `n`
+and then receives the supervisor's in-process updates once each event is committed; `LISTEN/NOTIFY`
+is needed only when more than one process writes. Agent output is rendered as text:
 no raw HTML from an agent reaches the page, and a strict Content-Security-Policy is the second
 layer.
 
