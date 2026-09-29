@@ -249,6 +249,14 @@ UI in `@cerebra/shared`) must have an answer naming the route of `to`, and the r
 must equal the ones the navigator confirmed, whitespace aside. A refusal says what to do next and
 that nothing was moved.
 
+A builder records its plan with `submit_plan` and each run of the project's checks with
+`report_checks`, both only while it holds the item in `building`; each is a record carrying the
+run that wrote it (`item_records.created_by_run`). The lifecycle reads the holding run's records as
+build evidence and refuses `building → review_ready` without a plan or with a latest checks report
+that failed. The tool layer also refuses a pull request outside the project's repository or on a
+branch not named after the item's key. The Overview reads these records, newest 50 at a time,
+through `GET /api/work-items/:id/delivery-activity`.
+
 ## 6. Dispatcher and scheduler
 
 The **dispatcher** runs when an item changes state, a run ends, an agent is enabled or a limit

@@ -19,6 +19,7 @@ import type {
   AutomaticStartStatus,
   AutomaticStartsClient,
 } from './automatic-starts';
+import type { DeliveryActivityClient } from './delivery-activity';
 import { ProjectBoard } from './project-board';
 
 afterEach(cleanup);
@@ -1026,4 +1027,78 @@ test('says under each title who filed it and links to the item it came from', as
     screen.getByRole('button', { name: 'Export invoices as CSV' }),
   );
   await waitFor(() => expect(opened).toContain('item-9'));
+});
+
+const building: WorkItem = { ...workItem, state: 'building' };
+
+function deliveryClient(): DeliveryActivityClient {
+  return {
+    read: async () => ({
+      current: null,
+      earlierCursor: null,
+      events: [
+        {
+          agentName: 'Wolverine',
+          at: '2026-10-04T10:14:00.000Z',
+          id: '7',
+          kind: 'plan',
+          runId: 'run-1',
+        },
+      ],
+      latestChecks: null,
+      latestPullRequest: null,
+    }),
+  };
+}
+
+test('shows delivery activity on the Overview once work is in delivery', async () => {
+  const client = createClient({
+    item: async (id) => (id === 'item-1' ? building : workItem),
+    list: async () =>
+      page([building, { ...workItem, id: 'item-2', title: 'Triage me' }]),
+  });
+  render(
+    <ProjectBoard
+      automaticStartsClient={startsClient()}
+      boardClient={client}
+      deliveryClient={deliveryClient()}
+      projectId="project-1"
+      storage={memoryStorage()}
+    />,
+  );
+
+  await openItem('Show the board');
+  expect(
+    await screen.findByRole('region', { name: 'Delivery activity' }),
+  ).toBeTruthy();
+  expect(await screen.findByText('Plan recorded')).toBeTruthy();
+
+  await openItem('Triage me');
+  await screen.findByRole('heading', { name: 'Review new work' });
+  expect(
+    screen.queryByRole('region', { name: 'Delivery activity' }),
+  ).toBeNull();
+});
+
+test('reopens the item and refocuses the trail link after Back', async () => {
+  window.history.replaceState(
+    { cerebraDeliveryFocus: { itemId: 'item-1', linkId: 'delivery-link-7' } },
+    '',
+  );
+  render(
+    <ProjectBoard
+      automaticStartsClient={startsClient()}
+      boardClient={createClient({
+        item: async () => building,
+        list: async () => page([building]),
+      })}
+      deliveryClient={deliveryClient()}
+      projectId="project-1"
+      storage={memoryStorage()}
+    />,
+  );
+
+  const link = await screen.findByRole('link', { name: 'Plan recorded' });
+  await waitFor(() => expect(document.activeElement).toBe(link));
+  expect(window.history.state).toMatchObject({ cerebraDeliveryFocus: null });
 });
