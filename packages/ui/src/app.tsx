@@ -29,6 +29,8 @@ import {
 } from './projects';
 import type { BoardClient } from './board';
 import type { AutomaticStartsClient } from './automatic-starts';
+import type { BackupsClient } from './backups';
+import { BackupsPage } from './backups-page';
 import { LimitsPage } from './limits-page';
 import { NavigatorQueue, type WorkTab } from './navigator-queue';
 import { ProjectBoard } from './project-board';
@@ -63,6 +65,7 @@ interface AppProps {
   authClient?: AuthClient;
   boardClient?: BoardClient;
   automaticStartsClient?: AutomaticStartsClient;
+  backupsClient?: BackupsClient;
   fleetClient?: FleetClient;
   queueClient?: QueueClient;
   credentialClient?: CredentialClient;
@@ -75,6 +78,7 @@ type SettingsRoute =
   | { readonly page: 'credentials' }
   | { readonly page: 'agents' }
   | { readonly page: 'limits' }
+  | { readonly page: 'backups' }
   | { readonly page: 'agent'; readonly agentType: string };
 
 function conversationRoute(hash: string): string | null {
@@ -90,6 +94,9 @@ function settingsRoute(hash: string): SettingsRoute | null {
   }
   if (hash === '#/settings/limits') {
     return { page: 'limits' };
+  }
+  if (hash === '#/settings/backups') {
+    return { page: 'backups' };
   }
   const agent = /^#\/settings\/agents\/([a-z][a-z0-9-]*)$/.exec(hash);
   return agent === null ? null : { agentType: agent[1], page: 'agent' };
@@ -133,6 +140,7 @@ export function App({
   authClient = browserAuthClient,
   boardClient,
   automaticStartsClient,
+  backupsClient,
   fleetClient,
   queueClient,
   credentialClient,
@@ -181,6 +189,7 @@ export function App({
   const [returnToFleet, setReturnToFleet] = useState(false);
   const [hash, setHash] = useState(() => window.location.hash);
   const focusQueue = useRef(false);
+  const focusBackups = useRef(false);
   const settings = settingsRoute(hash);
   const conversation = settings === null ? conversationRoute(hash) : null;
   const updateButton = useRef<HTMLButtonElement>(null);
@@ -211,6 +220,10 @@ export function App({
     if (settings === null && focusQueue.current) {
       focusQueue.current = false;
       document.getElementById('navigator-queue-heading')?.focus();
+    }
+    if (settings?.page === 'backups' && focusBackups.current) {
+      focusBackups.current = false;
+      document.getElementById('backups-heading')?.focus();
     }
   });
 
@@ -758,6 +771,7 @@ export function App({
                 ['credentials', 'Credentials', '#/settings/credentials'],
                 ['agents', 'Agent types', '#/settings/agents'],
                 ['limits', 'Limits', '#/settings/limits'],
+                ['backups', 'Backups', '#/settings/backups'],
               ] as const
             ).map(([page, label, href]) => {
               const current =
@@ -789,6 +803,8 @@ export function App({
             />
           ) : settings.page === 'agents' ? (
             <AgentTypesList />
+          ) : settings.page === 'backups' ? (
+            <BackupsPage client={backupsClient} />
           ) : settings.page === 'limits' ? (
             <LimitsPage
               client={automaticStartsClient}
@@ -845,6 +861,10 @@ export function App({
             <NavigatorQueue
               client={queueClient}
               onCountChange={setQueueCount}
+              onOpenBackups={() => {
+                focusBackups.current = true;
+                window.location.hash = '#/settings/backups';
+              }}
               onOpenConversation={(runId) => {
                 window.location.hash = `#/conversations/${runId}`;
               }}

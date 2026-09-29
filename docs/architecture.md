@@ -368,7 +368,9 @@ Three layers, each covering what the others do not (D31):
   reads the branch into an empty project.
 - **Database dumps.** A scheduled `pg_dump` (daily by default, a configured number kept) to a
   directory the navigator mounts, covering what the mirror leaves out: runs and their events,
-  agent definitions and revisions, encrypted secrets, settings.
+  agent definitions and revisions, encrypted secrets, settings. The backend records every attempt
+  in `backups`; one runs at a time, a time missed while stopped is caught up once at start, and a
+  failure is shown in the navigator queue until a later dump completes.
 - **Agent state.** `/data/agents` (each named agent's home and CLI state) is copied alongside the
   dump. Mirrors and checkouts are rebuilt, never backed up.
 
