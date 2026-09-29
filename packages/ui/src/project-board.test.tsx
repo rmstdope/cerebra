@@ -15,6 +15,10 @@ import {
   type BoardPage,
   type WorkItem,
 } from './board';
+import type {
+  AutomaticStartStatus,
+  AutomaticStartsClient,
+} from './automatic-starts';
 import { ProjectBoard } from './project-board';
 
 afterEach(cleanup);
@@ -78,14 +82,39 @@ function createClient(overrides: Partial<BoardClient> = {}): BoardClient {
   };
 }
 
+const running: AutomaticStartStatus = {
+  limit: 3,
+  paused: false,
+  running: 2,
+  waiting: [],
+};
+
+function startsClient(
+  overrides: Partial<AutomaticStartsClient> = {},
+): AutomaticStartsClient {
+  const unused = async () => {
+    throw new Error('Not exercised');
+  };
+  return {
+    limits: unused,
+    saveInstanceLimit: unused,
+    saveProjectLimit: unused,
+    setPaused: async () => undefined,
+    status: async () => running,
+    ...overrides,
+  };
+}
+
 function renderBoard(
   client: BoardClient,
   storage = memoryStorage(),
   arrivalsIntervalMs = 60_000,
+  automaticStarts = startsClient(),
 ) {
   return render(
     <ProjectBoard
       arrivalsIntervalMs={arrivalsIntervalMs}
+      automaticStartsClient={automaticStarts}
       boardClient={client}
       projectId="project-1"
       storage={storage}
@@ -669,4 +698,276 @@ test('opens an item on the tab another view asked for', async () => {
         .getAttribute('aria-selected'),
     ).toBe('true'),
   );
+});
+
+const readyItems: readonly WorkItem[] = [
+  {
+    ...workItem,
+    id: 'ready-1',
+    priority: 'P1',
+    state: 'build_ready',
+    title: 'Make reports easier to share',
+  },
+  {
+    ...workItem,
+    id: 'ready-2',
+    priority: 'P2',
+    state: 'build_ready',
+    title: 'Fix export timeout',
+  },
+  {
+    ...workItem,
+    id: 'ready-3',
+    priority: 'P2',
+    state: 'design_ready',
+    title: 'Add dark theme to settings',
+  },
+  {
+    ...workItem,
+    id: 'ready-4',
+    priority: 'P2',
+    state: 'build_ready',
+    title: 'Upgrade build tools',
+  },
+  { ...workItem, id: 'new-1', title: 'Clean up login copy' },
+];
+
+test('shows automatic starts in the header and why each ready item waits', async () => {
+  renderBoard(
+    createClient({ list: async () => page(readyItems) }),
+    memoryStorage(),
+    60_000,
+    startsClient({
+      status: async () => ({
+        ...running,
+        waiting: [
+          {
+            itemId: 'ready-1',
+            reason: { kind: 'project_limit', limit: 3, running: 3 },
+          },
+          {
+            itemId: 'ready-2',
+            reason: { kind: 'no_free_agent', role: 'producer' },
+          },
+          {
+            itemId: 'ready-3',
+            reason: { kind: 'instance_limit', limit: 6, running: 6 },
+          },
+          {
+            itemId: 'ready-4',
+            reason: { kind: 'credential_missing', service: 'GitHub' },
+          },
+        ],
+      }),
+    }),
+  );
+
+  expect(
+    await screen.findByText('Starting work automatically · 2 of 3 running'),
+  ).toBeTruthy();
+  expect(
+    screen.getByRole('button', { name: 'Pause automatic starts' }),
+  ).toBeTruthy();
+  expect(
+    await screen.findByRole('button', {
+      description: 'Waiting — project limit reached (3 of 3 running)',
+      name: /Make reports easier to share/,
+    }),
+  ).toBeTruthy();
+  expect(
+    screen.getByText('Waiting — project limit reached (3 of 3 running)'),
+  ).toBeTruthy();
+  expect(screen.getByText('Waiting — no producer is free')).toBeTruthy();
+  expect(
+    screen.getByText('Waiting — Cerebra-wide limit reached (6 of 6 running)'),
+  ).toBeTruthy();
+  expect(
+    screen.getByText("Can't start — GitHub credential missing"),
+  ).toBeTruthy();
+  expect(
+    screen.getByRole('link', { name: 'Fix in settings' }).getAttribute('href'),
+  ).toBe('#/settings/credentials');
+  expect(
+    screen
+      .getByRole('button', { name: /Clean up login copy/ })
+      .getAttribute('aria-describedby'),
+  ).toBeNull();
+});
+
+test('pauses at once, shows the banner and moves focus between the controls', async () => {
+  const calls: boolean[] = [];
+  let paused = false;
+  renderBoard(
+    createClient({ list: async () => page(readyItems.slice(0, 1)) }),
+    memoryStorage(),
+    60_000,
+    startsClient({
+      setPaused: async (_projectId, value) => {
+        calls.push(value);
+        paused = value;
+      },
+      status: async () => ({
+        ...running,
+        paused,
+        waiting: paused
+          ? [{ itemId: 'ready-1', reason: { kind: 'paused' } }]
+          : [],
+      }),
+    }),
+  );
+
+  await userEvent.click(
+    await screen.findByRole('button', { name: 'Pause automatic starts' }),
+  );
+
+  const resume = await screen.findByRole('button', { name: 'Resume' });
+  expect(calls).toEqual([true]);
+  expect(document.activeElement).toBe(resume);
+  expect(screen.getByText('Automatic starts are paused.')).toBeTruthy();
+  expect(
+    screen.getByText(
+      /Work already running continues, and you can still start anyone yourself from the fleet\./,
+    ),
+  ).toBeTruthy();
+  expect(
+    await screen.findByText('Waiting — automatic starts are paused'),
+  ).toBeTruthy();
+  expect(screen.queryByText(/Starting work automatically/)).toBeNull();
+
+  await userEvent.click(resume);
+
+  const pause = await screen.findByRole('button', {
+    name: 'Pause automatic starts',
+  });
+  expect(calls).toEqual([true, false]);
+  expect(document.activeElement).toBe(pause);
+  expect(screen.queryByText('Automatic starts are paused.')).toBeNull();
+});
+
+test('says a failed pause or resume changed nothing and retries with Try again', async () => {
+  let failing = true;
+  let paused = false;
+  renderBoard(
+    createClient(),
+    memoryStorage(),
+    60_000,
+    startsClient({
+      setPaused: async (_projectId, value) => {
+        if (failing) throw new Error('offline');
+        paused = value;
+      },
+      status: async () => ({ ...running, paused }),
+    }),
+  );
+
+  await userEvent.click(
+    await screen.findByRole('button', { name: 'Pause automatic starts' }),
+  );
+
+  expect((await screen.findByRole('alert')).textContent).toContain(
+    "Cerebra couldn't pause automatic starts. Nothing has changed.",
+  );
+  expect(
+    screen.getByRole('button', { name: 'Pause automatic starts' }),
+  ).toBeTruthy();
+  expect(screen.queryByText('Automatic starts are paused.')).toBeNull();
+
+  failing = false;
+  await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
+
+  expect(await screen.findByRole('button', { name: 'Resume' })).toBeTruthy();
+  expect(screen.queryByRole('alert')).toBeNull();
+
+  failing = true;
+  await userEvent.click(screen.getByRole('button', { name: 'Resume' }));
+
+  expect((await screen.findByRole('alert')).textContent).toContain(
+    "Cerebra couldn't resume automatic starts. Nothing has changed.",
+  );
+  expect(screen.getByRole('button', { name: 'Resume' })).toBeTruthy();
+});
+
+test('never leaves a waiting reason blank when it could not be read', async () => {
+  let failing = true;
+  renderBoard(
+    createClient({ list: async () => page(readyItems) }),
+    memoryStorage(),
+    60_000,
+    startsClient({
+      status: async () => {
+        if (failing) throw new Error('offline');
+        return {
+          ...running,
+          waiting: [
+            {
+              itemId: 'ready-2',
+              reason: { kind: 'no_free_agent', role: 'producer' },
+            },
+          ],
+        };
+      },
+    }),
+  );
+
+  expect(
+    await screen.findByRole('button', {
+      description: "Couldn't check why this is waiting",
+      name: /Fix export timeout/,
+    }),
+  ).toBeTruthy();
+  expect(
+    screen.getAllByText("Couldn't check why this is waiting"),
+  ).toHaveLength(4);
+  expect(
+    screen
+      .getByRole('button', { name: /Clean up login copy/ })
+      .getAttribute('aria-describedby'),
+  ).toBeNull();
+  expect(screen.queryByText(/Starting work automatically/)).toBeNull();
+
+  failing = false;
+  await userEvent.click(
+    screen.getAllByRole('button', { name: 'Try again' })[0]!,
+  );
+
+  expect(await screen.findByText('Waiting — no producer is free')).toBeTruthy();
+  expect(screen.queryByText("Couldn't check why this is waiting")).toBeNull();
+  expect(
+    screen.getByText('Starting work automatically · 2 of 3 running'),
+  ).toBeTruthy();
+});
+
+test('shows no chips when nothing waits and follows conditions as they change', async () => {
+  let waiting: AutomaticStartStatus['waiting'] = [];
+  render(
+    <ProjectBoard
+      arrivalsIntervalMs={60_000}
+      automaticStartsClient={startsClient({
+        status: async () => ({ ...running, waiting }),
+      })}
+      boardClient={createClient({
+        list: async () => page(readyItems.slice(0, 1)),
+      })}
+      projectId="project-1"
+      statusIntervalMs={50}
+      storage={memoryStorage()}
+    />,
+  );
+
+  expect(
+    await screen.findByText('Starting work automatically · 2 of 3 running'),
+  ).toBeTruthy();
+  await screen.findByRole('button', { name: /Make reports easier to share/ });
+  expect(screen.queryByText(/Waiting —/)).toBeNull();
+
+  waiting = [
+    {
+      itemId: 'ready-1',
+      reason: { kind: 'project_limit', limit: 3, running: 3 },
+    },
+  ];
+
+  expect(
+    await screen.findByText('Waiting — project limit reached (3 of 3 running)'),
+  ).toBeTruthy();
 });
