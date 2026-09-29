@@ -1,6 +1,11 @@
 import {
+  CredentialInputError,
+  CredentialNotFoundError,
+  DuplicateDestinationError,
+  ProjectNotFoundError,
   WorkItemNotFoundError,
   createServer,
+  type CredentialService,
   type Board,
   GitHubAccessError,
   startServer,
@@ -642,4 +647,285 @@ test('answers the queue with 503 when no queue is wired', async () => {
   expect(response.json()).toEqual({
     error: 'The navigator queue is unavailable.',
   });
+});
+
+function credentialService(
+  overrides: Partial<CredentialService> = {},
+): CredentialService {
+  return {
+    agentCredentials: async (_projectId, agentType) => ({
+      agentType,
+      available: ['Deploy key'],
+      entries: [],
+    }),
+    overview: async () => ({
+      attention: [],
+      instanceCredentials: [],
+      project: null,
+      projectCredentials: [],
+    }),
+    recordInjectionFailure: async () => undefined,
+    remove: async () => undefined,
+    resolveForRun: async () => ({ ok: false, problems: [] }),
+    save: async ({ name }) => ({ name, replaced: false }),
+    setAgentCredentials: async () => undefined,
+    ...overrides,
+  };
+}
+
+test('lists credentials for the project in context', async () => {
+  const projectIds: Array<string | undefined> = [];
+  const server = await createServer({
+    auth: authenticatedAuth,
+    credentials: credentialService({
+      overview: async (projectId) => {
+        projectIds.push(projectId);
+        return {
+          attention: [],
+          instanceCredentials: [],
+          project: projectId ? { id: projectId, name: 'acme/app' } : null,
+          projectCredentials: [],
+        };
+      },
+    }),
+  });
+  servers.push(server);
+
+  const withProject = await server.inject('/api/credentials?projectId=p1');
+  const without = await server.inject('/api/credentials');
+
+  expect(withProject.statusCode).toBe(200);
+  expect(withProject.json().project).toEqual({ id: 'p1', name: 'acme/app' });
+  expect(without.json().project).toBeNull();
+  expect(projectIds).toEqual(['p1', undefined]);
+});
+
+test('says credentials are unavailable rather than listing none', async () => {
+  const server = await createServer({ auth: authenticatedAuth });
+  servers.push(server);
+
+  const response = await server.inject('/api/credentials');
+
+  expect(response.statusCode).toBe(503);
+  expect(response.json()).toEqual({ error: 'Credentials are unavailable.' });
+});
+
+test('answers an unknown project with not found', async () => {
+  const server = await createServer({
+    auth: authenticatedAuth,
+    credentials: credentialService({
+      overview: async (projectId) => {
+        throw new ProjectNotFoundError(projectId ?? '');
+      },
+    }),
+  });
+  servers.push(server);
+
+  const response = await server.inject('/api/credentials?projectId=gone');
+
+  expect(response.statusCode).toBe(404);
+});
+
+test('saves a credential without ever returning its value', async () => {
+  const saved: unknown[] = [];
+  const server = await createServer({
+    auth: authenticatedAuth,
+    credentials: credentialService({
+      save: async (input) => {
+        saved.push(input);
+        return { name: input.name, replaced: true };
+      },
+    }),
+  });
+  servers.push(server);
+
+  const response = await server.inject({
+    method: 'PUT',
+    payload: {
+      name: 'Deploy key',
+      projectId: 'p1',
+      scope: 'project',
+      value: 'super-secret-value',
+    },
+    url: '/api/credentials',
+  });
+
+  expect(response.statusCode).toBe(200);
+  expect(response.json()).toEqual({ name: 'Deploy key', replaced: true });
+  expect(response.body).not.toContain('super-secret-value');
+  expect(saved).toEqual([
+    {
+      name: 'Deploy key',
+      projectId: 'p1',
+      scope: 'project',
+      value: 'super-secret-value',
+    },
+  ]);
+});
+
+test('refuses a malformed or invalid credential without echoing it', async () => {
+  const server = await createServer({
+    auth: authenticatedAuth,
+    credentials: credentialService({
+      save: async () => {
+        throw new CredentialInputError('Paste the value.');
+      },
+    }),
+  });
+  servers.push(server);
+
+  const malformed = await server.inject({
+    method: 'PUT',
+    payload: { name: 'Deploy key', scope: 'nowhere', value: 'secret-a' },
+    url: '/api/credentials',
+  });
+  const invalid = await server.inject({
+    method: 'PUT',
+    payload: { name: 'Deploy key', scope: 'instance', value: 'secret-b' },
+    url: '/api/credentials',
+  });
+
+  expect(malformed.statusCode).toBe(400);
+  expect(malformed.body).not.toContain('secret-a');
+  expect(invalid.statusCode).toBe(400);
+  expect(invalid.json()).toEqual({ error: 'Paste the value.' });
+  expect(invalid.body).not.toContain('secret-b');
+});
+
+test('never answers with a value even when saving fails unexpectedly', async () => {
+  const server = await createServer({
+    auth: authenticatedAuth,
+    credentials: credentialService({
+      save: async (input) => {
+        throw new Error(`database refused ${input.value}`);
+      },
+    }),
+  });
+  servers.push(server);
+
+  const response = await server.inject({
+    method: 'PUT',
+    payload: { name: 'Deploy key', scope: 'instance', value: 'secret-c' },
+    url: '/api/credentials',
+  });
+
+  expect(response.statusCode).toBe(500);
+  expect(response.body).not.toContain('secret-c');
+});
+
+test('removes a credential, and says when it is already gone', async () => {
+  const removed: string[] = [];
+  const server = await createServer({
+    auth: authenticatedAuth,
+    credentials: credentialService({
+      remove: async (id) => {
+        if (id === 'gone') {
+          throw new CredentialNotFoundError();
+        }
+        removed.push(id);
+      },
+    }),
+  });
+  servers.push(server);
+
+  const ok = await server.inject({
+    method: 'DELETE',
+    url: '/api/credentials/c1',
+  });
+  const gone = await server.inject({
+    method: 'DELETE',
+    url: '/api/credentials/gone',
+  });
+
+  expect(ok.statusCode).toBe(204);
+  expect(removed).toEqual(['c1']);
+  expect(gone.statusCode).toBe(404);
+});
+
+test('reads and saves an agent type’s credentials', async () => {
+  const saved: unknown[] = [];
+  const server = await createServer({
+    auth: authenticatedAuth,
+    credentials: credentialService({
+      setAgentCredentials: async (projectId, agentType, deliveries) => {
+        saved.push({ agentType, deliveries, projectId });
+      },
+    }),
+  });
+  servers.push(server);
+
+  const read = await server.inject(
+    '/api/projects/p1/agent-types/producer/credentials',
+  );
+  const write = await server.inject({
+    method: 'PUT',
+    payload: {
+      deliveries: [
+        {
+          credentialName: 'Deploy key',
+          delivery: 'environment',
+          destination: 'DEPLOY',
+        },
+      ],
+    },
+    url: '/api/projects/p1/agent-types/producer/credentials',
+  });
+
+  expect(read.statusCode).toBe(200);
+  expect(read.json().agentType).toBe('producer');
+  expect(write.statusCode).toBe(200);
+  expect(write.json().agentType).toBe('producer');
+  expect(saved).toEqual([
+    {
+      agentType: 'producer',
+      deliveries: [
+        {
+          credentialName: 'Deploy key',
+          delivery: 'environment',
+          destination: 'DEPLOY',
+        },
+      ],
+      projectId: 'p1',
+    },
+  ]);
+});
+
+test('names a duplicate destination so the dialog can mark it', async () => {
+  const server = await createServer({
+    auth: authenticatedAuth,
+    credentials: credentialService({
+      setAgentCredentials: async () => {
+        throw new DuplicateDestinationError('GH_TOKEN');
+      },
+    }),
+  });
+  servers.push(server);
+
+  const response = await server.inject({
+    method: 'PUT',
+    payload: {
+      deliveries: [
+        {
+          credentialName: 'Deploy key',
+          delivery: 'environment',
+          destination: 'GH_TOKEN',
+        },
+      ],
+    },
+    url: '/api/projects/p1/agent-types/producer/credentials',
+  });
+  const malformed = await server.inject({
+    method: 'PUT',
+    payload: { deliveries: [{ delivery: 'carrier-pigeon' }] },
+    url: '/api/projects/p1/agent-types/producer/credentials',
+  });
+
+  expect(response.statusCode).toBe(400);
+  expect(response.json()).toEqual({
+    code: 'duplicate_destination',
+    destination: 'GH_TOKEN',
+    error:
+      '“GH_TOKEN” is already used. Choose a different name or change the existing credential.',
+  });
+  expect(malformed.statusCode).toBe(400);
 });

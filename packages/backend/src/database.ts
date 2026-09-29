@@ -33,9 +33,33 @@ export interface Database {
     name: string;
     project_id: string;
   };
+  agent_credentials: {
+    agent_type: string;
+    credential_name: string;
+    delivery: 'environment' | 'file';
+    destination: string;
+    id: Generated<string>;
+    project_id: string;
+  };
   authentication_configuration: {
     id: Generated<boolean>;
     user_id: string;
+  };
+  credentials: {
+    created_at: Generated<Date>;
+    id: string;
+    key_ciphertext: string;
+    key_iv: string;
+    key_tag: string;
+    last_used_at: Date | null;
+    last_used_run_id: string | null;
+    name: string;
+    problem: 'undecryptable' | 'injection_failed' | null;
+    project_id: string | null;
+    updated_at: Generated<Date>;
+    value_ciphertext: string;
+    value_iv: string;
+    value_tag: string;
   };
   lifecycle_events: {
     created_at: Generated<Date>;

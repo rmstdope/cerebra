@@ -58,6 +58,14 @@ nested, and it fails differently on each host.
 - CPU and memory limits from the agent type.
 - Never: the container socket, the database, another run's files, the mirror writable.
 
+The `engine` module builds this specification itself from the run and named agent it is given;
+a caller supplies only the image, command, environment and resource limits, never a mount, a
+network, a user or a privilege. Its mounts are subpaths of the `/data` volume: `runs/<run>/checkout`
+at `/work`, `agents/<agent>/home` at `/home/agent` and `agents/<agent>/cli-state` at `/cli-state`,
+plus a `/tmp` tmpfs, which a read-only root filesystem needs. It talks to rootless Podman over
+the API socket's Docker-compatible endpoints; an engine failure is an error, and only the engine's
+own "no such container" reads as a container that is absent.
+
 **Networks.** `cerebro-internal` joins the main container and every agent container and nothing
 else. `cerebro-egress` joins agent containers only. The UI port is published on `127.0.0.1` only
 (D1); a server deployment puts a TLS reverse proxy in front of it.
@@ -242,6 +250,18 @@ main container reads from a Podman secret at startup. Values are decrypted only 
 and handed to the engine as environment variables or as files on a tmpfs mount; they are never
 logged, never returned by the API, and never written into a checkout. Resolution follows
 `spec.md` §7: agent type in the project, agent type instance-wide, project, instance.
+
+The MVP stores instance and project credentials; agent-type scope comes later. Every value
+(`credentials`) is sealed with AES-256-GCM under its own random data key, which is itself sealed
+under the master key (`CEREBRA_PROJECT_TOKEN_KEY` until the pod provisions a Podman secret);
+without that key the credential routes answer 503. Deliveries (`agent_credentials`) are declared
+per project and agent type, by name, as an environment variable or an absolute file path outside
+`/work`. Two are built in and need no declaration: `Claude sign-in token` as
+`CLAUDE_CODE_OAUTH_TOKEN` to every type, and `GitHub access token` as `GH_TOKEN` to producer,
+bugfixer and assistant. `resolveForRun` returns exactly the variables and files a run may receive,
+or the names it cannot have (missing, undecryptable, or failed at injection); a run with any
+problem does not start, and the Credentials page lists each problem until it is replaced or
+removed. The project GitHub token stays on `projects` and is never resolved for a run.
 
 Known limit: an agent can print what it was given, and its transcript is stored as it is.
 

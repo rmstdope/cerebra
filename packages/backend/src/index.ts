@@ -58,6 +58,56 @@ export {
   type TriageResult,
 } from './board.js';
 export {
+  agentContainerLabels,
+  agentContainerName,
+  agentContainerPaths,
+  agentContainerRequest,
+  ContainerNotFoundError,
+  containerStatuses,
+  defaultAgentUser,
+  defaultStopTimeoutSeconds,
+  EngineError,
+  InvalidContainerSpecError,
+  stopTimeoutSeconds,
+  type AgentContainerRequest,
+  type AgentContainerResources,
+  type AgentContainerSpec,
+  type ContainerEngine,
+  type ContainerInfo,
+  type ContainerStatus,
+  type EngineOperation,
+  type EngineSettings,
+  type StopOptions,
+} from './engine.js';
+export { createFakeEngine, type FakeEngine } from './fake-engine.js';
+export {
+  createEnvelopeCipher,
+  type EnvelopeCipher,
+  type SealedValue,
+} from './credential-cipher.js';
+export {
+  agentGitHubCredentialName,
+  builtInAgentTypes,
+  builtInDeliveries,
+  createCredentialService,
+  CredentialInputError,
+  CredentialNotFoundError,
+  DuplicateDestinationError,
+  modelCredentialName,
+  type AgentCredentialDelivery,
+  type AgentCredentialEntry,
+  type AgentCredentialSettings,
+  type CredentialAttention,
+  type CredentialDeliveryMethod,
+  type CredentialOverview,
+  type CredentialProblem,
+  type CredentialRow,
+  type CredentialScope,
+  type CredentialService,
+  type RunCredentials,
+  type SaveCredential,
+} from './credentials.js';
+export {
   createInstanceService,
   type InstanceService,
   type InstanceStatus,
@@ -90,6 +140,10 @@ export {
   type QueueRefusalCode,
 } from './navigator-queue.js';
 export { migrateToLatest } from './migrations/index.js';
+export {
+  createPodmanEngine,
+  type PodmanEngineSettings,
+} from './podman-engine.js';
 export {
   createProjectRegistrationService,
   createProjectStore,

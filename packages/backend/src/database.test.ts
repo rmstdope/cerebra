@@ -85,7 +85,11 @@ describe('database migrations', { concurrent: false }, () => {
           status: 'Success',
         }),
         expect.objectContaining({
-          migrationName: '20260929020000_create_fleet',
+          migrationName: '20260929030000_create_credentials',
+          status: 'Success',
+        }),
+        expect.objectContaining({
+          migrationName: '20260929040000_create_fleet',
           status: 'Success',
         }),
       ]);
@@ -96,10 +100,12 @@ describe('database migrations', { concurrent: false }, () => {
       ).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ name: 'kysely_migration' }),
+          expect.objectContaining({ name: 'agent_credentials' }),
           expect.objectContaining({ name: 'authentication_configuration' }),
           expect.objectContaining({ name: 'agent_types' }),
           expect.objectContaining({ name: 'agent_type_overrides' }),
           expect.objectContaining({ name: 'agents' }),
+          expect.objectContaining({ name: 'credentials' }),
           expect.objectContaining({ name: 'lifecycle_events' }),
           expect.objectContaining({ name: 'projects' }),
           expect.objectContaining({ name: 'runs' }),

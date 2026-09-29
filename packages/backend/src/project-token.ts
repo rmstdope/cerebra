@@ -14,13 +14,18 @@ export interface ProjectTokenCipher {
 const invalidKeyMessage =
   'CEREBRA_PROJECT_TOKEN_KEY must be a base64-encoded 32-byte key.';
 
-export function createProjectTokenCipher(
-  encodedKey: string,
-): ProjectTokenCipher {
+export function decodeMasterKey(encodedKey: string): Buffer {
   const key = Buffer.from(encodedKey, 'base64');
   if (key.length !== 32 || key.toString('base64') !== encodedKey) {
     throw new Error(invalidKeyMessage);
   }
+  return key;
+}
+
+export function createProjectTokenCipher(
+  encodedKey: string,
+): ProjectTokenCipher {
+  const key = decodeMasterKey(encodedKey);
 
   return {
     decrypt(token) {

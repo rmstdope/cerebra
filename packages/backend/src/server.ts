@@ -18,6 +18,14 @@ import {
   type BoardRoute,
 } from './board.js';
 import {
+  CredentialInputError,
+  CredentialNotFoundError,
+  DuplicateDestinationError,
+  type AgentCredentialDelivery,
+  type CredentialScope,
+  type CredentialService,
+} from './credentials.js';
+import {
   AgentHoldsWorkError,
   AgentNotFoundError,
   AgentTypeNotFoundError,
@@ -46,6 +54,7 @@ import {
 export interface ServerOptions {
   readonly auth: AuthService;
   readonly board?: Board;
+  readonly credentials?: CredentialService;
   readonly fleet?: Fleet;
   readonly instance?: InstanceService;
   readonly projects?: ProjectRegistration;
@@ -189,9 +198,63 @@ function queueDecision(value: unknown): QueueDecision | null {
   };
 }
 
+function credentialBody(value: unknown): {
+  readonly name: string;
+  readonly projectId?: string;
+  readonly scope: CredentialScope;
+  readonly value: string;
+} | null {
+  const body = objectBody(value);
+  if (
+    body === null ||
+    typeof body.name !== 'string' ||
+    typeof body.value !== 'string' ||
+    (body.scope !== 'instance' && body.scope !== 'project') ||
+    (body.projectId !== undefined && typeof body.projectId !== 'string')
+  ) {
+    return null;
+  }
+  return {
+    name: body.name,
+    ...(typeof body.projectId === 'string'
+      ? { projectId: body.projectId }
+      : {}),
+    scope: body.scope,
+    value: body.value,
+  };
+}
+
+function deliveriesBody(
+  value: unknown,
+): readonly AgentCredentialDelivery[] | null {
+  const body = objectBody(value);
+  if (body === null || !Array.isArray(body.deliveries)) {
+    return null;
+  }
+  const deliveries: AgentCredentialDelivery[] = [];
+  for (const entry of body.deliveries as unknown[]) {
+    const delivery = objectBody(entry);
+    if (
+      delivery === null ||
+      typeof delivery.credentialName !== 'string' ||
+      typeof delivery.destination !== 'string' ||
+      (delivery.delivery !== 'environment' && delivery.delivery !== 'file')
+    ) {
+      return null;
+    }
+    deliveries.push({
+      credentialName: delivery.credentialName,
+      delivery: delivery.delivery,
+      destination: delivery.destination,
+    });
+  }
+  return deliveries;
+}
+
 export const createServer = async ({
   auth,
   board,
+  credentials,
   fleet,
   instance = createInstanceService(),
   projects,
@@ -480,6 +543,104 @@ export const createServer = async ({
         return result.ok
           ? board.getWorkItem(itemId)
           : reply.status(409).send({ error: result.reason });
+      },
+    ),
+  );
+
+  const credentialRoute =
+    <P>(
+      handler: (
+        credentials: CredentialService,
+        params: P,
+        request: FastifyRequest,
+        reply: FastifyReply,
+      ) => Promise<unknown>,
+    ) =>
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      if (credentials === undefined) {
+        return reply
+          .status(503)
+          .send({ error: 'Credentials are unavailable.' });
+      }
+      try {
+        return await handler(credentials, request.params as P, request, reply);
+      } catch (error) {
+        if (error instanceof DuplicateDestinationError) {
+          return reply.status(400).send({
+            code: 'duplicate_destination',
+            destination: error.destination,
+            error: error.message,
+          });
+        }
+        if (error instanceof CredentialInputError) {
+          return reply.status(400).send({ error: error.message });
+        }
+        if (
+          error instanceof CredentialNotFoundError ||
+          error instanceof ProjectNotFoundError
+        ) {
+          return reply.status(404).send({ error: error.message });
+        }
+        // An unexpected failure may carry what was being saved; answer without it.
+        return reply
+          .status(500)
+          .send({ error: 'Cerebra couldn’t update credentials.' });
+      }
+    };
+
+  server.get(
+    '/api/credentials',
+    credentialRoute(async (credentials, _params, request) => {
+      const query = objectBody(request.query) ?? {};
+      return credentials.overview(
+        typeof query.projectId === 'string' && query.projectId !== ''
+          ? query.projectId
+          : undefined,
+      );
+    }),
+  );
+
+  server.put(
+    '/api/credentials',
+    credentialRoute(async (credentials, _params, request, reply) => {
+      const body = credentialBody(request.body);
+      if (body === null) {
+        return reply.status(400).send({ error: 'Enter the credential.' });
+      }
+      return credentials.save(body);
+    }),
+  );
+
+  server.delete(
+    '/api/credentials/:credentialId',
+    credentialRoute<{ credentialId: string }>(
+      async (credentials, { credentialId }, _request, reply) => {
+        await credentials.remove(credentialId);
+        return reply.status(204).send();
+      },
+    ),
+  );
+
+  server.get(
+    '/api/projects/:projectId/agent-types/:agentType/credentials',
+    credentialRoute<{ agentType: string; projectId: string }>(
+      async (credentials, { agentType, projectId }) =>
+        credentials.agentCredentials(projectId, agentType),
+    ),
+  );
+
+  server.put(
+    '/api/projects/:projectId/agent-types/:agentType/credentials',
+    credentialRoute<{ agentType: string; projectId: string }>(
+      async (credentials, { agentType, projectId }, request, reply) => {
+        const deliveries = deliveriesBody(request.body);
+        if (deliveries === null) {
+          return reply
+            .status(400)
+            .send({ error: 'Choose each credential and how it is given.' });
+        }
+        await credentials.setAgentCredentials(projectId, agentType, deliveries);
+        return credentials.agentCredentials(projectId, agentType);
       },
     ),
   );

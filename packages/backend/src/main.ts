@@ -4,6 +4,8 @@ import {
 } from './agent-types.js';
 import { createAuthService } from './auth.js';
 import { createBoard } from './board.js';
+import { createEnvelopeCipher } from './credential-cipher.js';
+import { createCredentialService } from './credentials.js';
 import { createDatabase } from './database.js';
 import { createFleet } from './fleet.js';
 import { migrateToLatest } from './migrations/index.js';
@@ -27,6 +29,13 @@ try {
     {
       auth: createAuthService(database),
       board: createBoard(database),
+      credentials:
+        projectTokenKey === undefined
+          ? undefined
+          : createCredentialService({
+              cipher: createEnvelopeCipher(projectTokenKey),
+              database,
+            }),
       fleet,
       projects:
         projectTokenKey === undefined
