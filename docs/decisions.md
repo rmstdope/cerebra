@@ -248,12 +248,15 @@ Reviewing pull requests from outside the fleet (Cypher's job in classic Cerebro)
 
 ### D25. Rework continues the same pull request — decided
 
-When a reviewer, a failed merge or a failed verification sends an item back to `build_ready`, the
-next builder run checks out the item's existing branch and pushes to the same pull request, with
+When a reviewer, the navigator answering a failed merge, or a failed verification sends an item
+back to `build_ready`, the next builder run checks out the item's existing branch and pushes to the same pull request, with
 the reviewer's findings or the verdict as its first message. A pull request is closed and replaced
 only when the item goes back to `design_ready`; the backend closes it, with a comment saying why.
 
-Confirmed by the navigator during project definition on 2026-09-28.
+Confirmed by the navigator during project definition on 2026-09-28. Amended by cr-c4f.4: a failed
+merge no longer returns the item to `build_ready` by itself; it waits for the navigator as a block
+(`spec.md` §4.5), who sends it back to the builder or returns it to design — agreed with the
+navigator on 2026-10-05.
 
 ### D26. v1 ships nine roles — decided
 

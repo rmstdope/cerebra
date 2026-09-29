@@ -257,6 +257,19 @@ that failed. The tool layer also refuses a pull request outside the project's re
 branch not named after the item's key. The Overview reads these records, newest 50 at a time,
 through `GET /api/work-items/:id/delivery-activity`.
 
+A reviewer records its verdict with `transition` and a `review` record: the verdict, the revision
+it reviewed (a commit hash), the link to the review it posted on GitHub, and its findings, each
+`blocking` or `advisory` with a file, an optional line and the problem. The lifecycle refuses an
+approval carrying a blocking finding and a change request carrying none. The backend's own records
+tell the rest of the story on the same trail: `rework_started` when a builder claims an item with
+a live pull request, `blocked` for each block (`spec.md` §4.5), `sent_back`, `returned_to_design`
+and `merged`. The navigator answers a block with `POST /api/work-items/:id/send-back` or
+`/return-to-design` (`{ reason }`), each refused with `not_waiting` once the item has moved on.
+A run's first message (`first-message.ts`) is built from the same records: a builder continuing a
+pull request is given its branch and link, the blocking findings of the last review, or the block
+it was sent back after; a reviewer is given the pull request to review; a builder after a return to
+design is given the navigator's reason.
+
 ## 6. Dispatcher and scheduler
 
 The **dispatcher** runs when an item changes state, a run ends, an agent is enabled or a limit
@@ -305,12 +318,25 @@ ticks missed while the instance was down are not replayed.
 ## 8. GitHub
 
 One client behind a `Forge` interface (D12). The backend polls, since a local instance cannot
-receive webhooks: pull requests of items in `review_ready`, `reviewing` and `merging`; check runs
-of items in `merging`; reviews on the pull requests of items waiting at the `code_review`
-checkpoint, of which only those by the navigator's GitHub login (an instance setting) count
-(D33); issues for the inbox agent's schedule. A merge uses the backend's own
-project GitHub token (`spec.md` §7), which no run is given, through the merge API, then deletes the branch. A server
-deployment can add webhooks as a faster path; polling stays the fallback.
+receive webhooks: pull requests and check runs of items in `merging`; reviews on the pull requests
+of items waiting at the `code_review` checkpoint, of which only those by the navigator's GitHub
+login (an instance setting) count (D33); issues for the inbox agent's schedule. A merge uses the
+backend's own project GitHub token (`spec.md` §7), which no run is given, through the merge API,
+then deletes the branch. A server deployment can add webhooks as a faster path; polling stays the
+fallback.
+
+The **merge watcher** (`merge-watcher.ts`) makes one pass over the items in `merging` at start, on
+every successful mutating request and every 30 seconds. For each it reads the pull request: a head
+other than the approved revision blocks it as changed since approval; a conflict blocks it; any
+failed check run or commit status on the head blocks it, since every check counts as required
+until branch protection is read; pending checks, or GitHub not yet knowing whether it merges,
+leave it for the next pass. Otherwise it squash-merges with the approved revision as the expected
+head, so a push that lands in between is refused by GitHub rather than merged, deletes the branch
+and moves the item to `done`. A pull request found already merged is finished the same way. Each
+item's failure is logged and leaves it in `merging` for the next pass. The same pass closes, with
+the navigator's reason as a comment, the pull request of every item returned to design whose
+closing is not yet recorded, and deletes its branch; the record written after makes that an outbox
+that survives a restart.
 
 ### Releases
 
