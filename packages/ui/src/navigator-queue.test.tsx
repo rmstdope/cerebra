@@ -1,0 +1,666 @@
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { afterEach, expect, test, vi } from 'vitest';
+
+import { BoardRequestError } from './board';
+import { NavigatorQueue } from './navigator-queue';
+import type {
+  QueueClient,
+  QueueDecision,
+  QueueEntry,
+  QueuePage,
+} from './queue';
+
+afterEach(cleanup);
+
+function entry(overrides: Partial<QueueEntry>): QueueEntry {
+  return {
+    askedBy: null,
+    availableRoutes: ['grooming_ready', 'design_ready', 'build_ready'],
+    description: '',
+    id: 'item',
+    kind: 'new',
+    priority: null,
+    projectId: 'project-1',
+    projectName: 'acme/mobile',
+    since: '2026-09-29T00:00:00.000Z',
+    title: 'Untitled',
+    waitingReason: null,
+    ...overrides,
+  };
+}
+
+const attention = entry({
+  id: 'attention',
+  kind: 'attention',
+  projectId: 'project-2',
+  projectName: 'northstar/admin',
+  title: 'Sign-in keeps failing',
+  waitingReason: 'The build fails the same way every round.',
+});
+const question = entry({
+  askedBy: 'Storm',
+  description: 'Storm has found two supported approaches.',
+  id: 'question',
+  kind: 'question',
+  title: 'Which release should we support?',
+  waitingReason: 'Should the first release include the previous app too?',
+});
+const newWork = entry({
+  id: 'new',
+  kind: 'new',
+  title: 'Make reports easier to share',
+});
+const review = entry({
+  id: 'review',
+  kind: 'review',
+  title: 'Check the payment reminder change',
+});
+
+function page(
+  entries: readonly QueueEntry[],
+  total = entries.length,
+): QueuePage {
+  return { entries, total };
+}
+
+function memoryStorage(): Pick<Storage, 'getItem' | 'setItem'> {
+  const values = new Map<string, string>();
+  return {
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => void values.set(key, value),
+  };
+}
+
+function createClient(overrides: Partial<QueueClient> = {}): QueueClient {
+  return {
+    answer: async () => undefined,
+    decide: async () => undefined,
+    list: async () => page([attention, question, newWork, review]),
+    ...overrides,
+  };
+}
+
+function renderQueue(
+  client: QueueClient,
+  {
+    onCountChange = () => undefined,
+    onViewWork = () => undefined,
+    pollIntervalMs = 60_000,
+    storage = memoryStorage(),
+  }: {
+    onCountChange?: (count: number) => void;
+    onViewWork?: (projectId: string, itemId: string, tab: string) => void;
+    pollIntervalMs?: number;
+    storage?: Pick<Storage, 'getItem' | 'setItem'>;
+  } = {},
+) {
+  return render(
+    <NavigatorQueue
+      client={client}
+      onCountChange={onCountChange}
+      onViewWork={onViewWork}
+      pollIntervalMs={pollIntervalMs}
+      storage={storage}
+    />,
+  );
+}
+
+function deferred() {
+  let resolve: () => void = () => undefined;
+  let reject: (error: Error) => void = () => undefined;
+  const promise = new Promise<void>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, reject, resolve };
+}
+
+async function openRequest(title: RegExp | string) {
+  const row = await screen.findByRole('button', {
+    name: typeof title === 'string' ? new RegExp(title) : title,
+  });
+  await userEvent.click(row);
+  return row;
+}
+
+test('lists every request under its project with the words of its type', async () => {
+  renderQueue(createClient());
+
+  expect(
+    screen.getByRole('heading', { level: 2, name: 'What needs you' }),
+  ).toBeTruthy();
+  expect(
+    screen.getByText(
+      'Questions and decisions from every project, in one place.',
+    ),
+  ).toBeTruthy();
+  const list = await screen.findByRole('region', { name: 'Navigator queue' });
+  expect(within(list).getByText('Waiting for you')).toBeTruthy();
+  expect(within(list).getByText('4 requests')).toBeTruthy();
+
+  const rows = within(list)
+    .getAllByRole('button')
+    .map((button) => button.textContent);
+  expect(rows).toEqual([
+    '▾northstar/admin',
+    'Needs attentionSign-in keeps failingChoose what happens next',
+    '▾acme/mobile',
+    'QuestionWhich release should we support?Storm needs your answer',
+    'NewMake reports easier to shareNeeds a priority and next step',
+    'ReviewCheck the payment reminder changeReady for your review',
+  ]);
+});
+
+test('shows a loading placeholder, then the reassuring empty state', async () => {
+  let respond: (value: QueuePage) => void = () => undefined;
+  renderQueue(
+    createClient({
+      list: () =>
+        new Promise<QueuePage>((resolve) => {
+          respond = resolve;
+        }),
+    }),
+  );
+
+  expect(screen.getAllByText('Loading…').length).toBeGreaterThan(0);
+  await act(async () => respond(page([])));
+
+  expect(await screen.findByText('You’re all caught up.')).toBeTruthy();
+  expect(
+    screen.getByText('There are no questions or decisions waiting for you.'),
+  ).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Refresh queue' })).toBeTruthy();
+});
+
+test('keeps the shown requests when a refresh fails, and retries', async () => {
+  const user = userEvent.setup();
+  let fail = false;
+  renderQueue(
+    createClient({
+      list: async () => {
+        if (fail) throw new Error('offline');
+        return page([question]);
+      },
+    }),
+    { pollIntervalMs: 20 },
+  );
+
+  await screen.findByRole('button', { name: /Which release/ });
+  fail = true;
+  expect(
+    await screen.findByText(
+      'Cerebra couldn’t refresh what needs you. The requests already shown may be out of date.',
+    ),
+  ).toBeTruthy();
+  expect(screen.getByRole('button', { name: /Which release/ })).toBeTruthy();
+  expect(screen.queryByText('You’re all caught up.')).toBeNull();
+
+  fail = false;
+  await user.click(screen.getByRole('button', { name: 'Try again' }));
+  await waitFor(() =>
+    expect(
+      screen.queryByText(/Cerebra couldn’t refresh what needs you/),
+    ).toBeNull(),
+  );
+});
+
+test('never shows a failed first read as an empty queue', async () => {
+  renderQueue(
+    createClient({
+      list: async () => {
+        throw new Error('offline');
+      },
+    }),
+  );
+
+  expect(
+    await screen.findByText(/Cerebra couldn’t refresh what needs you/),
+  ).toBeTruthy();
+  expect(screen.queryByText('You’re all caught up.')).toBeNull();
+});
+
+test('answers a question, removes it and moves focus to the next request', async () => {
+  const user = userEvent.setup();
+  const sent = deferred();
+  const answers: unknown[] = [];
+  renderQueue(
+    createClient({
+      answer: async (itemId, answer) => {
+        answers.push({ answer, itemId });
+        await sent.promise;
+      },
+    }),
+  );
+
+  await openRequest('Which release');
+  const detail = screen.getByRole('complementary', {
+    name: 'Selected request',
+  });
+  expect(
+    within(detail).getByText('Question from Storm · acme/mobile'),
+  ).toBeTruthy();
+  expect(
+    within(detail).getByRole('heading', {
+      name: 'Which release should we support?',
+    }),
+  ).toBeTruthy();
+  expect(within(detail).getByText('Storm asks')).toBeTruthy();
+  expect(
+    within(detail).getByText(
+      '“Should the first release include the previous app too?”',
+    ),
+  ).toBeTruthy();
+  const answer = within(detail).getByLabelText('Your answer');
+  expect(answer.getAttribute('placeholder')).toBe('Write your answer…');
+  await user.type(answer, 'The current app only.');
+  await user.click(within(detail).getByRole('button', { name: 'Send answer' }));
+
+  const sending = within(detail).getByRole('button', { name: 'Sending…' });
+  expect((sending as HTMLButtonElement).disabled).toBe(true);
+  await act(async () => sent.resolve());
+
+  expect(answers).toEqual([
+    { answer: 'The current app only.', itemId: 'question' },
+  ]);
+  await waitFor(() =>
+    expect(screen.queryByRole('button', { name: /Which release/ })).toBeNull(),
+  );
+  expect(screen.getByText('3 requests')).toBeTruthy();
+  expect(screen.queryByLabelText('Your answer')).toBeNull();
+  await waitFor(() =>
+    expect(document.activeElement).toBe(
+      screen.getByRole('button', { name: /Make reports easier/ }),
+    ),
+  );
+});
+
+test('keeps a failed answer in place with its error', async () => {
+  const user = userEvent.setup();
+  renderQueue(
+    createClient({
+      answer: async () => {
+        throw new Error('offline');
+      },
+    }),
+  );
+
+  await openRequest('Which release');
+  await user.type(screen.getByLabelText('Your answer'), 'Current only.');
+  await user.click(screen.getByRole('button', { name: 'Send answer' }));
+
+  expect(
+    await screen.findByText('Cerebra couldn’t save your answer. Try again.'),
+  ).toBeTruthy();
+  expect(
+    (screen.getByLabelText('Your answer') as HTMLTextAreaElement).value,
+  ).toBe('Current only.');
+});
+
+test('opens the conversation or the work on its project board', async () => {
+  const user = userEvent.setup();
+  const opened: unknown[] = [];
+  renderQueue(createClient(), {
+    onViewWork: (projectId, itemId, tab) =>
+      opened.push({ itemId, projectId, tab }),
+  });
+
+  await openRequest('Which release');
+  await user.click(screen.getByRole('button', { name: 'Open conversation' }));
+  await user.click(screen.getByRole('button', { name: 'View work' }));
+
+  expect(opened).toEqual([
+    { itemId: 'question', projectId: 'project-1', tab: 'discussion' },
+    { itemId: 'question', projectId: 'project-1', tab: 'overview' },
+  ]);
+});
+
+test('reopens a review without a reason', async () => {
+  const user = userEvent.setup();
+  const decisions: QueueDecision[] = [];
+  renderQueue(
+    createClient({
+      decide: async (_itemId, decision) => {
+        decisions.push(decision);
+      },
+    }),
+  );
+
+  await openRequest('Check the payment');
+  const detail = screen.getByRole('complementary', {
+    name: 'Selected request',
+  });
+  expect(within(detail).getByText('Review · acme/mobile')).toBeTruthy();
+  const save = within(detail).getByRole('button', { name: 'Save decision' });
+  expect((save as HTMLButtonElement).disabled).toBe(true);
+  await user.click(
+    within(detail).getByRole('radio', { name: /Reopen this work/ }),
+  );
+  expect(
+    within(detail).getByText('Send it back to be worked on again.'),
+  ).toBeTruthy();
+  expect(within(detail).queryByLabelText('Reason')).toBeNull();
+  await user.click(save);
+
+  expect(decisions).toEqual([{ direction: 'reopen' }]);
+  await waitFor(() =>
+    expect(
+      screen.queryByRole('button', { name: /Check the payment/ }),
+    ).toBeNull(),
+  );
+  // The last request in its project hands focus to the one before it.
+  await waitFor(() =>
+    expect(document.activeElement).toBe(
+      screen.getByRole('button', { name: /Make reports easier/ }),
+    ),
+  );
+});
+
+test('redirects new work with a priority, a next step and a reason', async () => {
+  const user = userEvent.setup();
+  const decisions: QueueDecision[] = [];
+  renderQueue(
+    createClient({
+      decide: async (_itemId, decision) => {
+        decisions.push(decision);
+      },
+      list: async () =>
+        page([
+          { ...newWork, availableRoutes: ['grooming_ready', 'build_ready'] },
+        ]),
+    }),
+  );
+
+  await openRequest('Make reports');
+  const detail = screen.getByRole('complementary', {
+    name: 'Selected request',
+  });
+  expect(within(detail).getByText('New · acme/mobile')).toBeTruthy();
+  expect(
+    within(detail).queryByRole('radio', { name: /Reopen this work/ }),
+  ).toBeNull();
+  await user.click(
+    within(detail).getByRole('radio', { name: /Choose another next step/ }),
+  );
+  expect(
+    within(detail).getByText('Override the current direction with a reason.'),
+  ).toBeTruthy();
+  expect(
+    within(detail).queryByRole('radio', { name: /Send to design/ }),
+  ).toBeNull();
+  await user.click(within(detail).getByRole('radio', { name: 'P1' }));
+  await user.click(
+    within(detail).getByRole('radio', { name: /Send to build/ }),
+  );
+  const save = within(detail).getByRole('button', { name: 'Save decision' });
+  expect((save as HTMLButtonElement).disabled).toBe(true);
+  await user.type(within(detail).getByLabelText('Reason'), 'It is small.');
+  await user.click(save);
+
+  expect(decisions).toEqual([
+    {
+      direction: 'redirect',
+      priority: 'P1',
+      reason: 'It is small.',
+      to: 'build_ready',
+    },
+  ]);
+  expect(await screen.findByText('You’re all caught up.')).toBeTruthy();
+  await waitFor(() =>
+    expect(document.activeElement).toBe(
+      screen.getByRole('heading', { name: 'What needs you' }),
+    ),
+  );
+});
+
+test('keeps a failed decision in place and shows Saving… while it sends', async () => {
+  const user = userEvent.setup();
+  const sent = deferred();
+  renderQueue(createClient({ decide: () => sent.promise }));
+
+  await openRequest('Sign-in keeps failing');
+  const detail = screen.getByRole('complementary', {
+    name: 'Selected request',
+  });
+  expect(
+    within(detail).getByText('Needs attention · northstar/admin'),
+  ).toBeTruthy();
+  expect(
+    within(detail).getByText('The build fails the same way every round.'),
+  ).toBeTruthy();
+  await user.click(
+    within(detail).getByRole('radio', { name: /Choose another next step/ }),
+  );
+  await user.click(
+    within(detail).getByRole('radio', { name: /Send to design/ }),
+  );
+  await user.type(within(detail).getByLabelText('Reason'), 'Needs a design.');
+  await user.click(
+    within(detail).getByRole('button', { name: 'Save decision' }),
+  );
+
+  expect(
+    (
+      within(detail).getByRole('button', {
+        name: 'Saving…',
+      }) as HTMLButtonElement
+    ).disabled,
+  ).toBe(true);
+  await act(async () => sent.reject(new BoardRequestError('down', null)));
+
+  expect(
+    await within(detail).findByText(
+      'Cerebra couldn’t save your decision. Try again.',
+    ),
+  ).toBeTruthy();
+  expect(
+    (within(detail).getByLabelText('Reason') as HTMLTextAreaElement).value,
+  ).toBe('Needs a design.');
+  expect(
+    (
+      within(detail).getByRole('radio', {
+        name: /Choose another next step/,
+      }) as HTMLInputElement
+    ).checked,
+  ).toBe(true);
+});
+
+test('returns focus to the decision when a confirmed cancellation fails', async () => {
+  const user = userEvent.setup();
+  renderQueue(
+    createClient({
+      decide: async () => {
+        throw new Error('offline');
+      },
+    }),
+  );
+
+  await openRequest('Check the payment');
+  await user.click(screen.getByRole('radio', { name: /Cancel this work/ }));
+  await user.type(screen.getByLabelText('Reason'), 'No longer needed.');
+  const save = screen.getByRole('button', { name: 'Save decision' });
+  await user.click(save);
+  await user.click(screen.getByRole('button', { name: 'Cancel work' }));
+
+  expect(
+    await screen.findByText('Cerebra couldn’t save your decision. Try again.'),
+  ).toBeTruthy();
+  expect(screen.queryByRole('dialog')).toBeNull();
+  await waitFor(() => expect(document.activeElement).toBe(save));
+});
+
+test('confirms a cancellation with managed focus', async () => {
+  const user = userEvent.setup();
+  const decisions: QueueDecision[] = [];
+  renderQueue(
+    createClient({
+      decide: async (_itemId, decision) => {
+        decisions.push(decision);
+      },
+    }),
+  );
+
+  await openRequest('Check the payment');
+  await user.click(screen.getByRole('radio', { name: /Cancel this work/ }));
+  expect(screen.getByText('End it with a reason.')).toBeTruthy();
+  await user.type(screen.getByLabelText('Reason'), 'No longer needed.');
+  const save = screen.getByRole('button', { name: 'Save decision' });
+  await user.click(save);
+
+  const dialog = screen.getByRole('dialog', { name: 'Cancel this work?' });
+  expect(
+    within(dialog).getByText('This ends the work and records your reason.'),
+  ).toBeTruthy();
+  await waitFor(() =>
+    expect(document.activeElement).toBe(
+      within(dialog).getByRole('heading', { name: 'Cancel this work?' }),
+    ),
+  );
+
+  await user.keyboard('{Escape}');
+  expect(screen.queryByRole('dialog')).toBeNull();
+  await waitFor(() => expect(document.activeElement).toBe(save));
+  expect(decisions).toEqual([]);
+
+  await user.click(save);
+  await user.click(screen.getByRole('button', { name: 'Keep work' }));
+  expect(screen.queryByRole('dialog')).toBeNull();
+  await waitFor(() => expect(document.activeElement).toBe(save));
+
+  await user.click(save);
+  await user.click(screen.getByRole('button', { name: 'Cancel work' }));
+  expect(decisions).toEqual([
+    { direction: 'cancel', reason: 'No longer needed.' },
+  ]);
+  await waitFor(() =>
+    expect(
+      screen.queryByRole('button', { name: /Check the payment/ }),
+    ).toBeNull(),
+  );
+  expect(screen.queryByRole('dialog')).toBeNull();
+});
+
+test('offers a way back from the full-screen request on a narrow window', async () => {
+  const user = userEvent.setup();
+  renderQueue(createClient());
+
+  const row = await openRequest('Which release');
+  await user.click(
+    screen.getByRole('button', { name: 'Back to what needs you' }),
+  );
+
+  expect(screen.queryByLabelText('Your answer')).toBeNull();
+  await waitFor(() => expect(document.activeElement).toBe(row));
+});
+
+test('announces arrivals without moving the rows until refreshed', async () => {
+  const user = userEvent.setup();
+  const counts: number[] = [];
+  const arrival = entry({ id: 'arrival', title: 'Arrived later' });
+  let listed: readonly QueueEntry[] = [question];
+  renderQueue(
+    createClient({
+      list: async () => page(listed),
+    }),
+    { onCountChange: (count) => counts.push(count), pollIntervalMs: 20 },
+  );
+
+  await screen.findByRole('button', { name: /Which release/ });
+  listed = [question, arrival];
+  expect(await screen.findByText(/1 new request —/)).toBeTruthy();
+  expect(screen.getByText('2 requests')).toBeTruthy();
+  expect(screen.queryByRole('button', { name: /Arrived later/ })).toBeNull();
+  expect(counts.at(-1)).toBe(2);
+
+  listed = [question, arrival, { ...arrival, id: 'arrival-2' }];
+  expect(await screen.findByText(/2 new requests —/)).toBeTruthy();
+
+  const notice = screen.getByRole('status');
+  await user.click(
+    within(notice).getByRole('button', { name: 'Refresh queue' }),
+  );
+  expect(
+    (await screen.findAllByRole('button', { name: /Arrived later/ })).length,
+  ).toBe(2);
+  expect(screen.queryByText(/new request/)).toBeNull();
+});
+
+test('remembers grouping, selection and count after a reload but not a half-written answer', async () => {
+  const user = userEvent.setup();
+  const storage = memoryStorage();
+  const client = createClient();
+  const first = renderQueue(client, { storage });
+
+  const heading = await screen.findByRole('button', {
+    name: 'northstar/admin',
+  });
+  expect(heading.getAttribute('aria-expanded')).toBe('true');
+  await user.click(heading);
+  expect(heading.getAttribute('aria-expanded')).toBe('false');
+  expect(
+    screen.queryByRole('button', { name: /Sign-in keeps failing/ }),
+  ).toBeNull();
+  await openRequest('Which release');
+  await user.type(screen.getByLabelText('Your answer'), 'Half written');
+  first.unmount();
+
+  const counts: number[] = [];
+  let respond: (value: QueuePage) => void = () => undefined;
+  renderQueue(
+    createClient({
+      list: () =>
+        new Promise<QueuePage>((resolve) => {
+          respond = resolve;
+        }),
+    }),
+    { onCountChange: (count) => counts.push(count), storage },
+  );
+  expect(counts[0]).toBe(4);
+  await act(async () => respond(page([attention, question, newWork, review])));
+
+  expect(
+    (
+      await screen.findByRole('button', { name: 'northstar/admin' })
+    ).getAttribute('aria-expanded'),
+  ).toBe('false');
+  expect(
+    screen.queryByRole('button', { name: /Sign-in keeps failing/ }),
+  ).toBeNull();
+  expect(
+    (screen.getByLabelText('Your answer') as HTMLTextAreaElement).value,
+  ).toBe('');
+  expect(
+    screen.getByRole('heading', { name: 'Which release should we support?' }),
+  ).toBeTruthy();
+});
+
+test('shows an inline Loading… while a deliberate refresh keeps the rows', async () => {
+  const user = userEvent.setup();
+  let respond: ((value: QueuePage) => void) | null = null;
+  const list = vi.fn(async () => page([question]));
+  renderQueue(createClient({ list }));
+
+  await openRequest('Which release');
+  list.mockImplementationOnce(
+    () =>
+      new Promise<QueuePage>((resolve) => {
+        respond = resolve;
+      }),
+  );
+  await user.click(screen.getByRole('button', { name: 'Refresh queue' }));
+
+  expect(screen.getByRole('button', { name: /Which release/ })).toBeTruthy();
+  expect(
+    screen.getByRole('heading', { name: 'Which release should we support?' }),
+  ).toBeTruthy();
+  expect(screen.getAllByText('Loading…').length).toBeGreaterThan(0);
+  await act(async () => respond?.(page([question])));
+  await waitFor(() => expect(screen.queryByText('Loading…')).toBeNull());
+});

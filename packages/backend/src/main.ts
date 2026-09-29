@@ -2,6 +2,7 @@ import { createAuthService } from './auth.js';
 import { createBoard } from './board.js';
 import { createDatabase } from './database.js';
 import { migrateToLatest } from './migrations/index.js';
+import { createNavigatorQueue } from './navigator-queue.js';
 import { createProjectRegistrationService } from './project-registration.js';
 import { startServer } from './server.js';
 
@@ -24,6 +25,7 @@ try {
               database,
               masterKey: projectTokenKey,
             }),
+      queue: createNavigatorQueue(database),
       uiDirectory: new URL('../../ui/dist', import.meta.url).pathname,
     },
   );

@@ -21,7 +21,10 @@ import {
   type AuthStatus,
 } from './auth';
 import { ProjectRegistration } from './project-registration';
+import type { BoardClient } from './board';
+import { NavigatorQueue, type WorkTab } from './navigator-queue';
 import { ProjectBoard } from './project-board';
+import type { QueueClient } from './queue';
 
 export interface ThemeMediaQuery {
   readonly matches: boolean;
@@ -42,6 +45,8 @@ interface AppProps {
   storage?: ThemeStorage;
   instanceClient?: InstanceClient;
   authClient?: AuthClient;
+  boardClient?: BoardClient;
+  queueClient?: QueueClient;
 }
 
 const preferences: ThemePreference[] = ['light', 'dark', 'system'];
@@ -80,6 +85,8 @@ export function App({
   storage = getBrowserStorage(),
   instanceClient = browserInstanceClient,
   authClient = browserAuthClient,
+  boardClient,
+  queueClient,
 }: AppProps): ReactNode {
   const [preference, setPreference] = useState<ThemePreference>(() =>
     getInitialPreference(storage),
@@ -105,6 +112,11 @@ export function App({
       return null;
     }
   });
+  const [queueCount, setQueueCount] = useState(0);
+  const [boardRequest, setBoardRequest] = useState<{
+    readonly id: string;
+    readonly tab: WorkTab;
+  } | null>(null);
   const updateButton = useRef<HTMLButtonElement>(null);
   const items = useRef<Record<ThemePreference, HTMLDivElement | null>>({
     light: null,
@@ -126,6 +138,10 @@ export function App({
   useEffect(() => {
     document.documentElement.dataset.theme = effectiveTheme;
   }, [effectiveTheme]);
+
+  useEffect(() => {
+    document.title = queueCount > 0 ? `(${queueCount}) Cerebra` : 'Cerebra';
+  }, [queueCount]);
 
   useEffect(() => {
     void authClient
@@ -421,6 +437,21 @@ export function App({
         <span className="text-lg font-bold tracking-tight sm:text-xl">
           Cerebra
         </span>
+        <a
+          className="mr-2 ml-auto flex items-center gap-2 rounded-lg px-2 py-2 text-sm font-bold outline-none focus-visible:ring-3 focus-visible:ring-[var(--focus)] sm:text-base"
+          href="#navigator-queue-heading"
+          onClick={(event) => {
+            event.preventDefault();
+            document.getElementById('navigator-queue-heading')?.focus();
+          }}
+        >
+          Navigator queue{' '}
+          {queueCount > 0 ? (
+            <span className="inline-grid min-w-6 place-items-center rounded-full bg-[var(--accent)] px-2 py-0.5 text-xs text-white dark:text-slate-950">
+              {queueCount}
+            </span>
+          ) : null}
+        </a>
         <DropdownMenu.Root
           onOpenChange={(open) => {
             setMenuOpen(open);
@@ -528,9 +559,27 @@ export function App({
         <p className="mt-1 text-[var(--muted)]">
           Your private workspace is available only on this computer.
         </p>
+        <div className="mt-10">
+          <NavigatorQueue
+            client={queueClient}
+            onCountChange={setQueueCount}
+            onViewWork={(nextProject, id, tab) => {
+              setProjectId(nextProject);
+              setBoardRequest({ id, tab });
+              try {
+                storage.setItem('cerebra.project', nextProject);
+              } catch {
+                // The board still opens; it just isn't remembered.
+              }
+            }}
+            storage={storage}
+          />
+        </div>
         {projectId !== null ? (
           <ProjectBoard
+            boardClient={boardClient}
             key={projectId}
+            openRequest={boardRequest}
             projectId={projectId}
             storage={storage}
           />

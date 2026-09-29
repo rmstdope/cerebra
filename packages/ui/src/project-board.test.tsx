@@ -626,3 +626,47 @@ test('loads more with the filters the list was loaded with', async () => {
   await waitFor(() => expect(more.length).toBe(1));
   expect(more[0]?.search).toBe('');
 });
+
+test('opens an item on the tab another view asked for', async () => {
+  const comments: string[] = [];
+  const { rerender } = render(
+    <ProjectBoard
+      boardClient={createClient({
+        comments: async (itemId) => {
+          comments.push(itemId);
+          return [];
+        },
+      })}
+      openRequest={{ id: 'item-1', tab: 'discussion' }}
+      projectId="project-1"
+      storage={memoryStorage()}
+    />,
+  );
+
+  expect(
+    await screen.findByRole('heading', { name: 'Show the board' }),
+  ).toBeTruthy();
+  expect(
+    screen
+      .getByRole('tab', { name: 'Discussion' })
+      .getAttribute('aria-selected'),
+  ).toBe('true');
+  expect(await screen.findByText('No discussion yet.')).toBeTruthy();
+  expect(comments).toEqual(['item-1']);
+
+  rerender(
+    <ProjectBoard
+      boardClient={createClient()}
+      openRequest={{ id: 'item-1', tab: 'overview' }}
+      projectId="project-1"
+      storage={memoryStorage()}
+    />,
+  );
+  await waitFor(() =>
+    expect(
+      screen
+        .getByRole('tab', { name: 'Overview' })
+        .getAttribute('aria-selected'),
+    ).toBe('true'),
+  );
+});
