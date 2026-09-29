@@ -1,8 +1,13 @@
+import {
+  agentTypesDirectory,
+  readAgentTypeDefinitions,
+} from './agent-types.js';
 import { createAuthService } from './auth.js';
 import { createBoard } from './board.js';
 import { createEnvelopeCipher } from './credential-cipher.js';
 import { createCredentialService } from './credentials.js';
 import { createDatabase } from './database.js';
+import { createFleet } from './fleet.js';
 import { migrateToLatest } from './migrations/index.js';
 import { createNavigatorQueue } from './navigator-queue.js';
 import { createProjectRegistrationService } from './project-registration.js';
@@ -14,6 +19,11 @@ const projectTokenKey = process.env.CEREBRA_PROJECT_TOKEN_KEY;
 
 try {
   await migrateToLatest(database);
+  const fleet = createFleet(database);
+  await fleet.seedAgentTypes(
+    await readAgentTypeDefinitions(agentTypesDirectory),
+  );
+  await fleet.createMissingFleets();
   const server = await startServer(
     { host: '0.0.0.0', port },
     {
@@ -26,6 +36,7 @@ try {
               cipher: createEnvelopeCipher(projectTokenKey),
               database,
             }),
+      fleet,
       projects:
         projectTokenKey === undefined
           ? undefined

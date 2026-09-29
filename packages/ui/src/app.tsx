@@ -24,6 +24,8 @@ import { ProjectRegistration } from './project-registration';
 import type { BoardClient } from './board';
 import { NavigatorQueue, type WorkTab } from './navigator-queue';
 import { ProjectBoard } from './project-board';
+import type { FleetClient } from './fleet';
+import { FleetPage } from './fleet-page';
 import type { QueueClient } from './queue';
 import { AgentCredentialsPage, AgentTypesList } from './agent-credentials';
 import type { CredentialClient } from './credentials';
@@ -49,6 +51,7 @@ interface AppProps {
   instanceClient?: InstanceClient;
   authClient?: AuthClient;
   boardClient?: BoardClient;
+  fleetClient?: FleetClient;
   queueClient?: QueueClient;
   credentialClient?: CredentialClient;
 }
@@ -106,6 +109,7 @@ export function App({
   instanceClient = browserInstanceClient,
   authClient = browserAuthClient,
   boardClient,
+  fleetClient,
   queueClient,
   credentialClient,
 }: AppProps): ReactNode {
@@ -138,6 +142,8 @@ export function App({
     readonly id: string;
     readonly tab: WorkTab;
   } | null>(null);
+  const [projectView, setProjectView] = useState<'board' | 'fleet'>('board');
+  const [returnToFleet, setReturnToFleet] = useState(false);
   const [hash, setHash] = useState(() => window.location.hash);
   const focusQueue = useRef(false);
   const settings = settingsRoute(hash);
@@ -670,6 +676,8 @@ export function App({
               onCountChange={setQueueCount}
               onViewWork={(nextProject, id, tab) => {
                 setProjectId(nextProject);
+                setProjectView('board');
+                setReturnToFleet(false);
                 setBoardRequest({ id, tab });
                 try {
                   storage.setItem('cerebra.project', nextProject);
@@ -681,13 +689,66 @@ export function App({
             />
           </div>
           {projectId !== null ? (
-            <ProjectBoard
-              boardClient={boardClient}
-              key={projectId}
-              openRequest={boardRequest}
-              projectId={projectId}
-              storage={storage}
-            />
+            <>
+              <nav aria-label="Project" className="mt-7 flex gap-1">
+                {(
+                  [
+                    ['board', 'Board'],
+                    ['fleet', 'Fleet'],
+                  ] as const
+                ).map(([view, label]) => (
+                  <button
+                    aria-current={projectView === view ? 'page' : undefined}
+                    className={`rounded-lg px-3.5 py-2 text-sm outline-none focus-visible:ring-3 focus-visible:ring-[var(--focus)] ${
+                      projectView === view
+                        ? 'bg-[var(--accent-muted)] font-bold text-[var(--accent)]'
+                        : 'text-[var(--muted)]'
+                    }`}
+                    key={view}
+                    onClick={() => {
+                      setProjectView(view);
+                      setReturnToFleet(false);
+                      setBoardRequest(null);
+                    }}
+                    type="button"
+                  >
+                    {label}
+                  </button>
+                ))}
+              </nav>
+              {projectView === 'fleet' ? (
+                <div className="mt-5">
+                  <FleetPage
+                    client={fleetClient}
+                    key={projectId}
+                    onViewWork={(id) => {
+                      setBoardRequest({ id, tab: 'overview' });
+                      setReturnToFleet(true);
+                      setProjectView('board');
+                    }}
+                    projectId={projectId}
+                    storage={storage}
+                  />
+                </div>
+              ) : (
+                <ProjectBoard
+                  boardClient={boardClient}
+                  key={projectId}
+                  onClose={
+                    returnToFleet
+                      ? () => {
+                          setReturnToFleet(false);
+                          setBoardRequest(null);
+                          setProjectView('fleet');
+                        }
+                      : undefined
+                  }
+                  openRequest={boardRequest}
+                  projectId={projectId}
+                  storage={storage}
+                />
+              )}
+            </>
           ) : (
             <div className="mt-7">
               <ProjectRegistration

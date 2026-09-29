@@ -25,6 +25,17 @@ import {
   type CredentialScope,
   type CredentialService,
 } from './credentials.js';
+import {
+  AgentHoldsWorkError,
+  AgentNotFoundError,
+  AgentTypeNotFoundError,
+  DuplicateAgentNameError,
+  InvalidAgentChangeError,
+  InvalidAgentNameError,
+  InvalidRoleSettingsError,
+  type Fleet,
+  type RunControl,
+} from './fleet.js';
 import { createInstanceService, type InstanceService } from './instance.js';
 import { workItemStates, type Priority } from './lifecycle.js';
 import type {
@@ -44,9 +55,12 @@ export interface ServerOptions {
   readonly auth: AuthService;
   readonly board?: Board;
   readonly credentials?: CredentialService;
+  readonly fleet?: Fleet;
   readonly instance?: InstanceService;
   readonly projects?: ProjectRegistration;
   readonly queue?: NavigatorQueue;
+  /** Absent until run supervision exists; starting or stopping then answers 503. */
+  readonly runs?: RunControl;
   readonly uiDirectory?: string;
 }
 
@@ -241,9 +255,11 @@ export const createServer = async ({
   auth,
   board,
   credentials,
+  fleet,
   instance = createInstanceService(),
   projects,
   queue,
+  runs,
   uiDirectory = process.env.CEREBRA_UI_DIR,
 }: ServerOptions): Promise<FastifyInstance> => {
   const server = Fastify();
@@ -696,6 +712,106 @@ export const createServer = async ({
     }),
   );
 
+  const fleetRoute =
+    (
+      handler: (
+        fleet: Fleet,
+        params: Record<string, string>,
+        request: FastifyRequest,
+        reply: FastifyReply,
+      ) => Promise<unknown>,
+    ) =>
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      if (fleet === undefined) {
+        return reply.status(503).send({ error: 'The fleet is unavailable.' });
+      }
+      try {
+        return await handler(
+          fleet,
+          request.params as Record<string, string>,
+          request,
+          reply,
+        );
+      } catch (error) {
+        return fleetError(reply, error);
+      }
+    };
+
+  server.get(
+    '/api/projects/:projectId/fleet',
+    fleetRoute(async (fleet, { projectId }) => fleet.read(projectId)),
+  );
+
+  server.post(
+    '/api/projects/:projectId/agents',
+    fleetRoute(async (fleet, { projectId }, request, reply) => {
+      const body = objectBody(request.body);
+      if (body === null || typeof body.typeId !== 'string') {
+        return reply.status(400).send({ error: 'Choose a role.' });
+      }
+      const person = await fleet.addAgent(projectId, {
+        name: body.name,
+        typeId: body.typeId,
+      });
+      return reply.status(201).send(person);
+    }),
+  );
+
+  server.patch(
+    '/api/agents/:agentId',
+    fleetRoute(async (fleet, { agentId }, request, reply) => {
+      const body = objectBody(request.body);
+      if (body === null) {
+        return reply.status(400).send({ error: 'Nothing to change.' });
+      }
+      return fleet.updateAgent(agentId, {
+        ...(body.enabled === undefined ? {} : { enabled: body.enabled }),
+        ...(body.name === undefined ? {} : { name: body.name }),
+      });
+    }),
+  );
+
+  server.delete(
+    '/api/agents/:agentId',
+    fleetRoute(async (fleet, { agentId }, _request, reply) => {
+      await fleet.removeAgent(agentId);
+      return reply.status(204).send();
+    }),
+  );
+
+  server.put(
+    '/api/projects/:projectId/roles/:typeId',
+    fleetRoute(async (fleet, { projectId, typeId }, request, reply) => {
+      const body = objectBody(request.body);
+      if (body === null) {
+        return reply.status(400).send({ error: 'Choose the settings.' });
+      }
+      return fleet.saveRoleSettings(projectId, typeId, {
+        model: body.model,
+        startMode: body.startMode,
+      });
+    }),
+  );
+
+  for (const action of ['start', 'stop'] as const) {
+    server.post(
+      `/api/agents/:agentId/${action}`,
+      async (request: FastifyRequest, reply: FastifyReply) => {
+        if (runs === undefined) {
+          return reply
+            .status(503)
+            .send({ error: 'Cerebra can’t run agents yet.' });
+        }
+        try {
+          await runs[action]((request.params as { agentId: string }).agentId);
+          return reply.status(202).send({ ok: true });
+        } catch (error) {
+          return fleetError(reply, error);
+        }
+      },
+    );
+  }
+
   if (uiDirectory !== undefined) {
     server.setNotFoundHandler((request, reply) => {
       if (request.method === 'GET' && !request.url.startsWith('/api/')) {
@@ -718,6 +834,32 @@ export const startServer = async (
 
   return server;
 };
+
+function fleetError(reply: FastifyReply, error: unknown): FastifyReply {
+  if (
+    error instanceof ProjectNotFoundError ||
+    error instanceof AgentNotFoundError ||
+    error instanceof AgentTypeNotFoundError
+  ) {
+    return reply.status(404).send({ error: error.message });
+  }
+  if (
+    error instanceof InvalidAgentNameError ||
+    error instanceof InvalidAgentChangeError ||
+    error instanceof InvalidRoleSettingsError
+  ) {
+    return reply.status(400).send({ error: error.message });
+  }
+  if (error instanceof DuplicateAgentNameError) {
+    return reply
+      .status(409)
+      .send({ code: 'duplicate_name', error: error.message });
+  }
+  if (error instanceof AgentHoldsWorkError) {
+    return reply.status(409).send({ code: 'holds_work', error: error.message });
+  }
+  throw error;
+}
 
 function getSessionToken(cookieHeader: string | undefined): string | undefined {
   if (cookieHeader === undefined) {

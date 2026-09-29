@@ -140,12 +140,15 @@ function isFiltered(filters: BoardFilters): boolean {
 export function ProjectBoard({
   arrivalsIntervalMs = 30_000,
   boardClient = browserBoardClient,
+  onClose,
   openRequest = null,
   projectId,
   storage: storageOverride,
 }: {
   readonly arrivalsIntervalMs?: number;
   readonly boardClient?: BoardClient;
+  /** Called when an open item or draft is closed, so a caller can return to where it came from. */
+  readonly onClose?: () => void;
   /** Opens an item from elsewhere, such as the navigator queue; a new object reopens it. */
   readonly openRequest?: {
     readonly id: string;
@@ -336,6 +339,7 @@ export function ProjectBoard({
     shownItem.current = null;
     setPanel({ kind: 'none' });
     if (id !== null) setFocusTarget({ kind: 'row', id });
+    onClose?.();
   };
 
   const chooseTab = (next: Tab) => {

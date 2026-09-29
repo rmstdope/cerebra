@@ -301,8 +301,8 @@ the ones the lifecycle depends on are the implementer's.
 | Table | Holds |
 |---|---|
 | `users`, `sessions` | The navigator (one row in v1) and their login sessions. |
-| `projects` | Remote, default branch, settings (§3 of the spec), involvement preset, limits, pause. |
-| `agent_types`, `agent_type_overrides` | Instance defaults and per-project overrides (only the fields changed). |
+| `projects` | Remote, default branch, settings (§3 of the spec), involvement preset, limits, pause, and whether its default fleet has been created (so an emptied fleet is never refilled). |
+| `agent_types`, `agent_type_overrides` | Instance defaults, seeded on start from `packages/backend/agent-types/` without overwriting a stored type, and per-project overrides (only the fields changed). |
 | `agents` | Named agents: project, type, name, enabled. |
 | `items` | `key`, `title`, `description`, `type`, `priority`, `state`, `holder_run_id`, `waiting_reason`, `waiting_kind`, `return_state`, `involvement`, `attempts`, `rounds`, `filed_by`, `source`, `parent_id`. The constraints of §4 live here. |
 | `item_dependencies` | `(item, depends_on, kind)`. |

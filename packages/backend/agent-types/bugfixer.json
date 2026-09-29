@@ -1,0 +1,39 @@
+{
+  "backend": "claude",
+  "defaultCount": 1,
+  "effort": "high",
+  "idleTimeoutSeconds": 1800,
+  "image": "cerebro-agent",
+  "interactive": false,
+  "model": "opus",
+  "name": "bugfixer",
+  "names": ["Bishop", "Gambit"],
+  "network": "unrestricted",
+  "resources": {
+    "cpus": 2,
+    "memoryMb": 4096
+  },
+  "role": "bugfixer",
+  "secrets": ["CLAUDE_CODE_OAUTH_TOKEN"],
+  "serves": {
+    "states": ["build_ready"],
+    "types": ["bug"]
+  },
+  "skills": [],
+  "tools": [
+    "get_item",
+    "list_items",
+    "comment",
+    "transition",
+    "wait_for_navigator",
+    "submit_plan"
+  ],
+  "triggers": [
+    {
+      "kind": "state"
+    },
+    {
+      "kind": "navigator"
+    }
+  ]
+}
