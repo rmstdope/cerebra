@@ -264,17 +264,20 @@ export function NavigatorQueue({
     setConfirming(false);
     setFocusTarget({ kind: 'save' });
   };
-  const escape = useRef<() => void>(() => undefined);
+  const escape = useRef<() => boolean>(() => false);
   escape.current = () => {
-    if (confirming) closeDialog();
+    if (!confirming) return false;
+    closeDialog();
+    return true;
   };
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented) return;
-      escape.current();
+      if (escape.current()) event.preventDefault();
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    // Capture runs before the board's own Escape handler, which then leaves it alone.
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
   }, []);
 
   const resetDetail = () => {
@@ -373,6 +376,7 @@ export function NavigatorQueue({
       }
       complete(id);
     } catch (error) {
+      if (confirming) setFocusTarget({ kind: 'save' });
       setConfirming(false);
       setActionError(
         error instanceof BoardRequestError && error.code === 'route_unavailable'

@@ -472,6 +472,30 @@ test('keeps a failed decision in place and shows Saving… while it sends', asyn
   ).toBe(true);
 });
 
+test('returns focus to the decision when a confirmed cancellation fails', async () => {
+  const user = userEvent.setup();
+  renderQueue(
+    createClient({
+      decide: async () => {
+        throw new Error('offline');
+      },
+    }),
+  );
+
+  await openRequest('Check the payment');
+  await user.click(screen.getByRole('radio', { name: /Cancel this work/ }));
+  await user.type(screen.getByLabelText('Reason'), 'No longer needed.');
+  const save = screen.getByRole('button', { name: 'Save decision' });
+  await user.click(save);
+  await user.click(screen.getByRole('button', { name: 'Cancel work' }));
+
+  expect(
+    await screen.findByText('Cerebra couldn’t save your decision. Try again.'),
+  ).toBeTruthy();
+  expect(screen.queryByRole('dialog')).toBeNull();
+  await waitFor(() => expect(document.activeElement).toBe(save));
+});
+
 test('confirms a cancellation with managed focus', async () => {
   const user = userEvent.setup();
   const decisions: QueueDecision[] = [];

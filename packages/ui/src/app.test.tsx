@@ -326,8 +326,21 @@ describe('App', () => {
             title: 'Which release should we support?',
             waitingReason: 'Current app only?',
           },
+          {
+            askedBy: null,
+            availableRoutes: ['build_ready'],
+            description: '',
+            id: 'item-2',
+            kind: 'attention',
+            priority: 'P2',
+            projectId: 'project-1',
+            projectName: 'acme/mobile',
+            since: '2026-09-29T00:00:00.000Z',
+            title: 'Check the payment flow',
+            waitingReason: 'The build failed twice.',
+          },
         ],
-        total: 1,
+        total: 2,
       }),
     };
 
@@ -354,9 +367,9 @@ describe('App', () => {
     );
 
     const queueLink = await screen.findByRole('link', {
-      name: 'Navigator queue 1',
+      name: 'Navigator queue 2',
     });
-    expect(document.title).toBe('(1) Cerebra');
+    expect(document.title).toBe('(2) Cerebra');
     const headings = screen
       .getAllByRole('heading', { level: 2 })
       .map((heading) => heading.textContent);
@@ -381,6 +394,34 @@ describe('App', () => {
         name: 'Discussion',
         selected: true,
       }),
+    ).toBeTruthy();
+
+    await user.click(
+      screen.getByRole('button', { name: /Check the payment flow/ }),
+    );
+    const request = screen.getByRole('complementary', {
+      name: 'Selected request',
+    });
+    await user.click(
+      within(request).getByRole('radio', { name: /Cancel this work/ }),
+    );
+    await user.type(within(request).getByLabelText('Reason'), 'Not needed.');
+    await user.click(
+      within(request).getByRole('button', { name: 'Save decision' }),
+    );
+    expect(
+      screen.getByRole('dialog', { name: 'Cancel this work?' }),
+    ).toBeTruthy();
+    await user.keyboard('{Escape}');
+
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        within(request).getByRole('button', { name: 'Save decision' }),
+      ),
+    );
+    expect(
+      within(board).getByRole('tab', { name: 'Discussion', selected: true }),
     ).toBeTruthy();
   });
 });
