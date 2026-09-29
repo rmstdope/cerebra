@@ -40,6 +40,7 @@ import {
 import type { AutomaticStartStatus, Dispatcher } from './dispatcher.js';
 import { createInstanceService, type InstanceService } from './instance.js';
 import { LimitInputError, type StartSettings } from './start-settings.js';
+import { workItemTypes, type WorkItemType } from './database.js';
 import { workItemStates, type Priority } from './lifecycle.js';
 import type {
   NavigatorQueue,
@@ -197,17 +198,29 @@ function boardQuery(value: unknown): BoardQuery | null {
   ) as BoardQuery;
 }
 
-function workItemBody(
-  value: unknown,
-): { readonly description: string; readonly title: string } | null {
+type WorkItemBody =
+  | {
+      readonly description: string;
+      readonly title: string;
+      readonly type?: WorkItemType;
+    }
+  | 'invalid_type'
+  | null;
+
+function workItemBody(value: unknown): WorkItemBody {
   const body = objectBody(value);
   if (body === null || typeof body.title !== 'string') {
     return null;
   }
-  return {
-    description: typeof body.description === 'string' ? body.description : '',
-    title: body.title,
-  };
+  const description =
+    typeof body.description === 'string' ? body.description : '';
+  if (body.type === undefined) {
+    return { description, title: body.title };
+  }
+  const type = workItemTypes.find((candidate) => candidate === body.type);
+  return type === undefined
+    ? 'invalid_type'
+    : { description, title: body.title, type };
 }
 
 const priorities: readonly string[] = ['P0', 'P1', 'P2', 'P3'];
@@ -561,6 +574,9 @@ export const createServer = async ({
     boardRoute<{ projectId: string }>(
       async (board, { projectId }, request, reply) => {
         const input = workItemBody(request.body);
+        if (input === 'invalid_type') {
+          return reply.status(400).send({ error: 'Choose a valid type.' });
+        }
         if (input === null || input.title.trim().length === 0) {
           return reply
             .status(400)
