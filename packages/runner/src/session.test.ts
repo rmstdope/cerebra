@@ -14,8 +14,9 @@ import {
   runnerProtocol,
   type AgentEvent,
   type DownMessage,
+  type EventMessage,
+  type FilesMessage,
   type StartMessage,
-  type UpMessage,
 } from '@cerebra/shared';
 import { afterEach, describe, expect, test } from 'vitest';
 import { WebSocketServer, type WebSocket } from 'ws';
@@ -117,9 +118,11 @@ interface Gateway {
 
 interface Runner {
   readonly socket: WebSocket;
-  readonly received: UpMessage[];
+  readonly received: EventMessage[];
   send(message: DownMessage | string): void;
-  waitFor(predicate: (event: AgentEvent) => boolean): Promise<UpMessage>;
+  waitFor(predicate: (event: AgentEvent) => boolean): Promise<EventMessage>;
+  /** Resolves with the next answer to a `fetch_files`. */
+  files(): Promise<FilesMessage>;
   closed: Promise<void>;
 }
 
@@ -147,13 +150,21 @@ async function gateway(): Promise<Gateway> {
   const waiting: ((runner: Runner) => void)[] = [];
   server.on('connection', (socket, request) => {
     requests.push(request);
-    const received: UpMessage[] = [];
+    const received: EventMessage[] = [];
+    const answers: FilesMessage[] = [];
+    const answerWaiters: ((message: FilesMessage) => void)[] = [];
     const waiters: {
       predicate: (event: AgentEvent) => boolean;
-      resolve: (message: UpMessage) => void;
+      resolve: (message: EventMessage) => void;
     }[] = [];
     socket.on('message', (data) => {
       const message = parseUpMessage(String(data));
+      if (message.type === 'files') {
+        const waiter = answerWaiters.shift();
+        if (waiter === undefined) answers.push(message);
+        else waiter(message);
+        return;
+      }
       received.push(message);
       for (const waiter of [...waiters]) {
         if (waiter.predicate(message.event)) {
@@ -174,6 +185,12 @@ async function gateway(): Promise<Gateway> {
         return seen
           ? Promise.resolve(seen)
           : new Promise((resolve) => waiters.push({ predicate, resolve }));
+      },
+      files: () => {
+        const answer = answers.shift();
+        return answer
+          ? Promise.resolve(answer)
+          : new Promise((resolve) => answerWaiters.push(resolve));
       },
       closed: new Promise((resolve) => socket.once('close', () => resolve())),
     };
@@ -423,6 +440,65 @@ describe('a runner session', () => {
       error:
         'Skill absent is not in the checkout at .cerebro/skills/absent/SKILL.md',
     });
+  });
+
+  test('answers fetch_files with the checkout’s files, without numbering them as events', async () => {
+    const gate = await gateway();
+    const checkout = await directory();
+    await writeFile(join(checkout, 'mockup.html'), '<p>hi</p>');
+    const connecting = gate.connection();
+    const ending = session(gate.url, echoingClaude(), {
+      checkout,
+      configDir: await directory(),
+    });
+    const runner = await connecting;
+    runner.send(start);
+    runner.send({
+      type: 'fetch_files',
+      requestId: 'r1',
+      paths: ['mockup.html'],
+    });
+
+    await expect(runner.files()).resolves.toEqual({
+      type: 'files',
+      requestId: 'r1',
+      files: [
+        {
+          path: 'mockup.html',
+          contentType: 'text/html; charset=utf-8',
+          content: Buffer.from('<p>hi</p>').toString('base64'),
+        },
+      ],
+    });
+    await runner.waitFor(isResult('turn'));
+    runner.send({ type: 'stop' });
+    await expect(ending).resolves.toBe('stopped');
+  });
+
+  test('answers a path outside the checkout with an error, and keeps running', async () => {
+    const gate = await gateway();
+    const connecting = gate.connection();
+    const ending = session(gate.url, echoingClaude());
+    const runner = await connecting;
+    runner.send(start);
+    await runner.waitFor(isResult('turn'));
+    runner.send({
+      type: 'fetch_files',
+      requestId: 'r2',
+      paths: ['../../etc/passwd'],
+    });
+
+    await expect(runner.files()).resolves.toEqual({
+      type: 'files',
+      requestId: 'r2',
+      error: 'The path ../../etc/passwd is outside the checkout.',
+    });
+    runner.send({ type: 'user_message', text: 'Still here?' });
+    await runner.waitFor(
+      (event) => event.kind === 'message' && event.text === 'echo: Still here?',
+    );
+    runner.send({ type: 'stop' });
+    await expect(ending).resolves.toBe('stopped');
   });
 
   test('fails when it cannot reach the gateway', async () => {
