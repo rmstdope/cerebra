@@ -40,3 +40,19 @@ PR's.
 **Prevent by.** Raise Testing Library's `asyncUtilTimeout` in `packages/ui/src/test-setup.ts`
 (`configure({ asyncUtilTimeout: 10_000 })`), as `vitest.config.mts` already did for `testTimeout`.
 **Seen before.** cr-r0m, cr-d8m.3.
+
+## Two supervisor tests failed in CI and passed on a rerun of the same commit
+
+**What happened.** CI on 338ef3c (run 36608082196) failed two tests in
+`packages/backend/src/supervisor.test.ts`. "records events in order, follows the runner's status
+and tells subscribers" got `expected 'starting' to be 'active'`. "a failed result or a runner that
+goes away without one fails the run" did not reach `state: 'failed'`. Nothing in `supervisor.ts`
+or its test changed since the last green CI on 79f41f8. The file passed 3/3 locally, and
+`gh run rerun --failed` on the same commit passed. main's own CI (run 36606757267) failed the same
+hour on an unrelated UI test.
+**Why.** Not established. Both assertions read a run's state after the fake runner's events,
+which looks timing-dependent on a busy runner.
+**Cost.** One extra CI cycle (about 3 minutes) and the time to rule out the merge.
+**Prevent by.** Have those two assertions in `supervisor.test.ts` wait for the state
+(`await vi.waitFor(...)`) rather than read it once after the events.
+**Seen before.** cr-d8m.3 (a test outside the diff failed once in the gate and passed alone).
