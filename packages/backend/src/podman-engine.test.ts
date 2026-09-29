@@ -275,6 +275,46 @@ describe('inspect', () => {
   });
 });
 
+describe("listing an agent's containers", () => {
+  test("asks for every container carrying the agent's label", async () => {
+    reply = json(200, [{ Id: 'abc' }, { Id: 'def' }]);
+
+    expect(await engine().containersOf('agent-1')).toEqual(['abc', 'def']);
+    const url = new URL(requests[0]?.url ?? '', 'http://podman');
+    expect(requests[0]?.method).toBe('GET');
+    expect(url.pathname).toBe('/v1.44/containers/json');
+    expect(url.searchParams.get('all')).toBe('true');
+    expect(JSON.parse(url.searchParams.get('filters') ?? '')).toEqual({
+      label: ['cerebra.agent=agent-1'],
+    });
+  });
+
+  test('an agent with no containers has an empty list', async () => {
+    reply = json(200, []);
+
+    expect(await engine().containersOf('agent-1')).toEqual([]);
+  });
+
+  test.each([
+    ['a server error', json(500, { message: 'database is locked' })],
+    [
+      'a malformed body',
+      (response: ServerResponse) => {
+        response.writeHead(200, { 'Content-Type': 'application/json' });
+        response.end('{not json');
+      },
+    ],
+    ['an entry without an id', json(200, [{ Id: 'abc' }, { Names: ['/x'] }])],
+    ['a body that is not a list', json(200, { Id: 'abc' })],
+  ])('%s is an error, never an empty list', async (_case, answer) => {
+    reply = answer;
+
+    const error = await failure(engine().containersOf('agent-1'));
+
+    expect(error).toBeInstanceOf(EngineError);
+  });
+});
+
 describe('an unavailable engine', () => {
   test('an unreachable socket is an error naming it', async () => {
     const podman = createPodmanEngine({

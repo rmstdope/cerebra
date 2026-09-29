@@ -13,7 +13,7 @@ import type { Kysely } from 'kysely';
 import type { AgentRole } from './agent-types.js';
 import type { CredentialService } from './credentials.js';
 import type { Database, RunState } from './database.js';
-import type { ContainerEngine } from './engine.js';
+import { ContainerNotFoundError, type ContainerEngine } from './engine.js';
 import { AgentNotFoundError, type RunControl } from './fleet.js';
 import {
   createRunToken,
@@ -272,6 +272,28 @@ export function createSupervisor({
     return agent;
   }
 
+  /**
+   * Removes every container an earlier run of the agent left behind, so its home and CLI state
+   * are never mounted by two containers (D17); throws if any may still be there.
+   */
+  async function clearEarlierContainers(agentId: string): Promise<void> {
+    try {
+      for (const id of await engine.containersOf(agentId)) {
+        try {
+          await engine.stop(id);
+          await engine.remove(id);
+        } catch (error) {
+          if (!(error instanceof ContainerNotFoundError)) throw error;
+        }
+      }
+    } catch (error) {
+      throw new Error(
+        `An earlier container of this agent is still there and could not be removed: ${failureText(error)}`,
+        { cause: error },
+      );
+    }
+  }
+
   async function launch(
     run: RunRecord,
     agentId: string,
@@ -299,6 +321,8 @@ export function createSupervisor({
       throw new Error('The agent type names no image.');
     }
     await prepareDirectories(run.id, agentId);
+    if (!live.has(run.id)) return;
+    await clearEarlierContainers(agentId);
     if (!live.has(run.id)) return;
     const container = await engine.create({
       agentId,

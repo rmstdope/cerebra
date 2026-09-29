@@ -1,5 +1,9 @@
 import type { DownMessage, UpMessage } from '@cerebra/shared';
 import type { Kysely } from 'kysely';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { describe, expect, test } from 'vitest';
 
 import type { Database } from './database.js';
@@ -10,6 +14,7 @@ import { createRunStore, type RunRecord } from './runs.js';
 import {
   AgentUnavailableError,
   createSupervisor,
+  directoryPreparer,
   RunEndedError,
   RunNotFoundError,
   RunStartError,
@@ -125,6 +130,29 @@ async function settle(): Promise<void> {
 }
 
 const usage = { costUsd: 0.25, models: {} };
+
+/** A container an earlier run of the agent left behind, as a crash or a failed removal would. */
+async function leftover(engine: FakeEngine, agentId: string, runId: string) {
+  const { id } = await engine.create({
+    agentId,
+    environment: {},
+    image: 'cerebro-agent',
+    resources: { cpus: 1, memoryBytes: 1024 },
+    runId,
+  });
+  await engine.start(id);
+  return id;
+}
+
+/** The volume subpath mounted at each target of a run's container. */
+function mountsOf(engine: FakeEngine, runId: string): Record<string, string> {
+  return Object.fromEntries(
+    (containerOf(engine, runId)?.body.HostConfig.Mounts ?? []).map((mount) => [
+      mount.Target,
+      mount.VolumeOptions.Subpath,
+    ]),
+  );
+}
 
 describe('the run supervisor', { concurrent: false }, () => {
   test('starts an assistant in its own container with the token and gateway, never logging a secret', async () => {
@@ -531,5 +559,159 @@ describe('the run supervisor', { concurrent: false }, () => {
       });
       expect(containerOf(engine, runId)).toBeUndefined();
     });
+  });
+  test("a start removes every container an earlier run of the same agent left behind, and no other agent's", async () => {
+    await withSupervisor(async ({ agent, engine, supervisor }) => {
+      const cerebroId = await agent('Cerebro');
+      const stormId = await agent('Storm');
+      const stale = await leftover(engine, cerebroId, 'stale-run');
+      const created = await engine.create({
+        agentId: cerebroId,
+        environment: {},
+        image: 'cerebro-agent',
+        resources: { cpus: 1, memoryBytes: 1024 },
+        runId: 'never-started',
+      });
+      const storms = await leftover(engine, stormId, 'storm-run');
+
+      const { runId } = await supervisor.start(cerebroId);
+
+      expect(await engine.inspect(stale)).toBeNull();
+      expect(await engine.inspect(created.id)).toBeNull();
+      expect((await engine.inspect(storms))?.status).toBe('running');
+      const current = containerOf(engine, runId);
+      expect(await engine.containersOf(cerebroId)).toHaveLength(1);
+      expect(current).toBeDefined();
+    });
+  });
+
+  test.each([
+    ['listed', 'list'],
+    ['removed', 'remove'],
+  ] as const)(
+    'a start fails and creates nothing when an earlier container cannot be %s',
+    async (_verb, operation) => {
+      await withSupervisor(async ({ agent, engine, runs, supervisor }) => {
+        const cerebroId = await agent('Cerebro');
+        const stale = await leftover(engine, cerebroId, 'stale-run');
+        engine.failNext(operation, new EngineError(operation, 'Engine busy.'));
+
+        const failure = await supervisor.start(cerebroId).catch((e) => e);
+
+        expect(failure).toBeInstanceOf(RunStartError);
+        const runId = (failure as RunStartError).runId;
+        expect(await runs.get(runId)).toMatchObject({
+          failure: expect.stringContaining(
+            'An earlier container of this agent is still there',
+          ),
+          state: 'failed',
+        });
+        expect(containerOf(engine, runId)).toBeUndefined();
+        expect(await engine.containersOf(cerebroId)).toEqual([stale]);
+      });
+    },
+  );
+
+  test('successive runs of an agent mount the same home and CLI state, each with its own checkout', async () => {
+    await withSupervisor(async ({ agent, engine, supervisor }) => {
+      const cerebroId = await agent('Cerebro');
+      const first = await supervisor.start(cerebroId);
+      const firstMounts = mountsOf(engine, first.runId);
+      await supervisor.stopRun(first.runId);
+
+      const second = await supervisor.start(cerebroId);
+      const secondMounts = mountsOf(engine, second.runId);
+
+      expect(firstMounts).toEqual({
+        '/cli-state': `agents/${cerebroId}/cli-state`,
+        '/home/agent': `agents/${cerebroId}/home`,
+        '/work': `runs/${first.runId}/checkout`,
+      });
+      expect(secondMounts).toEqual({
+        ...firstMounts,
+        '/work': `runs/${second.runId}/checkout`,
+      });
+    });
+  });
+
+  test('no two agents share a mount, in one project or across projects', async () => {
+    await withSupervisor(async ({ agent, database, engine, supervisor }) => {
+      const otherProject = await registerTestProject(database, 'shop');
+      const agentIds = [
+        await agent('Cerebro'),
+        await agentNamed(database, otherProject, 'Cerebro'),
+      ];
+      expect(new Set(agentIds).size).toBe(2);
+
+      const subpaths: string[] = [];
+      for (const agentId of agentIds) {
+        const { runId } = await supervisor.start(agentId);
+        subpaths.push(...Object.values(mountsOf(engine, runId)));
+      }
+
+      expect(subpaths).toHaveLength(6);
+      expect(new Set(subpaths).size).toBe(6);
+    });
+  });
+
+  test('concurrent starts of one agent give it one live run and one container', async () => {
+    await withSupervisor(async ({ agent, engine, runs, supervisor }) => {
+      const cerebroId = await agent('Cerebro');
+
+      const outcomes = await Promise.allSettled(
+        Array.from({ length: 6 }, () => supervisor.start(cerebroId)),
+      );
+
+      const started = outcomes.filter(
+        (outcome) => outcome.status === 'fulfilled',
+      );
+      const refused = outcomes.filter(
+        (outcome) => outcome.status === 'rejected',
+      );
+      expect(started).toHaveLength(1);
+      for (const outcome of refused) {
+        expect(outcome.reason).toMatchObject({ code: 'already_running' });
+      }
+      expect((await runs.live()).map((run) => run.agentId)).toEqual([
+        cerebroId,
+      ]);
+      expect(await engine.containersOf(cerebroId)).toHaveLength(1);
+    });
+  });
+});
+
+describe("an agent's directories", () => {
+  test('a later run of an agent finds what an earlier run left in its home and CLI state', async () => {
+    const data = await mkdtemp(join(tmpdir(), 'cerebra-data-'));
+    try {
+      const prepare = directoryPreparer(data);
+      await prepare('run-1', 'agent-1');
+      await writeFile(join(data, 'agents/agent-1/home/notes'), 'remembered');
+      await writeFile(
+        join(data, 'agents/agent-1/cli-state/.claude.json'),
+        '{"memory":true}',
+      );
+
+      await prepare('run-2', 'agent-1');
+      await prepare('run-3', 'agent-2');
+
+      expect(
+        await readFile(join(data, 'agents/agent-1/home/notes'), 'utf8'),
+      ).toBe('remembered');
+      expect(
+        await readFile(
+          join(data, 'agents/agent-1/cli-state/.claude.json'),
+          'utf8',
+        ),
+      ).toBe('{"memory":true}');
+      await expect(
+        readFile(join(data, 'agents/agent-2/home/notes'), 'utf8'),
+      ).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(
+        readFile(join(data, 'runs/run-2/checkout/notes'), 'utf8'),
+      ).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await rm(data, { force: true, recursive: true });
+    }
   });
 });
