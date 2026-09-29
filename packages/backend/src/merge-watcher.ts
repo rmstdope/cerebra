@@ -26,8 +26,10 @@ export function createMergeWatcher(options: {
   readonly database: Kysely<Database>;
   readonly forge: ProjectForge;
   readonly log?: (message: string) => void;
+  readonly now?: () => Date;
 }): MergeWatcher {
   const { database } = options;
+  const now = options.now ?? (() => new Date());
   const log = options.log ?? ((message) => console.error(message));
   let running: Promise<void> | null = null;
   let again = false;
@@ -50,6 +52,7 @@ export function createMergeWatcher(options: {
           item.id,
           item.default_branch ?? 'main',
           await options.forge(item.project_id),
+          now(),
         );
       } catch (error) {
         log(`Merge check for work item ${item.id} failed: ${String(error)}`);
@@ -89,10 +92,13 @@ export function createMergeWatcher(options: {
       if (pullRequest == null) continue;
       try {
         const forge = await options.forge(row.project_id);
-        await forge.closePullRequest(
-          pullRequest.number,
-          `Returned to design: ${payload.reason ?? ''}`,
-        );
+        // A retry after a half-done close must not comment on the pull request a second time.
+        if ((await forge.pullRequest(pullRequest.number)).state === 'open') {
+          await forge.closePullRequest(
+            pullRequest.number,
+            `Returned to design: ${payload.reason ?? ''}`,
+          );
+        }
         await forge.deleteBranch(pullRequest.branch);
         await database
           .insertInto('work_item_records')
@@ -146,6 +152,7 @@ async function mergeOne(
   itemId: string,
   base: string,
   forge: Forge,
+  now: Date,
 ): Promise<void> {
   const pullRequest = await livePullRequest(database, itemId);
   const approval = await latestApproval(database, itemId);
@@ -158,7 +165,10 @@ async function mergeOne(
     return merged(database, itemId, base, current.head);
   }
   if (current.state === 'closed') {
-    throw new Error(`Pull request #${pullRequest.number} was closed unmerged.`);
+    return block(database, itemId, {
+      message: `Pull request #${pullRequest.number} was closed without merging.`,
+      reason: 'refused',
+    });
   }
   if (!sameRevision(current.head, approval.revision)) {
     return block(database, itemId, {
@@ -179,7 +189,17 @@ async function mergeOne(
       ...approval.reviewer,
     });
   }
-  if (checks.status === 'pending' || current.mergeable === null) return;
+  // A project with no checks merges once any that were going to start would have reported.
+  const noChecksYet =
+    checks.status === 'none' &&
+    now.getTime() - approval.at.getTime() < noChecksGraceMs;
+  if (
+    checks.status === 'pending' ||
+    noChecksYet ||
+    current.mergeable === null
+  ) {
+    return;
+  }
   const result = await forge.merge(pullRequest.number, current.head);
   if (!result.merged) {
     return block(
@@ -191,12 +211,14 @@ async function mergeOne(
             revision: approval.revision,
             ...approval.reviewer,
           }
-        : { base, reason: 'conflict' },
+        : { message: result.message, reason: 'refused' },
     );
   }
   await forge.deleteBranch(current.branch);
   return merged(database, itemId, base, current.head);
 }
+
+const noChecksGraceMs = 5 * 60_000;
 
 function sameRevision(head: string, revision: string): boolean {
   const [a, b] = [head.toLowerCase(), revision.toLowerCase()];
@@ -207,13 +229,18 @@ async function latestApproval(
   database: Kysely<Database>,
   itemId: string,
 ): Promise<{
+  readonly at: Date;
   readonly reviewer: { readonly reviewer?: string };
   readonly revision: string;
 } | null> {
   const row = await database
     .selectFrom('work_item_records')
     .leftJoin('runs', 'runs.id', 'work_item_records.run_id')
-    .select(['work_item_records.payload', 'runs.agent_name'])
+    .select([
+      'work_item_records.created_at',
+      'work_item_records.payload',
+      'runs.agent_name',
+    ])
     .where('work_item_records.work_item_id', '=', itemId)
     .where('work_item_records.kind', '=', 'review')
     .orderBy('work_item_records.id', 'desc')
@@ -227,6 +254,7 @@ async function latestApproval(
     return null;
   }
   return {
+    at: new Date(row?.created_at ?? 0),
     reviewer: row?.agent_name == null ? {} : { reviewer: row.agent_name },
     revision: payload.revision,
   };

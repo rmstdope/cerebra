@@ -53,6 +53,7 @@ export type BlockedReason =
   | 'changed_since_approval'
   | 'check_failed'
   | 'conflict'
+  | 'refused'
   | 'too_many_attempts'
   | 'too_many_rounds';
 
@@ -60,6 +61,7 @@ export interface BlockedDetail {
   readonly base?: string;
   readonly check?: string;
   readonly count?: number;
+  readonly message?: string;
   readonly reason: BlockedReason;
   readonly revision?: string;
   readonly reviewer?: string;
@@ -138,6 +140,8 @@ export function blockedHeading(detail: BlockedDetail): string {
       return "Can't merge: a required check failed";
     case 'conflict':
       return `Can't merge: the branch conflicts with ${detail.base ?? 'main'}`;
+    case 'refused':
+      return "Can't merge: GitHub refused the merge";
     case 'too_many_attempts':
       return 'Stopped: too many attempts';
     case 'too_many_rounds':
@@ -160,6 +164,8 @@ export function blockedSentence(detail: BlockedDetail): string {
       return `“${detail.check ?? 'A required check'}” failed on revision ${revision}. ${reviewer} approved it, but nothing merges red.`;
     case 'conflict':
       return `The pull request can't be merged cleanly into ${detail.base ?? 'main'}.`;
+    case 'refused':
+      return detail.message ?? 'GitHub gave no reason.';
     case 'too_many_attempts':
       return `${detail.count ?? 0} builder runs ended without finishing this.`;
     case 'too_many_rounds':

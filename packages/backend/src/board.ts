@@ -121,6 +121,7 @@ export type BlockedReason =
   | 'changed_since_approval'
   | 'check_failed'
   | 'conflict'
+  | 'refused'
   | 'too_many_attempts'
   | 'too_many_rounds';
 
@@ -131,6 +132,8 @@ export interface BlockedDetail {
   readonly check?: string;
   /** How many rounds or attempts were used. */
   readonly count?: number;
+  /** What GitHub said when it refused the merge. */
+  readonly message?: string;
   readonly reason: BlockedReason;
   /** The revision the failure or the approval concerns. */
   readonly revision?: string;
@@ -147,6 +150,8 @@ export function blockedHeading(detail: BlockedDetail): string {
       return "Can't merge: a required check failed";
     case 'conflict':
       return `Can't merge: the branch conflicts with ${detail.base ?? 'main'}`;
+    case 'refused':
+      return "Can't merge: GitHub refused the merge";
     case 'too_many_attempts':
       return 'Stopped: too many attempts';
     case 'too_many_rounds':
@@ -471,15 +476,15 @@ export function createBoard(database: Kysely<Database>): Board {
             'Give a reason so the designer and the next builder know what to change.',
         };
       }
-      const pullRequest = await livePullRequest(database, itemId);
-      return answerBlocked(database, itemId, (current) =>
+      // The pull request is read under the item's lock, so the one closed is the one it had.
+      return answerBlocked(database, itemId, async (current, transaction) =>
         current.context.stages.design
           ? {
               actor: { role: 'navigator' },
               reason: `Returned to design: ${trimmed}`,
               record: {
                 kind: 'returned_to_design',
-                pullRequest,
+                pullRequest: await livePullRequest(transaction, itemId),
                 reason: trimmed,
               },
               to: 'design_ready',
@@ -811,11 +816,14 @@ export interface LockedWorkItem {
 export async function transitionLocked<R extends { readonly ok: false }>(
   database: Kysely<Database>,
   itemId: string,
-  decide: (current: LockedWorkItem) => TransitionRequest | R,
+  decide: (
+    current: LockedWorkItem,
+    transaction: Kysely<Database>,
+  ) => TransitionRequest | R | Promise<TransitionRequest | R>,
 ): Promise<TransitionResult | R> {
   return database.transaction().execute(async (transactionDatabase) => {
     const current = await getLockedItem(transactionDatabase, itemId);
-    const request = decide(current);
+    const request = await decide(current, transactionDatabase);
     if ('ok' in request) {
       return request;
     }
@@ -1018,7 +1026,9 @@ function toDeliveryEvent(row: {
         ...common,
         kind: 'blocked',
         reason: payload.reason as BlockedReason,
-        ...(['base', 'check', 'revision', 'reviewer'] as const).reduce(
+        ...(
+          ['base', 'check', 'message', 'revision', 'reviewer'] as const
+        ).reduce(
           (detail, field) =>
             typeof payload[field] === 'string'
               ? { ...detail, [field]: payload[field] }
@@ -1157,11 +1167,15 @@ async function answerBlocked(
   itemId: string,
   decide: (
     current: LockedWorkItem,
-  ) => TransitionRequest | Extract<AnswerResult, { ok: false }>,
+    transaction: Kysely<Database>,
+  ) =>
+    | TransitionRequest
+    | Extract<AnswerResult, { ok: false }>
+    | Promise<TransitionRequest | Extract<AnswerResult, { ok: false }>>,
 ): Promise<AnswerResult> {
-  return transitionLocked(database, itemId, (current) =>
+  return transitionLocked(database, itemId, (current, transaction) =>
     current.item.state === 'waiting'
-      ? decide(current)
+      ? decide(current, transaction)
       : {
           code: 'not_waiting' as const,
           ok: false as const,

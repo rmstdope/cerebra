@@ -579,6 +579,14 @@ test.each([
     'Stopped: too many attempts',
     '2 builder runs ended without finishing this.',
   ],
+  [
+    {
+      reason: 'refused',
+      message: 'At least 1 approving review is required.',
+    },
+    "Can't merge: GitHub refused the merge",
+    'At least 1 approving review is required.',
+  ],
 ] as const)(
   'a block shows a banner with its reason and a waiting trail entry (%o)',
   async (detail, heading, sentence) => {

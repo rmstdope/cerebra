@@ -328,15 +328,18 @@ fallback.
 The **merge watcher** (`merge-watcher.ts`) makes one pass over the items in `merging` at start, on
 every successful mutating request and every 30 seconds. For each it reads the pull request: a head
 other than the approved revision blocks it as changed since approval; a conflict blocks it; any
-failed check run or commit status on the head blocks it, since every check counts as required
-until branch protection is read; pending checks, or GitHub not yet knowing whether it merges,
-leave it for the next pass. Otherwise it squash-merges with the approved revision as the expected
-head, so a push that lands in between is refused by GitHub rather than merged, deletes the branch
-and moves the item to `done`. A pull request found already merged is finished the same way. Each
-item's failure is logged and leaves it in `merging` for the next pass. The same pass closes, with
-the navigator's reason as a comment, the pull request of every item returned to design whose
-closing is not yet recorded, and deletes its branch; the record written after makes that an outbox
-that survives a restart.
+failed check run or commit status on the head, read across every page, blocks it, since every
+check counts as required until branch protection is read; pending checks, or GitHub not yet
+knowing whether it merges, leave it for the next pass. A head nothing checks at all waits five
+minutes after the approval, for checks that were going to start, and then merges. Otherwise it
+squash-merges with the approved revision as the expected head, so a push that lands in between is
+refused by GitHub rather than merged, deletes the branch and moves the item to `done`. Any other
+refusal, and a pull request closed without merging, blocks it as *GitHub refused the merge* with
+GitHub's words. A pull request found already merged is finished the same way. Each item's other
+failures are logged and leave it in `merging` for the next pass. The same pass closes, with the
+navigator's reason as a comment, the still-open pull request of every item returned to design
+whose closing is not yet recorded, and deletes its branch; the record written after makes that an
+outbox that survives a restart.
 
 ### Releases
 

@@ -167,7 +167,7 @@ span several rows and are the engine's alone.
 | `reviewing` | `build_ready` | reviewer | Changes requested, with at least one blocking finding; `rounds` +1. The review record names the revision reviewed. |
 | `merging` | `verify_ready` | backend | Merged, the verify stage is on and the change touches application paths. |
 | `merging` | `done` | backend | Merged, otherwise. |
-| `merging` | `waiting` | backend | A block (§4.5): a required check failed, the branch conflicts with the default branch, or the pull request changed since the approved revision. The block is recorded; `return_state` `merging`. |
+| `merging` | `waiting` | backend | A block (§4.5): a required check failed, the branch conflicts with the default branch, the pull request changed since the approved revision, or GitHub refused the merge (including a pull request closed without merging). The block is recorded; `return_state` `merging`. |
 | `verifying` | `done` | verifier | Passed. A follow-up, if any, is filed as a new item. |
 | `verifying` | `build_ready` | verifier | Failed, the build at fault. Priority becomes P0. |
 | `verifying` | `design_ready` | verifier | Failed, the agreed experience at fault. Priority becomes P0. |
@@ -202,8 +202,9 @@ built (the MVP, §14), is refused by the engine.
 - **`rounds`** counts reviews that requested changes since the item last left `waiting`. A request
   that would reach `max_rounds` goes to `waiting` instead, as the block *too many rounds*.
 - **A block** is a wait the backend records because the work cannot go on without the navigator:
-  a required check failed, a merge conflict, changes since approval, too many rounds, or too many
-  attempts. The item's Overview shows it with the navigator's two answers, *send back to the
+  a required check failed, a merge conflict, changes since approval, GitHub refusing the merge
+  (in GitHub's own words, or because the pull request was closed without merging), too many
+  rounds, or too many attempts. The item's Overview shows it with the navigator's two answers, *send back to the
   builder* and *return to design*; the queue row opens the item. The merge never goes around a
   block: nothing merges red, and nothing merges that was not the approved revision.
 

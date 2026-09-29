@@ -14,13 +14,20 @@ export interface ForgePullRequest {
 
 /** Every check run and status on a revision, taken together; each one counts as required. */
 export type ForgeChecks =
+  /** Nothing has reported on the revision at all. */
+  | { readonly status: 'none' }
   | { readonly status: 'pending' }
   | { readonly status: 'success' }
   | { readonly check: string; readonly status: 'failure' };
 
 export type ForgeMerge =
   | { readonly merged: true }
-  | { readonly merged: false; readonly reason: 'head_moved' | 'not_mergeable' };
+  | { readonly merged: false; readonly reason: 'head_moved' }
+  | {
+      readonly merged: false;
+      readonly message: string;
+      readonly reason: 'refused';
+    };
 
 /**
  * The one boundary between the backend and a project's code host (architecture §8), always with
@@ -91,6 +98,18 @@ export function createGitHubForge(options: {
     }
     return (await response.json()) as Record<string, unknown>;
   };
+  // Every page of a list, so a failing check on a later page is never missed.
+  const readAll = async <T>(path: string, field: string): Promise<T[]> => {
+    const all: T[] = [];
+    for (let page = 1; ; page += 1) {
+      const body = await read(`${path}?per_page=100&page=${page}`);
+      const items = (body[field] ?? []) as T[];
+      all.push(...items);
+      const total =
+        typeof body.total_count === 'number' ? body.total_count : all.length;
+      if (items.length < 100 || all.length >= total) return all;
+    }
+  };
   const write = async (method: string, path: string, body?: unknown) => {
     const response = await call(method, path, body);
     if (!response.ok) {
@@ -102,18 +121,18 @@ export function createGitHubForge(options: {
 
   return {
     async checks(sha) {
-      const [runs, combined] = await Promise.all([
-        read(`/commits/${sha}/check-runs?per_page=100`),
-        read(`/commits/${sha}/status`),
+      const [runs, statuses] = await Promise.all([
+        readAll<{ conclusion: string | null; name: string; status: string }>(
+          `/commits/${sha}/check-runs`,
+          'check_runs',
+        ),
+        readAll<{ context: string; state: string }>(
+          `/commits/${sha}/status`,
+          'statuses',
+        ),
       ]);
       const results = [
-        ...(
-          (runs.check_runs ?? []) as {
-            conclusion: string | null;
-            name: string;
-            status: string;
-          }[]
-        ).map((run) => ({
+        ...runs.map((run) => ({
           name: run.name,
           result:
             run.status !== 'completed'
@@ -122,9 +141,7 @@ export function createGitHubForge(options: {
                 ? 'success'
                 : 'failure',
         })),
-        ...(
-          (combined.statuses ?? []) as { context: string; state: string }[]
-        ).map((status) => ({
+        ...statuses.map((status) => ({
           name: status.context,
           result:
             status.state === 'success'
@@ -138,10 +155,8 @@ export function createGitHubForge(options: {
       if (failed !== undefined) {
         return { check: failed.name, status: 'failure' };
       }
-      if (
-        results.length === 0 ||
-        results.some((result) => result.result === 'pending')
-      ) {
+      if (results.length === 0) return { status: 'none' };
+      if (results.some((result) => result.result === 'pending')) {
         return { status: 'pending' };
       }
       return { status: 'success' };
@@ -169,7 +184,17 @@ export function createGitHubForge(options: {
       if (response.status === 409)
         return { merged: false, reason: 'head_moved' };
       if (response.status === 405) {
-        return { merged: false, reason: 'not_mergeable' };
+        const body = (await response.json().catch(() => ({}))) as {
+          message?: unknown;
+        };
+        return {
+          merged: false,
+          message:
+            typeof body.message === 'string' && body.message !== ''
+              ? body.message
+              : 'GitHub gave no reason.',
+          reason: 'refused',
+        };
       }
       if (!response.ok) {
         throw new ForgeError(

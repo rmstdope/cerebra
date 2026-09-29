@@ -428,6 +428,30 @@ describe('the backend merge', { concurrent: false }, () => {
       { reason: 'changed_since_approval', revision: head },
       "Can't merge: changed since approval",
     ],
+    [
+      'GitHub refuses the merge',
+      {
+        merge: {
+          merged: false,
+          message: 'At least 1 approving review is required.',
+          reason: 'refused',
+        } as const,
+      },
+      {
+        message: 'At least 1 approving review is required.',
+        reason: 'refused',
+      },
+      "Can't merge: GitHub refused the merge",
+    ],
+    [
+      'someone closed the pull request without merging it',
+      { pullRequest: { state: 'closed' as const } },
+      {
+        message: 'Pull request #482 was closed without merging.',
+        reason: 'refused',
+      },
+      "Can't merge: GitHub refused the merge",
+    ],
   ])(
     'nothing merges when %s: it waits for the navigator',
     async (_name, answers, detail, heading) => {
@@ -454,6 +478,27 @@ describe('the backend merge', { concurrent: false }, () => {
       });
     },
   );
+
+  test('a revision nothing checks merges once checks have had time to start', async () => {
+    await withTestDatabase(async (database) => {
+      const { board, itemId } = await approvedItem(database);
+      const { calls, forge } = fakeForge({ checks: { status: 'none' } });
+
+      await createMergeWatcher({ database, forge: async () => forge }).pass();
+      expect(calls.some((call) => call.startsWith('merge'))).toBe(false);
+      expect(await board.getWorkItem(itemId)).toMatchObject({
+        state: 'merging',
+      });
+
+      await createMergeWatcher({
+        database,
+        forge: async () => forge,
+        now: () => new Date(Date.now() + 6 * 60_000),
+      }).pass();
+      expect(calls).toContain(`merge 482 ${head}`);
+      expect(await board.getWorkItem(itemId)).toMatchObject({ state: 'done' });
+    });
+  });
 
   test('a pull request someone else merged completes the item', async () => {
     await withTestDatabase(async (database) => {
@@ -507,9 +552,23 @@ describe('the backend merge', { concurrent: false }, () => {
       }).pass();
 
       expect(up.calls).toEqual([
+        'pull 482',
         'close 482 Returned to design: The export needs a new layout.',
         'delete WEB-1-export',
       ]);
+    });
+  });
+
+  test('a close retried after the pull request closed does not comment again', async () => {
+    await withTestDatabase(async (database) => {
+      const { board, itemId } = await builtItem(database, { maxRounds: 1 });
+      await review(database, board, itemId, 'changes_requested');
+      await board.returnToDesign(itemId, 'The export needs a new layout.');
+      const { calls, forge } = fakeForge({ pullRequest: { state: 'closed' } });
+
+      await createMergeWatcher({ database, forge: async () => forge }).pass();
+
+      expect(calls).toEqual(['pull 482', 'delete WEB-1-export']);
     });
   });
 });

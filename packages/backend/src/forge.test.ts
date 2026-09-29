@@ -110,7 +110,7 @@ describe('the GitHub forge', () => {
       [],
       { status: 'pending' },
     ],
-    ['no check has reported yet', [], [], { status: 'pending' }],
+    ['nothing has reported at all', [], [], { status: 'none' }],
   ])('checks: %s', async (_name, runs, statuses, expected) => {
     const { fetch } = stubFetch((call) =>
       call.url.includes('/check-runs')
@@ -139,15 +139,57 @@ describe('the GitHub forge', () => {
     });
   });
 
-  test.each([
-    [409, 'head_moved'],
-    [405, 'not_mergeable'],
-  ])('a refused merge (%i) says why', async (status, reason) => {
-    const { fetch } = stubFetch(() => ({ body: {}, status }));
+  test('checks: a failure on a later page is not missed', async () => {
+    const passing = Array.from({ length: 100 }, (_, index) => ({
+      conclusion: 'success',
+      name: `job ${index}`,
+      status: 'completed',
+    }));
+    const { calls, fetch } = stubFetch((call) =>
+      call.url.includes('/check-runs')
+        ? call.url.includes('page=2')
+          ? {
+              body: {
+                check_runs: [
+                  { conclusion: 'failure', name: 'late', status: 'completed' },
+                ],
+                total_count: 101,
+              },
+              status: 200,
+            }
+          : { body: { check_runs: passing, total_count: 101 }, status: 200 }
+        : { body: { statuses: [], total_count: 0 }, status: 200 },
+    );
+
+    expect(
+      await createGitHubForge({ ...repository, fetch }).checks(sha),
+    ).toEqual({ check: 'late', status: 'failure' });
+    expect(
+      calls.filter((call) => call.url.includes('/check-runs')),
+    ).toHaveLength(2);
+  });
+
+  test('a merge whose head moved says so', async () => {
+    const { fetch } = stubFetch(() => ({ body: {}, status: 409 }));
 
     expect(
       await createGitHubForge({ ...repository, fetch }).merge(1, sha),
-    ).toEqual({ merged: false, reason });
+    ).toEqual({ merged: false, reason: 'head_moved' });
+  });
+
+  test('a merge GitHub refuses carries GitHub’s own words', async () => {
+    const { fetch } = stubFetch(() => ({
+      body: { message: 'At least 1 approving review is required.' },
+      status: 405,
+    }));
+
+    expect(
+      await createGitHubForge({ ...repository, fetch }).merge(1, sha),
+    ).toEqual({
+      merged: false,
+      message: 'At least 1 approving review is required.',
+      reason: 'refused',
+    });
   });
 
   test('deletes a branch, treating one already gone as deleted', async () => {
