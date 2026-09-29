@@ -280,6 +280,11 @@ const queueForWorkingState: Partial<Record<WorkItemState, WorkItemState>> = {
   verifying: 'verify_ready',
 };
 
+/** The queue a working state's item returns to, or `undefined` for a state no run works in. */
+export function queueFor(state: WorkItemState): WorkItemState | undefined {
+  return queueForWorkingState[state];
+}
+
 export function createWorkItem(overrides: Partial<WorkItem> = {}): WorkItem {
   const state = overrides.state ?? 'new';
   const priority =
