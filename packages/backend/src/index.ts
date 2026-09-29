@@ -2,6 +2,39 @@ export const packageName = '@cerebra/backend';
 
 export { createDatabase, type Database } from './database.js';
 export {
+  agentRoles,
+  agentTypesDirectory,
+  InvalidAgentTypeError,
+  modelOptions,
+  parseAgentTypeDefinition,
+  readAgentTypeDefinitions,
+  type AgentModel,
+  type AgentRole,
+  type AgentTrigger,
+  type AgentTypeDefinition,
+} from './agent-types.js';
+export {
+  AgentHoldsWorkError,
+  AgentNotFoundError,
+  AgentTypeNotFoundError,
+  createDefaultFleet,
+  createFleet,
+  DuplicateAgentNameError,
+  InvalidAgentChangeError,
+  InvalidAgentNameError,
+  InvalidRoleSettingsError,
+  NoAgentTypesError,
+  type AgentActivity,
+  type Fleet,
+  type FleetItem,
+  type FleetPerson,
+  type FleetRole,
+  type FleetView,
+  type RoleSettings,
+  type RunControl,
+  type StartMode,
+} from './fleet.js';
+export {
   createAuthService,
   type AuthService,
   type AuthStatus,
@@ -57,7 +90,10 @@ export {
   type QueueRefusalCode,
 } from './navigator-queue.js';
 export { migrateToLatest } from './migrations/index.js';
-export { createProjectRegistrationService } from './project-registration.js';
+export {
+  createProjectRegistrationService,
+  createProjectStore,
+} from './project-registration.js';
 export {
   createProjectTokenCipher,
   type EncryptedProjectToken,

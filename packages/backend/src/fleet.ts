@@ -85,6 +85,12 @@ export interface Fleet {
   ): Promise<FleetPerson>;
 }
 
+/** Starts and stops a person's run; supplied once run supervision exists (cr-edk.5). */
+export interface RunControl {
+  start(agentId: string): Promise<void>;
+  stop(agentId: string): Promise<void>;
+}
+
 export class AgentNotFoundError extends Error {
   public constructor(agentId: string) {
     super(`Agent ${agentId} was not found`);

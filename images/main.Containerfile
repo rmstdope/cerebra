@@ -10,6 +10,7 @@ ENV NODE_ENV=production
 ENV CEREBRA_ADDRESS=http://localhost:4317
 COPY --from=build /app/package.json /app/pnpm-lock.yaml /app/pnpm-workspace.yaml ./
 COPY --from=build /app/packages/backend/dist ./packages/backend/dist
+COPY --from=build /app/packages/backend/agent-types ./packages/backend/agent-types
 COPY --from=build /app/packages/backend/package.json ./packages/backend/package.json
 COPY --from=build /app/packages/ui/dist ./packages/ui/dist
 RUN corepack enable && pnpm install --prod --frozen-lockfile
