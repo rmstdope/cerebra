@@ -68,6 +68,7 @@ async function withSupervisor(
       database,
       engine,
       gatewayUrl: 'ws://main:4317/runner',
+      mcpUrl: 'http://main:4317/mcp',
       log: (message) => logs.push(message),
       prepareDirectories: async (runId, agentId) => {
         prepared.push(`${runId} ${agentId}`);
@@ -258,6 +259,26 @@ describe('the run supervisor', { concurrent: false }, () => {
         state: 'failed',
       });
       expect(containerOf(engine, failure.runId)).toBeUndefined();
+    });
+  });
+
+  test('a runner starts with the board tools, reached with its own run token', async () => {
+    await withSupervisor(async ({ agent, connect, engine, supervisor }) => {
+      const { runId } = await supervisor.start(await agent('Cerebro'));
+
+      const runner = await connect(runId);
+
+      const token = tokenOf(containerOf(engine, runId)?.body.Env);
+      expect(runner.sent[0]).toMatchObject({
+        mcpServers: {
+          cerebra: {
+            headers: { Authorization: `Bearer ${token}` },
+            type: 'http',
+            url: 'http://main:4317/mcp',
+          },
+        },
+        type: 'start',
+      });
     });
   });
 
@@ -515,6 +536,7 @@ describe('the run supervisor', { concurrent: false }, () => {
         endRetryMs: 1,
         engine: createFakeEngine(),
         gatewayUrl: 'ws://main:4317/runner',
+        mcpUrl: 'http://main:4317/mcp',
         prepareDirectories: async () => undefined,
         runs,
       });
@@ -538,6 +560,7 @@ describe('the run supervisor', { concurrent: false }, () => {
         database,
         engine,
         gatewayUrl: 'ws://main:4317/runner',
+        mcpUrl: 'http://main:4317/mcp',
         prepareDirectories: async () => {},
         runs,
       });
@@ -548,6 +571,7 @@ describe('the run supervisor', { concurrent: false }, () => {
         database,
         engine,
         gatewayUrl: 'ws://main:4317/runner',
+        mcpUrl: 'http://main:4317/mcp',
         prepareDirectories: async () => {},
         runs,
       });

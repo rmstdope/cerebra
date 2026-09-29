@@ -10,6 +10,7 @@ services:
       CEREBRA_EGRESS_NETWORK: cerebro-egress
       CEREBRA_GATEWAY_URL: ws://main:4317/runner
       CEREBRA_INTERNAL_NETWORK: cerebro-internal
+      CEREBRA_MCP_URL: http://main:4317/mcp
       CEREBRA_PODMAN_SOCKET: /run/podman/podman.sock
       CEREBRA_PROJECT_TOKEN_KEY_FILE: /run/secrets/cerebra-project-token-key
       DATABASE_URL: postgresql://cerebra:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/cerebra

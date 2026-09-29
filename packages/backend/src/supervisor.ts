@@ -58,6 +58,8 @@ export interface SupervisorOptions {
   readonly runs: RunStore;
   /** Where a runner reaches the gateway, from inside its container. */
   readonly gatewayUrl: string;
+  /** Where a runner reaches the board tools (architecture §5.4), from inside its container. */
+  readonly mcpUrl: string;
   readonly prepareDirectories: (
     runId: string,
     agentId: string,
@@ -169,6 +171,7 @@ export function createSupervisor({
   credentials,
   runs,
   gatewayUrl,
+  mcpUrl,
   prepareDirectories,
   connectTimeoutMs = 60_000,
   stopTimeoutMs = 30_000,
@@ -491,7 +494,13 @@ export function createSupervisor({
           firstMessage: '',
           instructions: agent.instructions,
           interactive: true,
-          mcpServers: {},
+          mcpServers: {
+            cerebra: {
+              headers: { Authorization: `Bearer ${token}` },
+              type: 'http',
+              url: mcpUrl,
+            },
+          },
           model: agent.fields?.model ?? agent.model,
           resumeSessionId: null,
           skills: [],

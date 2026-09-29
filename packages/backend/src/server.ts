@@ -52,6 +52,7 @@ import {
   type Project,
 } from './projects.js';
 import type { RunnerGateway } from './runner-gateway.js';
+import type { McpEndpoint } from './mcp.js';
 import {
   AgentUnavailableError,
   RunEndedError,
@@ -83,6 +84,8 @@ export interface ServerOptions {
   readonly conversations?: ConversationControl;
   /** Serves `/runner`, authenticated by run token rather than the navigator's session. */
   readonly runnerGateway?: RunnerGateway;
+  /** Serves `/mcp`, the agents' board tools, authenticated by run token; absent alongside `runs`. */
+  readonly mcp?: McpEndpoint;
   readonly uiDirectory?: string;
 }
 
@@ -298,6 +301,7 @@ export const createServer = async ({
   queue,
   runs,
   runnerGateway,
+  mcp,
   uiDirectory = process.env.CEREBRA_UI_DIR,
 }: ServerOptions): Promise<FastifyInstance> => {
   const server = Fastify();
@@ -309,6 +313,7 @@ export const createServer = async ({
 
   await server.register(websocket);
   runnerGateway?.routes(server);
+  mcp?.routes(server);
   if (uiDirectory !== undefined) {
     await server.register(fastifyStatic, { root: join(uiDirectory) });
   }
