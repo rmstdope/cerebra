@@ -50,6 +50,7 @@ import {
   ProjectMirrorError,
   type ProjectRegistration,
 } from './projects.js';
+import type { RunnerGateway } from './runner-gateway.js';
 
 export interface ServerOptions {
   readonly auth: AuthService;
@@ -61,6 +62,8 @@ export interface ServerOptions {
   readonly queue?: NavigatorQueue;
   /** Absent until run supervision exists; starting or stopping then answers 503. */
   readonly runs?: RunControl;
+  /** Serves `/runner`, authenticated by run token rather than the navigator's session. */
+  readonly runnerGateway?: RunnerGateway;
   readonly uiDirectory?: string;
 }
 
@@ -260,11 +263,13 @@ export const createServer = async ({
   projects,
   queue,
   runs,
+  runnerGateway,
   uiDirectory = process.env.CEREBRA_UI_DIR,
 }: ServerOptions): Promise<FastifyInstance> => {
   const server = Fastify();
 
   await server.register(websocket);
+  runnerGateway?.routes(server);
   if (uiDirectory !== undefined) {
     await server.register(fastifyStatic, { root: join(uiDirectory) });
   }

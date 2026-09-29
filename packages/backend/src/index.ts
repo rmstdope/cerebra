@@ -167,4 +167,14 @@ export {
   type ProjectRegistration,
   type ProjectStore,
 } from './projects.js';
+export {
+  createRunToken,
+  createRunnerGateway,
+  hashRunToken,
+  type RunnerClosed,
+  type RunnerConnection,
+  type RunnerGateway,
+  type RunnerGatewayOptions,
+  type RunnerListener,
+} from './runner-gateway.js';
 export { createServer, startServer } from './server.js';
