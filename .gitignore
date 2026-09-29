@@ -2,6 +2,7 @@
 .cerebro/worktrees
 .cerebro/state
 .cerebro/scratch
+.cerebro/scratchpad
 
 # Beads / Dolt files (added by bd init)
 .dolt/
