@@ -47,11 +47,7 @@ test('reads named files of the checkout, each with its content type', async () =
 
 test('reads a symlink that stays inside the checkout', async () => {
   await symlink('a.html', join(checkout, 'mockups', 'link.html'));
-  const answer = await readCheckoutFiles(
-    checkout,
-    ['mockups/link.html'],
-    1024,
-  );
+  const answer = await readCheckoutFiles(checkout, ['mockups/link.html'], 1024);
   expect(answer).toMatchObject({ files: [{ path: 'mockups/link.html' }] });
 });
 
@@ -81,14 +77,18 @@ describe('refuses', () => {
 
   test('a directory symlink that leads outside the checkout', async () => {
     await symlink(root, join(checkout, 'up'));
-    expect(await readCheckoutFiles(checkout, ['up/secret.txt'], 1024)).toEqual(
-      { error: 'The path up/secret.txt is outside the checkout.' },
-    );
+    expect(await readCheckoutFiles(checkout, ['up/secret.txt'], 1024)).toEqual({
+      error: 'The path up/secret.txt is outside the checkout.',
+    });
   });
 
   test('files that come to more than the limit together', async () => {
     expect(
-      await readCheckoutFiles(checkout, ['mockups/a.html', 'mockups/b.png'], 10),
+      await readCheckoutFiles(
+        checkout,
+        ['mockups/a.html', 'mockups/b.png'],
+        10,
+      ),
     ).toEqual({
       error: 'The files asked for come to more than 10 bytes.',
     });
@@ -96,7 +96,11 @@ describe('refuses', () => {
 
   test('the whole request when any one path is refused', async () => {
     expect(
-      await readCheckoutFiles(checkout, ['mockups/a.html', '../secret.txt'], 1024),
+      await readCheckoutFiles(
+        checkout,
+        ['mockups/a.html', '../secret.txt'],
+        1024,
+      ),
     ).toEqual({ error: 'The path ../secret.txt is outside the checkout.' });
   });
 });

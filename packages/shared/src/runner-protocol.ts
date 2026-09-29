@@ -468,7 +468,8 @@ function parseEvent(value: unknown): AgentEvent {
   return parent === undefined ? event : { ...event, parentToolCallId: parent };
 }
 
-const base64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+const base64 =
+  /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 
 function parseFiles(fields: Fields): FilesMessage {
   const requestId = text(fields, 'requestId', 'files');

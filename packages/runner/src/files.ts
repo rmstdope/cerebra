@@ -4,8 +4,7 @@ import { extname, isAbsolute, join, normalize, sep } from 'node:path';
 import type { RunFile } from '@cerebra/shared';
 
 export type CheckoutFilesAnswer =
-  | { readonly files: readonly RunFile[] }
-  | { readonly error: string };
+  { readonly files: readonly RunFile[] } | { readonly error: string };
 
 const contentTypes: Readonly<Record<string, string>> = {
   '.css': 'text/css; charset=utf-8',
@@ -50,7 +49,11 @@ async function locate(root: string, path: string): Promise<string> {
   }
   const outside = `The path ${path} is outside the checkout.`;
   const relative = normalize(path);
-  if (isAbsolute(path) || relative === '..' || relative.startsWith(`..${sep}`)) {
+  if (
+    isAbsolute(path) ||
+    relative === '..' ||
+    relative.startsWith(`..${sep}`)
+  ) {
     throw new Refusal(outside);
   }
   let real: string;

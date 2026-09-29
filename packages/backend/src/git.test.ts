@@ -44,14 +44,7 @@ test('kills git that outlives its time bound and says so', async () => {
   const started = Date.now();
   await expect(
     runGit(
-      [
-        '-c',
-        'protocol.ext.allow=always',
-        '--git-dir',
-        repo,
-        'fetch',
-        'origin',
-      ],
+      ['-c', 'protocol.ext.allow=always', '--git-dir', repo, 'fetch', 'origin'],
       { timeoutMs: 300 },
     ),
   ).rejects.toThrow('Git did not finish within 1 second and was stopped.');
