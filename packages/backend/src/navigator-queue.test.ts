@@ -183,6 +183,118 @@ describe('navigator queue', { concurrent: false }, () => {
     });
   });
 
+  async function run(
+    projectId: string | null,
+    agentName: string,
+    status: 'active' | 'awaiting_input' | 'finished' | 'failed',
+    events: readonly { at: string; event: object }[],
+  ): Promise<string> {
+    const id = crypto.randomUUID();
+    await database
+      .insertInto('runs')
+      .values({
+        agent_name: agentName,
+        id,
+        project_id: projectId,
+        role: 'assistant',
+        status,
+      })
+      .execute();
+    for (const [index, { at, event }] of events.entries()) {
+      await database
+        .insertInto('run_events')
+        .values({
+          created_at: new Date(at),
+          event: JSON.stringify(event),
+          position: index + 1,
+          run_id: id,
+        })
+        .execute();
+    }
+    return id;
+  }
+
+  function asked(questionId: string, text: string, at: string) {
+    return {
+      at,
+      event: {
+        kind: 'question',
+        questionId,
+        questions: [
+          { header: '', multiSelect: false, options: [], question: text },
+          { header: '', multiSelect: false, options: [], question: 'And?' },
+        ],
+      },
+    };
+  }
+
+  function answered(questionId: string, at: string) {
+    return { at, event: { answers: {}, kind: 'answer', questionId } };
+  }
+
+  test('lists an assistant’s unanswered question until it is answered or the run ends', async () => {
+    const waiting = await run(alpha, 'Astra', 'awaiting_input', [
+      { at: '2026-10-01T09:00:00Z', event: { kind: 'message', text: 'Hi' } },
+      asked('q-1', 'Which database?', '2026-10-01T09:01:00Z'),
+      answered('q-1', '2026-10-01T09:02:00Z'),
+      asked(
+        'q-2',
+        'Which database should the demo use?',
+        '2026-10-01T09:03:00Z',
+      ),
+    ]);
+    await run(alpha, 'Bolt', 'active', [
+      asked('q-1', 'Answered already?', '2026-10-01T09:00:00Z'),
+      answered('q-1', '2026-10-01T09:01:00Z'),
+    ]);
+    await run(beta, 'Cleo', 'finished', [
+      asked('q-1', 'Too late?', '2026-10-01T09:00:00Z'),
+    ]);
+    await run(null, 'Dex', 'awaiting_input', [
+      asked('q-1', 'No project?', '2026-10-01T09:00:00Z'),
+    ]);
+    const item = await file(alpha, 'Tidy the settings');
+
+    const page = await queue.list();
+
+    expect(page.total).toBe(2);
+    expect(page.entries.map((entry) => entry.id)).toEqual([
+      `run:${waiting}:q-2`,
+      item,
+    ]);
+    expect(page.entries[0]).toEqual({
+      askedBy: 'Astra',
+      availableRoutes: [],
+      description: '',
+      id: `run:${waiting}:q-2`,
+      kind: 'question',
+      priority: null,
+      projectId: alpha,
+      projectName: 'acme/alpha',
+      run: { id: waiting },
+      since: new Date('2026-10-01T09:03:00Z'),
+      title: 'Which database should the demo use?',
+      waitingReason: 'Which database should the demo use?',
+    });
+    expect(page.entries[1]).toMatchObject({ run: null });
+
+    await database
+      .insertInto('run_events')
+      .values({
+        event: JSON.stringify({
+          answers: {},
+          kind: 'answer',
+          questionId: 'q-2',
+        }),
+        position: 5,
+        run_id: waiting,
+      })
+      .execute();
+    expect((await queue.list()).entries.map((entry) => entry.id)).toEqual([
+      item,
+    ]);
+  });
+
   test('names the backend as Cerebra when it asked', async () => {
     const id = await file(alpha, 'Asked by the system', 'build_ready');
     await wait(id, 'question', 'Is this still wanted?', 'build_ready');
