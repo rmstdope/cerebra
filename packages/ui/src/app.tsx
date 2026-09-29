@@ -21,6 +21,12 @@ import {
   type AuthStatus,
 } from './auth';
 import { ProjectRegistration } from './project-registration';
+import {
+  browserProjectClient,
+  type ProjectClient,
+  type ProjectDirectoryClient,
+  type RegisteredProject,
+} from './projects';
 import type { BoardClient } from './board';
 import { NavigatorQueue, type WorkTab } from './navigator-queue';
 import { ProjectBoard } from './project-board';
@@ -58,6 +64,8 @@ interface AppProps {
   queueClient?: QueueClient;
   credentialClient?: CredentialClient;
   conversationClient?: ConversationClient;
+  projectClient?: ProjectClient;
+  projectDirectoryClient?: ProjectDirectoryClient;
 }
 
 type SettingsRoute =
@@ -121,6 +129,8 @@ export function App({
   queueClient,
   credentialClient,
   conversationClient = browserConversationClient,
+  projectClient = browserProjectClient,
+  projectDirectoryClient = browserProjectClient,
 }: AppProps): ReactNode {
   const [preference, setPreference] = useState<ThemePreference>(() =>
     getInitialPreference(storage),
@@ -141,11 +151,19 @@ export function App({
   const [signOutError, setSignOutError] = useState(false);
   const [projectId, setProjectId] = useState<string | null>(() => {
     try {
-      return storage.getItem('cerebra.project');
+      return storage.getItem('cerebra.project') || null;
     } catch {
       return null;
     }
   });
+  const [projects, setProjects] = useState<readonly RegisteredProject[] | null>(
+    null,
+  );
+  const [projectLoadError, setProjectLoadError] = useState(false);
+  const [projectLoading, setProjectLoading] = useState(true);
+  const [projectReload, setProjectReload] = useState(0);
+  const [projectSaveError, setProjectSaveError] = useState(false);
+  const [addingProject, setAddingProject] = useState(false);
   const [queueCount, setQueueCount] = useState(0);
   const [boardRequest, setBoardRequest] = useState<{
     readonly id: string;
@@ -208,6 +226,53 @@ export function App({
         setAuthUnavailable(true);
       });
   }, [authClient]);
+
+  useEffect(() => {
+    if (authStatus?.state !== 'authenticated') return;
+    let cancelled = false;
+    setProjectLoading(true);
+    void projectDirectoryClient
+      .list()
+      .then((loaded) => {
+        if (cancelled) return;
+        setProjects(loaded);
+        setProjectId((current) =>
+          loaded.some((project) => project.id === current) ? current : null,
+        );
+        setProjectLoadError(false);
+        setProjectLoading(false);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setProjectLoadError(true);
+        setProjectLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [authStatus?.state, projectDirectoryClient, projectReload]);
+
+  function rememberProject(id: string): void {
+    setProjectId(id);
+    try {
+      storage.setItem('cerebra.project', id);
+      setProjectSaveError(false);
+    } catch {
+      setProjectSaveError(true);
+    }
+  }
+
+  function openProject(id: string): void {
+    rememberProject(id);
+    setAddingProject(false);
+    setProjectView('board');
+    setReturnToFleet(false);
+    setBoardRequest(null);
+    if (conversation !== null) {
+      window.location.hash = '';
+      setHash('');
+    }
+  }
 
   useEffect(() => {
     if (menuOpen) {
@@ -619,6 +684,64 @@ export function App({
           </p>
         ) : null}
       </header>
+      <section
+        aria-label="Projects"
+        className="mx-auto w-full max-w-255 px-5 pt-6"
+      >
+        {projectLoading ? <p role="status">Loading projects…</p> : null}
+        {projectLoadError ? (
+          <div role="alert">
+            <p>Cerebra couldn’t load your projects. Try again.</p>
+            <button
+              className="secondary-button mt-2"
+              type="button"
+              disabled={projectLoading}
+              onClick={() => setProjectReload((value) => value + 1)}
+            >
+              Retry loading projects
+            </button>
+          </div>
+        ) : null}
+        {projects !== null && projects.length > 0 ? (
+          <div className="flex flex-wrap items-center gap-3">
+            <label htmlFor="current-project" className="font-bold">
+              Project
+            </label>
+            <select
+              id="current-project"
+              className="rounded-lg border border-[var(--control-border)] bg-[var(--surface)] p-2"
+              value={projectId ?? ''}
+              onChange={(event) => openProject(event.target.value)}
+            >
+              <option value="" disabled>
+                Choose a project
+              </option>
+              {projects.map((project) => (
+                <option key={project.id} value={project.id}>
+                  {project.owner}/{project.name}
+                </option>
+              ))}
+            </select>
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() => {
+                setAddingProject(true);
+                window.location.hash = '';
+                setHash('');
+              }}
+            >
+              Add project
+            </button>
+          </div>
+        ) : null}
+        {projectSaveError ? (
+          <p role="alert" className="mt-2 text-[var(--danger)]">
+            Cerebra couldn’t remember your project selection. You can still
+            choose it from the project list next time.
+          </p>
+        ) : null}
+      </section>
       {settings !== null ? (
         <main className="mx-auto w-full max-w-255 px-5 py-10 sm:py-14">
           <nav aria-label="Settings" className="mb-8 flex gap-2">
@@ -650,6 +773,7 @@ export function App({
           </nav>
           {settings.page === 'credentials' ? (
             <CredentialsPage
+              key={projectId ?? 'instance'}
               client={credentialClient}
               projectId={projectId}
               storage={storage}
@@ -703,20 +827,13 @@ export function App({
               client={queueClient}
               onCountChange={setQueueCount}
               onViewWork={(nextProject, id, tab) => {
-                setProjectId(nextProject);
-                setProjectView('board');
-                setReturnToFleet(false);
+                openProject(nextProject);
                 setBoardRequest({ id, tab });
-                try {
-                  storage.setItem('cerebra.project', nextProject);
-                } catch {
-                  // The board still opens; it just isn't remembered.
-                }
               }}
               storage={storage}
             />
           </div>
-          {projectId !== null ? (
+          {projects !== null && !addingProject && projectId !== null ? (
             <>
               <nav aria-label="Project" className="mt-7 flex gap-1">
                 {(
@@ -783,20 +900,39 @@ export function App({
                 />
               )}
             </>
-          ) : (
+          ) : projects !== null && (addingProject || projects.length === 0) ? (
             <div className="mt-7">
+              {projects.length > 0 ? (
+                <button
+                  type="button"
+                  className="secondary-button mb-4"
+                  onClick={() => setAddingProject(false)}
+                >
+                  Back to projects
+                </button>
+              ) : null}
               <ProjectRegistration
+                projectClient={projectClient}
+                onProjectRegistered={(project) => {
+                  setProjects((current) => [
+                    ...(current ?? []).filter(
+                      (existing) => existing.id !== project.id,
+                    ),
+                    project,
+                  ]);
+                  rememberProject(project.id);
+                  setAddingProject(true);
+                }}
                 onProjectAdded={(project) => {
-                  setProjectId(project.id);
-                  try {
-                    storage.setItem('cerebra.project', project.id);
-                  } catch {
-                    return;
-                  }
+                  openProject(project.id);
                 }}
               />
             </div>
-          )}
+          ) : projects !== null ? (
+            <p className="mt-7">
+              Choose a project to open its board and fleet.
+            </p>
+          ) : null}
           {instance === null && instanceError !== 'restart-failed' ? (
             <section className="mt-7 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6 shadow-sm">
               <h2 className="text-lg font-bold">Cerebra isn’t running</h2>

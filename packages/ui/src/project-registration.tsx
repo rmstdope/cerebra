@@ -8,9 +8,11 @@ import {
 
 export function ProjectRegistration({
   onProjectAdded,
+  onProjectRegistered,
   projectClient = browserProjectClient,
 }: {
   readonly onProjectAdded?: (project: RegisteredProject) => void;
+  readonly onProjectRegistered?: (project: RegisteredProject) => void;
   readonly projectClient?: ProjectClient;
 }): ReactNode {
   const [credential, setCredential] = useState('');
@@ -35,7 +37,6 @@ export function ProjectRegistration({
           ? failure.message
           : 'GitHub couldn’t open this repository',
       );
-    } finally {
       setCredential('');
     }
   }
@@ -45,13 +46,19 @@ export function ProjectRegistration({
     setAdding(true);
     setError(null);
     try {
-      setProject(await projectClient.register({ credential, prefix, remote }));
+      const registered = await projectClient.register({
+        credential,
+        prefix,
+        remote,
+      });
+      setProject(registered);
+      onProjectRegistered?.(registered);
       setCredential('');
     } catch (failure) {
       setError(
         failure instanceof Error
           ? failure.message
-          : 'Cerebra couldn’t create a private working copy of this repository.',
+          : 'Project registration failed. Check Cerebra’s logs for details, then try again.',
       );
       setCreationFailed(true);
     } finally {
@@ -81,7 +88,7 @@ export function ProjectRegistration({
           onClick={() => onProjectAdded?.(project)}
           type="button"
         >
-          File work
+          Open project
         </button>
       </section>
     );
@@ -92,11 +99,13 @@ export function ProjectRegistration({
       <section className="card">
         <h1>Cerebra couldn’t add this project</h1>
         <p className="mt-2 text-[var(--muted)]">
-          Your project was not added. Check that GitHub is available and try
-          again.
+          Your project was not added. Resolve the problem below, then try again.
         </p>
-        <p className="mt-4 text-[var(--danger)]" role="alert">
-          Cerebra couldn’t create a private working copy of this repository.
+        <p
+          className="mt-4 whitespace-pre-wrap break-words text-[var(--danger)]"
+          role="alert"
+        >
+          {error}
         </p>
         <div className="mt-6 flex gap-3">
           <button

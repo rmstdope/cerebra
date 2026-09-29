@@ -81,8 +81,10 @@ export class GitHubAccessError extends Error {
 }
 
 export class ProjectMirrorError extends Error {
-  public constructor() {
-    super('Cerebra couldn’t create a private working copy of this repository.');
+  public constructor(
+    message = 'Git could not copy the repository. Check Cerebra’s logs for the Git error, then try again.',
+  ) {
+    super(message);
   }
 }
 

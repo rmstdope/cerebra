@@ -13,33 +13,89 @@ import {
   type ProjectStore,
 } from './projects.js';
 import { createDefaultFleet } from './fleet.js';
+import { gitErrorMessage, redactGitError } from './git-errors.js';
+
+export function listProjects(database: Kysely<Database>): Promise<Project[]> {
+  return database
+    .selectFrom('projects')
+    .select([
+      'id',
+      'owner',
+      'name',
+      'key_prefix as prefix',
+      'default_branch as defaultBranch',
+      'remote',
+    ])
+    .orderBy('owner')
+    .orderBy('name')
+    .orderBy('id')
+    .execute();
+}
 
 function authorizationValue(credential: string): string {
   return ['Bearer', credential].join(' ');
 }
 
-function cloneMirror(
+export function cloneMirror(
   remote: string,
   path: string,
   credential: string,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
+    let stderr = '';
+    let truncated = false;
+    let errorCode: string | undefined;
     const child = spawn('git', ['clone', '--mirror', remote, path], {
       env: {
         ...process.env,
+        GIT_TERMINAL_PROMPT: '0',
+        LC_ALL: 'C',
         GIT_CONFIG_COUNT: '1',
         GIT_CONFIG_KEY_0: 'http.extraheader',
         GIT_CONFIG_VALUE_0: [
           'Authorization:',
-          authorizationValue(credential),
+          'Basic',
+          Buffer.from(`x-access-token:${credential}`).toString('base64'),
         ].join(' '),
       },
-      stdio: 'ignore',
+      stdio: ['ignore', 'ignore', 'pipe'],
     });
-    child.once('error', reject);
-    child.once('exit', (code) =>
-      code === 0 ? resolve() : reject(new ProjectMirrorError()),
-    );
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (chunk: string) => {
+      if (truncated) return;
+      stderr += chunk;
+      if (Buffer.byteLength(stderr, 'utf8') > 64 * 1024) {
+        // Discard the whole buffer rather than log a partially captured secret.
+        stderr = '';
+        truncated = true;
+      }
+    });
+    child.once('error', (error: NodeJS.ErrnoException) => {
+      errorCode = error.code ?? 'UNKNOWN';
+    });
+    child.once('close', (code, signal) => {
+      if (code === 0 && errorCode === undefined) {
+        resolve();
+        return;
+      }
+      const diagnostic = truncated
+        ? 'Git error output exceeded the capture limit; details were omitted.'
+        : redactGitError(stderr, credential);
+      const message = gitErrorMessage(diagnostic, errorCode);
+      console.error(
+        JSON.stringify({
+          level: 'error',
+          event: 'git.clone.failed',
+          repository: redactGitError(remote, credential),
+          exitCode: code,
+          signal,
+          errorCode,
+          stderr: diagnostic,
+          message,
+        }),
+      );
+      reject(new ProjectMirrorError(message));
+    });
   });
 }
 

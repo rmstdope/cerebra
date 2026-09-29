@@ -8,22 +8,26 @@ import { createEnvelopeCipher } from './credential-cipher.js';
 import { createCredentialService } from './credentials.js';
 import { createDatabase } from './database.js';
 import { createFleet } from './fleet.js';
+import { loadMasterKey } from './master-key.js';
 import { migrateToLatest } from './migrations/index.js';
 import { createNavigatorQueue } from './navigator-queue.js';
-import { createProjectRegistrationService } from './project-registration.js';
+import {
+  createProjectRegistrationService,
+  listProjects,
+} from './project-registration.js';
 import { createPodmanEngine } from './podman-engine.js';
 import { createRunnerGateway } from './runner-gateway.js';
 import { createRunStore } from './runs.js';
-import { startServer } from './server.js';
+import { createServer } from './server.js';
 import { createSupervisor, directoryPreparer } from './supervisor.js';
 
 const port = Number(process.env.CEREBRA_PORT ?? 4317);
 const database = createDatabase(process.env.DATABASE_URL ?? '');
-const projectTokenKey = process.env.CEREBRA_PROJECT_TOKEN_KEY;
 const dataDirectory = process.env.CEREBRA_DATA_DIR ?? '/data';
 const podmanSocket = process.env.CEREBRA_PODMAN_SOCKET;
 
 try {
+  const projectTokenKey = await loadMasterKey();
   await migrateToLatest(database);
   const fleet = createFleet(database);
   await fleet.seedAgentTypes(
@@ -59,32 +63,31 @@ try {
           runs: createRunStore(database),
         });
   await supervisor?.recoverAfterRestart();
-  const server = await startServer(
-    { host: '0.0.0.0', port },
-    {
-      auth: createAuthService(database),
-      board: createBoard(database),
-      conversations: supervisor,
-      credentials,
-      fleet,
-      projects:
-        projectTokenKey === undefined
-          ? undefined
-          : createProjectRegistrationService({
-              dataDirectory,
-              database,
-              masterKey: projectTokenKey,
-            }),
-      queue: createNavigatorQueue(database),
-      runnerGateway:
-        supervisor === undefined
-          ? undefined
-          : createRunnerGateway(supervisor.gateway),
-      runs: supervisor,
-      uiDirectory: new URL('../../ui/dist', import.meta.url).pathname,
-    },
-  );
+  const server = await createServer({
+    auth: createAuthService(database),
+    board: createBoard(database),
+    conversations: supervisor,
+    credentials,
+    fleet,
+    listProjects: () => listProjects(database),
+    projects:
+      projectTokenKey === undefined
+        ? undefined
+        : createProjectRegistrationService({
+            dataDirectory,
+            database,
+            masterKey: projectTokenKey,
+          }),
+    queue: createNavigatorQueue(database),
+    runnerGateway:
+      supervisor === undefined
+        ? undefined
+        : createRunnerGateway(supervisor.gateway),
+    runs: supervisor,
+    uiDirectory: new URL('../../ui/dist', import.meta.url).pathname,
+  });
   server.addHook('onClose', async () => database.destroy());
+  await server.listen({ host: '0.0.0.0', port });
 } catch (error) {
   await database.destroy();
   throw error;

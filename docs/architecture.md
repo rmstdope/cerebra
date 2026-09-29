@@ -67,7 +67,10 @@ the API socket's Docker-compatible endpoints; an engine failure is an error, and
 own "no such container" reads as a container that is absent.
 
 **Networks.** `cerebro-internal` joins the main container and every agent container and nothing
-else. `cerebro-egress` joins agent containers only. The UI port is published on `127.0.0.1` only
+else. `cerebro-egress` gives the main container and agents outbound access to GitHub and other
+external services. Postgres uses a separate private network shared only with main, never the
+agent or egress networks. In the local Compose deployment this database network is named
+`internal`, and main also joins `egress`. The UI port is published on `127.0.0.1` only
 (D1); a server deployment puts a TLS reverse proxy in front of it.
 
 ## 3. The main backend
@@ -269,8 +272,14 @@ logged, never returned by the API, and never written into a checkout. Resolution
 
 The MVP stores instance and project credentials; agent-type scope comes later. Every value
 (`credentials`) is sealed with AES-256-GCM under its own random data key, which is itself sealed
-under the master key (`CEREBRA_PROJECT_TOKEN_KEY` until the pod provisions a Podman secret);
-without that key the credential routes answer 503. Deliveries (`agent_credentials`) are declared
+under the master key. The local launcher creates the external Podman secret
+`cerebra-project-token-key` once and reuses it across starts and updates. Main reads it through
+`CEREBRA_PROJECT_TOKEN_KEY_FILE`; an unreadable or malformed configured key prevents startup.
+Legacy direct backend deployments may instead provide `CEREBRA_PROJECT_TOKEN_KEY`, never both
+sources. Without either source the credential and project-registration routes answer 503.
+When the secret is absent, the launcher checks for existing encrypted records before generating
+anything; existing ciphertext requires importing its original key, and a failed check stops
+startup. Deliveries (`agent_credentials`) are declared
 per project and agent type, by name, as an environment variable or an absolute file path outside
 `/work`. Two are built in and need no declaration: `Claude sign-in token` as
 `CLAUDE_CODE_OAUTH_TOKEN` to every type, and `GitHub access token` as `GH_TOKEN` to producer,
@@ -308,6 +317,8 @@ Three layers, each covering what the others do not (D31):
 
 Restoring an instance is: restore the latest dump, then replay each project's board branch over
 it, so board changes made after the dump are not lost.
+The encryption master key must also be retained in a separately protected backup and restored as
+the same Podman secret before starting the restored instance; database dumps do not contain it.
 
 ### Data model (outline)
 
@@ -374,7 +385,7 @@ authentication.
 
 ## 12. Images
 
-- `cerebro-main`: the backend and the built UI.
+- `cerebro-main`: the backend, built UI, Git and CA certificates for GitHub access.
 - `cerebro-agent`: the runner, Node, git, `gh`, the Claude CLI and the Copilot CLI. The MVP
   image carries no Copilot CLI (`spec.md` §14); the Claude CLI is the native binary the Claude
   Agent SDK installs for the platform.

@@ -9,7 +9,8 @@ item is in exactly one state of one fixed lifecycle (triage, grooming, design, b
 verify); every agent run is a rootless container holding only what its role needs; and every agent
 is shown as a structured chat the navigator can talk into.
 
-**Status:** designed, not yet built. The documents are the whole of it so far.
+**Status:** the local UI and backend are available to try. The full autonomous fleet workflow is
+still under development.
 
 ## Development
 
@@ -51,23 +52,80 @@ The workspace packages are:
 
 ## Local instance
 
-Cerebra runs as a rootless Podman pod. On macOS, install Podman and create/start its machine
-before the first launch:
+Cerebra runs as a rootless Podman pod. The launcher uses `podman compose`, which requires a
+separately installed Compose provider. Docker and Docker Desktop are not required: use
+`podman-compose` with Podman as the container engine.
+
+On macOS with Homebrew, install Podman and its Compose provider, then create/start the machine
+before the first launch (skip `podman machine init` if you already have a machine):
 
 ```bash
+brew install podman podman-compose openssl
 podman machine init
 podman machine start
+export PODMAN_COMPOSE_PROVIDER=podman-compose
 printf 'POSTGRES_PASSWORD=choose-a-long-local-password\n' > .env
+./cerebra start
+```
+
+The export explicitly selects `podman-compose` for `start`, `status`, and `update` in the current
+shell. Add it to your shell configuration (for example, `~/.zshrc`) to keep that selection in new
+terminals.
+
+If startup reports `looking up compose provider failed` and lists missing `docker-compose`
+executables, Podman is searching for a provider, not requiring the Docker engine. Install and
+select the Podman provider, then retry:
+
+```bash
+brew install podman-compose
+export PODMAN_COMPOSE_PROVIDER=podman-compose
 ./cerebra start
 ```
 
 The application is published only at `http://localhost:4317`; Postgres has no host port. The named
 `cerebra-data` and `cerebra-postgres` volumes retain application data and database records across
-container restarts. Check the pod with `./cerebra status`.
+container restarts. Startup waits for Postgres to accept connections before starting the backend.
+The main container has outbound access to GitHub, with Git and CA certificates installed; Postgres
+stays on a private network with no published port.
+
+On the first start, the launcher uses OpenSSL to generate a random encryption master key directly
+into the external Podman secret `cerebra-project-token-key`. The backend reads its mounted file at
+startup; the key is not put in `.env`, the checkout, container environment, or application logs.
+Starts and updates reuse that same secret, including after a failed build. Keep it with your
+instance: losing it makes stored credentials and project tokens unrecoverable. Include the master
+key in your secure, separately protected backup procedure before deleting a Podman machine or
+restoring database dumps. Do not delete or replace the secret to troubleshoot startup.
+
+For an older installation that already encrypted values using `CEREBRA_PROJECT_TOKEN_KEY`, import
+that **same** key into the named Podman secret before updating (supply it over standard input to
+`podman secret create cerebra-project-token-key -` from your secure secret store, never as a command
+argument or checkout file). The launcher refuses to generate a replacement if encrypted records
+already exist, or if it cannot check the database. An older installation with no encrypted records
+can use `./cerebra start` directly. Direct, non-Compose backend development still accepts the legacy
+environment variable; never configure it together with `CEREBRA_PROJECT_TOKEN_KEY_FILE`.
+
+Startup reports ready only after the backend health endpoint responds.
+Check the pod and its master-key availability with `./cerebra status`. If the browser cannot connect, check whether the `main`
+container has exited and read its startup error:
+
+```bash
+podman compose --file images/podman-compose.yml logs --tail 50 main
+```
 
 When ready to update, run `./cerebra update`. It rebuilds and restarts the pod. Running work stops
 and is returned to its queue by the backend; persisted data remains safe in the named volumes. A
 failed start or update reports the Podman failure directly so it can be corrected before retrying.
+
+Open `http://localhost:4317`, choose your local password if prompted, and use **Add project** with a
+GitHub repository URL and a project GitHub token that can access that repository. The token is
+encrypted before storage. An invalid token reports an access error rather than an unavailable
+registration service. Register only repositories you intend this instance to manage.
+
+Use the **Project** picker to open a registered project's board or fleet, or choose **Add project**
+to register another repository. The list comes from Postgres, so projects remain available even
+if browser storage is cleared. Cerebra remembers the selection when registration succeeds or you
+select a project; returning visits keep the cross-project navigator queue visible. A failed
+project-list request shows an error and retry control, not onboarding.
 
 [`images/`](images/) is reserved for Containerfiles and [`spikes/`](spikes/) for throwaway
 experiments.

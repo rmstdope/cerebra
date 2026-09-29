@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
+set +x
 set -euo pipefail
 
 readonly compose_file="images/podman-compose.yml"
+readonly key_secret="cerebra-project-token-key"
 
 fail() {
   printf 'Cerebra: %s\n' "$*" >&2
@@ -23,24 +25,96 @@ run_compose() {
   podman compose --file "$compose_file" "$@"
 }
 
+has_key() {
+  local result=0
+  podman secret exists "$key_secret" || result=$?
+  case "$result" in
+    0) return 0 ;;
+    1) return 1 ;;
+    *) fail "Could not inspect the master-key secret. Check Podman before retrying." ;;
+  esac
+}
+
+ensure_key() {
+  has_key && return 0
+  command -v openssl >/dev/null 2>&1 || fail "OpenSSL is required to generate the master key."
+  run_compose up --detach --no-recreate postgres || fail "Could not start Postgres to check existing encrypted data."
+  local ready=false
+  for ((attempt=0; attempt<60; attempt++)); do
+    if run_compose exec -T postgres pg_isready -h 127.0.0.1 -U cerebra -d cerebra >/dev/null 2>&1; then
+      ready=true
+      break
+    fi
+    sleep 1
+  done
+  "$ready" || fail "Postgres is not ready. No master key was created."
+  # A missing key must never strand ciphertext from an earlier installation.
+  run_compose exec -T postgres psql -X -U cerebra -d cerebra -v ON_ERROR_STOP=1 >/dev/null <<'SQL' ||
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'projects'
+      AND column_name = 'github_token_ciphertext'
+  ) THEN
+    IF EXISTS (SELECT 1 FROM public.projects WHERE github_token_ciphertext IS NOT NULL) THEN
+      RAISE EXCEPTION 'Existing encrypted project tokens require their original master key.';
+    END IF;
+  END IF;
+  IF to_regclass('public.credentials') IS NOT NULL THEN
+    IF EXISTS (SELECT 1 FROM public.credentials) THEN
+      RAISE EXCEPTION 'Existing encrypted credentials require their original master key.';
+    END IF;
+  END IF;
+END $$;
+SQL
+    fail "Could not verify that existing encrypted data is absent. If it exists, restore its original key as Podman secret $key_secret; see README. No key was generated."
+  local key
+  key="$(openssl rand -base64 32)" || fail "Could not generate the master key."
+  [[ "$key" =~ ^[A-Za-z0-9+/]{43}=$ ]] || fail "Could not generate a valid master key."
+  printf '%s' "$key" | podman secret create "$key_secret" - >/dev/null ||
+    fail "Could not store the master-key secret. No existing secret was replaced; retry after checking Podman."
+  unset key
+}
+
+main_ready() {
+  run_compose exec -T main node -e \
+    'fetch("http://127.0.0.1:4317/health").then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))' \
+    >/dev/null 2>&1
+}
+
+wait_for_main() {
+  for ((attempt=0; attempt<60; attempt++)); do
+    main_ready && return 0
+    sleep 1
+  done
+  fail "Cerebra did not become healthy. Check main's startup logs; persisted data and the master-key secret were kept."
+}
+
 case "${1:-}" in
   start)
     require_podman
     [ -f .env ] || fail "Missing .env. Set a local POSTGRES_PASSWORD before starting Cerebra."
     ensure_egress_network
+    ensure_key
     run_compose up --build --detach || fail "Cerebra could not start. Read the Podman output above, then try again."
+    wait_for_main
     printf 'Cerebra is ready at http://localhost:4317.\n'
     ;;
   status)
     require_podman
     run_compose ps
+    has_key || fail "The master-key secret is missing. Run ./cerebra start; existing encrypted data requires its original key."
+    main_ready || fail "Cerebra is not healthy. Check main's startup logs."
     ;;
   update)
     require_podman
     [ -f .env ] || fail "Missing .env. Set a local POSTGRES_PASSWORD before updating Cerebra."
     ensure_egress_network
     printf 'Running work will stop. Updating restarts Cerebra; unfinished work returns to its queue.\n'
-    run_compose up --build --detach || fail "Cerebra could not restart. Your data is still safe; read the Podman output above, then try again."
+    ensure_key
+    run_compose up --build --detach --force-recreate || fail "Cerebra could not restart. Your data is still safe; read the Podman output above, then try again."
+    wait_for_main
     printf 'Cerebra is ready at http://localhost:4317.\n'
     ;;
   *)

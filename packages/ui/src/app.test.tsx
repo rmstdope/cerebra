@@ -1,7 +1,7 @@
-import { App, type ThemeMediaQuery } from './app';
+import { App as CerebraApp, type ThemeMediaQuery } from './app';
 import type { AuthClient } from './auth';
 import type { BoardClient, WorkItem } from './board';
-import type { CredentialClient } from './credentials';
+import type { CredentialClient, CredentialOverview } from './credentials';
 import type { FleetClient } from './fleet';
 import type { QueueClient } from './queue';
 import type { ConversationClient } from './runs';
@@ -14,8 +14,32 @@ import {
   within,
 } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { act } from 'react';
+import { act, type ComponentProps } from 'react';
 import { afterEach, describe, expect, test, vi } from 'vitest';
+
+const savedProjects = [
+  {
+    id: 'project-1',
+    owner: 'acme',
+    name: 'website',
+    prefix: 'WEB',
+    defaultBranch: 'main',
+    remote: 'https://github.com/acme/website.git',
+  },
+  {
+    id: 'project-9',
+    owner: 'acme',
+    name: 'app',
+    prefix: 'APP',
+    defaultBranch: 'main',
+    remote: 'https://github.com/acme/app.git',
+  },
+];
+const directoryClient = { list: async () => savedProjects };
+
+function App(props: ComponentProps<typeof CerebraApp>) {
+  return <CerebraApp projectDirectoryClient={directoryClient} {...props} />;
+}
 
 class FakeMediaQuery implements ThemeMediaQuery {
   public readonly listeners = new Set<(event: MediaQueryListEvent) => void>();
@@ -67,6 +91,151 @@ const authenticatedAuth: AuthClient = {
 };
 
 describe('App', () => {
+  test('loads saved projects without browser state and opens the chosen board', async () => {
+    const user = userEvent.setup();
+    const storage = new Map<string, string>();
+    render(
+      <App
+        authClient={authenticatedAuth}
+        queueClient={emptyQueue}
+        mediaQuery={new FakeMediaQuery(false)}
+        storage={{
+          getItem: (key) => storage.get(key) ?? null,
+          setItem: (key, value) => void storage.set(key, value),
+        }}
+      />,
+    );
+    const picker = await screen.findByRole('combobox', { name: 'Project' });
+    expect(
+      await within(picker).findByRole('option', { name: 'acme/website' }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole('heading', { name: 'Add a GitHub project' }),
+    ).toBeNull();
+    await user.selectOptions(picker, 'project-1');
+    expect(
+      await screen.findByRole('region', { name: 'Project board' }),
+    ).toBeTruthy();
+    expect(storage.get('cerebra.project')).toBe('project-1');
+    await user.selectOptions(picker, 'project-9');
+    expect(storage.get('cerebra.project')).toBe('project-9');
+  });
+
+  test('remembers registration immediately and reopens the saved project on a returning visit', async () => {
+    const user = userEvent.setup();
+    const storage = new Map<string, string>();
+    const project = savedProjects[0];
+    const props = {
+      authClient: authenticatedAuth,
+      queueClient: emptyQueue,
+      mediaQuery: new FakeMediaQuery(false),
+      storage: {
+        getItem: (key: string) => storage.get(key) ?? null,
+        setItem: (key: string, value: string) => void storage.set(key, value),
+      },
+    };
+    const first = render(
+      <App
+        {...props}
+        projectDirectoryClient={{ list: async () => [] }}
+        projectClient={{
+          discover: async () => project,
+          register: async () => project,
+        }}
+      />,
+    );
+    await screen.findByRole('heading', { name: 'Add a GitHub project' });
+    await user.type(
+      screen.getByLabelText('GitHub repository link'),
+      project.remote,
+    );
+    await user.type(
+      screen.getByLabelText('GitHub access token'),
+      'synthetic-token',
+    );
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    await user.click(
+      await screen.findByRole('button', { name: 'Add project' }),
+    );
+    await screen.findByRole('heading', { name: 'Project added' });
+    expect(storage.get('cerebra.project')).toBe(project.id);
+    first.unmount();
+
+    render(<App {...props} />);
+    expect(
+      await screen.findByRole('region', { name: 'Project board' }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole<HTMLSelectElement>('combobox', { name: 'Project' })
+        .value,
+    ).toBe(project.id);
+    expect(
+      screen.queryByRole('heading', { name: 'Add a GitHub project' }),
+    ).toBeNull();
+  });
+
+  test('recovers from a stale saved project and supports selection without writable browser storage', async () => {
+    const user = userEvent.setup();
+    render(
+      <App
+        authClient={authenticatedAuth}
+        queueClient={emptyQueue}
+        mediaQuery={new FakeMediaQuery(false)}
+        storage={{
+          getItem: (key) =>
+            key === 'cerebra.project' ? 'deleted-project' : null,
+          setItem: () => {
+            throw new Error('Storage unavailable');
+          },
+        }}
+      />,
+    );
+    const picker = await screen.findByRole<HTMLSelectElement>('combobox', {
+      name: 'Project',
+    });
+    expect(picker.value).toBe('');
+    expect(
+      screen.queryByRole('heading', { name: 'Add a GitHub project' }),
+    ).toBeNull();
+    await user.selectOptions(picker, 'project-1');
+    expect(
+      await screen.findByRole('region', { name: 'Project board' }),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(/Cerebra couldn’t remember your project selection/),
+    ).toBeTruthy();
+  });
+
+  test('does not mistake a failed project read for first-use onboarding and can retry', async () => {
+    const user = userEvent.setup();
+    const list = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValue(savedProjects);
+    render(
+      <App
+        authClient={authenticatedAuth}
+        queueClient={emptyQueue}
+        mediaQuery={new FakeMediaQuery(false)}
+        projectDirectoryClient={{ list }}
+        storage={{ getItem: () => null, setItem: () => undefined }}
+      />,
+    );
+    expect(
+      await screen.findByText(
+        'Cerebra couldn’t load your projects. Try again.',
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole('heading', { name: 'Add a GitHub project' }),
+    ).toBeNull();
+    await user.click(
+      screen.getByRole('button', { name: 'Retry loading projects' }),
+    );
+    expect(
+      await screen.findByRole('option', { name: 'acme/website' }),
+    ).toBeTruthy();
+  });
   test('renders the agreed empty state and selects an appearance by keyboard', async () => {
     const user = userEvent.setup();
     const mediaQuery = new FakeMediaQuery(false);
@@ -161,7 +330,7 @@ describe('App', () => {
     ).toBeTruthy();
   });
 
-  test('follows a changed system preference while System is selected', () => {
+  test('follows a changed system preference while System is selected', async () => {
     const mediaQuery = new FakeMediaQuery(false);
     render(
       <App
@@ -171,6 +340,7 @@ describe('App', () => {
       />,
     );
 
+    await screen.findByRole('combobox', { name: 'Project' });
     expect(document.documentElement.dataset.theme).toBe('light');
     act(() => mediaQuery.update(true));
     expect(document.documentElement.dataset.theme).toBe('dark');
@@ -629,57 +799,131 @@ describe('App', () => {
     ).toBeTruthy();
   });
 
-  test('a conversation link opens that conversation and Back to fleet leaves it', async () => {
-    const user = userEvent.setup();
-    const runId = '5b3c4a8e-8f0e-4c7a-9d57-1f2a3b4c5d6e';
-    const read: string[] = [];
-    const conversationClient: ConversationClient = {
-      answer: async () => undefined,
-      read: async (id) => {
-        read.push(id);
-        return {
-          events: [],
-          run: {
-            agentId: 'agent-astra',
-            agentName: 'Astra',
-            agentRole: 'assistant',
-            endedAt: null,
-            failure: null,
-            id,
-            item: null,
-            startedAt: '2026-10-01T09:30:00.000Z',
-            state: 'starting',
-          },
-        };
-      },
-      send: async () => undefined,
-      stop: async () => undefined,
-      subscribe: () => () => undefined,
-    };
-    window.location.hash = `#/conversations/${runId}`;
+  test.each(['back', 'switch'])(
+    'a conversation link opens and %s leaves it',
+    async (action) => {
+      const user = userEvent.setup();
+      const runId = '5b3c4a8e-8f0e-4c7a-9d57-1f2a3b4c5d6e';
+      const read: string[] = [];
+      const conversationClient: ConversationClient = {
+        answer: async () => undefined,
+        read: async (id) => {
+          read.push(id);
+          return {
+            events: [],
+            run: {
+              agentId: 'agent-astra',
+              agentName: 'Astra',
+              agentRole: 'assistant',
+              endedAt: null,
+              failure: null,
+              id,
+              item: null,
+              startedAt: '2026-10-01T09:30:00.000Z',
+              state: 'starting',
+            },
+          };
+        },
+        send: async () => undefined,
+        stop: async () => undefined,
+        subscribe: () => () => undefined,
+      };
+      window.location.hash = `#/conversations/${runId}`;
 
+      render(
+        <App
+          authClient={authenticatedAuth}
+          conversationClient={conversationClient}
+          mediaQuery={new FakeMediaQuery(false)}
+          queueClient={emptyQueue}
+          storage={{ getItem: () => null, setItem: () => undefined }}
+        />,
+      );
+
+      expect(
+        await screen.findByRole('heading', { level: 1, name: 'Astra' }),
+      ).toBeTruthy();
+      expect(read).toEqual([runId]);
+      expect(
+        screen.queryByRole('heading', { name: 'Manage Cerebra' }),
+      ).toBeNull();
+
+      if (action === 'back') {
+        await user.click(screen.getByRole('button', { name: 'Back to fleet' }));
+      } else {
+        await user.selectOptions(
+          await screen.findByRole('combobox', { name: 'Project' }),
+          'project-9',
+        );
+        expect(
+          await screen.findByRole('region', { name: 'Project board' }),
+        ).toBeTruthy();
+        expect(
+          screen.queryByRole('heading', { level: 1, name: 'Astra' }),
+        ).toBeNull();
+      }
+      expect(window.location.hash).toBe('');
+      expect(
+        await screen.findByRole('heading', { name: 'Manage Cerebra' }),
+      ).toBeTruthy();
+    },
+  );
+
+  test('switching projects discards a previous project’s delayed credential response', async () => {
+    const user = userEvent.setup();
+    let finishFirst: (value: CredentialOverview) => void = () => {
+      throw new Error('First request not started');
+    };
+    const first = new Promise<CredentialOverview>((resolve) => {
+      finishFirst = resolve;
+    });
+    const overview = (id: string): CredentialOverview => ({
+      attention: [],
+      instanceCredentials: [],
+      project: { id, name: id },
+      projectCredentials: [
+        {
+          id: `credential-${id}`,
+          name: `Token for ${id}`,
+          scope: 'project',
+          lastUsedAt: null,
+          lastUsedRunId: null,
+          needsAttention: false,
+          usedBy: [],
+          usedByEveryAgent: false,
+        },
+      ],
+    });
+    const unused = async () => {
+      throw new Error('Not exercised');
+    };
+    const client: CredentialClient = {
+      overview: (id) =>
+        id === 'project-1' ? first : Promise.resolve(overview('project-9')),
+      agentCredentials: unused,
+      remove: unused,
+      save: unused,
+      setAgentCredentials: unused,
+    };
+    window.location.hash = '#/settings/credentials';
     render(
       <App
         authClient={authenticatedAuth}
-        conversationClient={conversationClient}
+        credentialClient={client}
         mediaQuery={new FakeMediaQuery(false)}
-        queueClient={emptyQueue}
-        storage={{ getItem: () => null, setItem: () => undefined }}
+        storage={{
+          getItem: (key) => (key === 'cerebra.project' ? 'project-1' : null),
+          setItem: () => undefined,
+        }}
       />,
     );
-
-    expect(
-      await screen.findByRole('heading', { level: 1, name: 'Astra' }),
-    ).toBeTruthy();
-    expect(read).toEqual([runId]);
-    expect(
-      screen.queryByRole('heading', { name: 'Manage Cerebra' }),
-    ).toBeNull();
-
-    await user.click(screen.getByRole('button', { name: 'Back to fleet' }));
-    expect(window.location.hash).toBe('');
-    expect(
-      await screen.findByRole('heading', { name: 'Manage Cerebra' }),
-    ).toBeTruthy();
+    await user.selectOptions(
+      await screen.findByRole('combobox', { name: 'Project' }),
+      'project-9',
+    );
+    expect(await screen.findByText('Token for project-9')).toBeTruthy();
+    await act(async () => finishFirst(overview('project-1')));
+    expect(screen.queryByText('Token for project-1')).toBeNull();
+    expect(screen.getByText('Token for project-9')).toBeTruthy();
   });
 });
