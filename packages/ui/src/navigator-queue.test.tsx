@@ -30,6 +30,7 @@ function entry(overrides: Partial<QueueEntry>): QueueEntry {
     priority: null,
     projectId: 'project-1',
     projectName: 'acme/mobile',
+    run: null,
     since: '2026-09-29T00:00:00.000Z',
     title: 'Untitled',
     waitingReason: null,
@@ -92,10 +93,14 @@ function renderQueue(
   client: QueueClient,
   {
     onCountChange = () => undefined,
+    now = () => new Date('2026-09-29T00:12:30.000Z'),
+    onOpenConversation = () => undefined,
     onViewWork = () => undefined,
     pollIntervalMs = 60_000,
     storage = memoryStorage(),
   }: {
+    now?: () => Date;
+    onOpenConversation?: (runId: string) => void;
     onCountChange?: (count: number) => void;
     onViewWork?: (projectId: string, itemId: string, tab: string) => void;
     pollIntervalMs?: number;
@@ -105,7 +110,9 @@ function renderQueue(
   return render(
     <NavigatorQueue
       client={client}
+      now={now}
       onCountChange={onCountChange}
+      onOpenConversation={onOpenConversation}
       onViewWork={onViewWork}
       pollIntervalMs={pollIntervalMs}
       storage={storage}
@@ -663,4 +670,67 @@ test('shows an inline Loading… while a deliberate refresh keeps the rows', asy
   expect(screen.getAllByText('Loading…').length).toBeGreaterThan(0);
   await act(async () => respond?.(page([question])));
   await waitFor(() => expect(screen.queryByText('Loading…')).toBeNull());
+});
+
+const assistantQuestion = entry({
+  askedBy: 'Astra',
+  availableRoutes: [],
+  id: 'run:run-7:q-1',
+  kind: 'question',
+  run: { id: 'run-7' },
+  since: '2026-09-29T00:00:00.000Z',
+  title: 'Which database should the demo use?',
+  waitingReason: 'Which database should the demo use?',
+});
+
+test('an assistant’s question says who asks, how long it has waited, and Answer opens the conversation', async () => {
+  const opened: string[] = [];
+  renderQueue(
+    createClient({ list: async () => page([assistantQuestion, newWork]) }),
+    { onOpenConversation: (runId) => opened.push(runId) },
+  );
+
+  const row = (
+    await screen.findByText('Astra asks: Which database should the demo use?')
+  ).closest('[data-run]');
+  if (row === null) throw new Error('no row');
+  expect(within(row).getByText('Question')).toBeTruthy();
+  expect(within(row).getByText('Waiting 12 min')).toBeTruthy();
+  expect(screen.queryByRole('button', { name: /Astra asks/ })).toBeNull();
+
+  const answer = within(row).getByRole('button', { name: 'Answer' });
+  answer.focus();
+  await userEvent.keyboard('{Enter}');
+  expect(opened).toEqual(['run-7']);
+  expect(screen.queryByRole('heading', { name: /Which database/ })).toBeNull();
+});
+
+test('the waiting time reads in minutes, hours and days', async () => {
+  const at = (minutes: number) =>
+    new Date(Date.parse('2026-09-29T00:00:00.000Z') + minutes * 60_000);
+  for (const [minutes, words] of [
+    [0.5, 'Waiting less than a minute'],
+    [59, 'Waiting 59 min'],
+    [150, 'Waiting 2 h'],
+    [60 * 24 * 3 + 5, 'Waiting 3 d'],
+  ] as const) {
+    renderQueue(createClient({ list: async () => page([assistantQuestion]) }), {
+      now: () => at(minutes),
+    });
+    expect(await screen.findByText(words)).toBeTruthy();
+    cleanup();
+  }
+});
+
+test('a remembered selection never opens an assistant’s question', async () => {
+  const storage = memoryStorage();
+  storage.setItem(
+    'cerebra.queue',
+    JSON.stringify({ collapsed: [], count: 1, selected: assistantQuestion.id }),
+  );
+  renderQueue(createClient({ list: async () => page([assistantQuestion]) }), {
+    storage,
+  });
+  await screen.findByText('Astra asks: Which database should the demo use?');
+  expect(screen.queryByLabelText('Your answer')).toBeNull();
 });

@@ -17,7 +17,29 @@ export interface Question {
 export type RunEvent = { readonly parentToolCallId?: string } & (
   | { readonly kind: 'message'; readonly text: string }
   | { readonly kind: 'user_message'; readonly text: string }
-  | { readonly kind: 'tool_call'; readonly name: string }
+  | {
+      readonly kind: 'tool_call';
+      readonly toolCallId: string;
+      readonly name: string;
+      readonly input: unknown;
+    }
+  | {
+      readonly kind: 'tool_result';
+      readonly toolCallId: string;
+      readonly content: string;
+      readonly isError: boolean;
+    }
+  | {
+      readonly kind: 'subagent_start';
+      readonly toolCallId: string;
+      readonly subagentType: string;
+      readonly description: string;
+    }
+  | {
+      readonly kind: 'subagent_end';
+      readonly toolCallId: string;
+      readonly isError: boolean;
+    }
   | {
       readonly kind: 'question';
       readonly questionId: string;
@@ -29,15 +51,7 @@ export type RunEvent = { readonly parentToolCallId?: string } & (
       readonly answers: Readonly<Record<string, string>>;
     }
   | { readonly kind: 'status'; readonly status: 'active' | 'awaiting_input' }
-  | {
-      readonly kind:
-        | 'thinking'
-        | 'tool_result'
-        | 'subagent_start'
-        | 'subagent_end'
-        | 'error'
-        | 'result';
-    }
+  | { readonly kind: 'thinking' | 'error' | 'result' }
 );
 
 export interface RecordedEvent {

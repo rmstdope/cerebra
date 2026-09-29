@@ -826,6 +826,9 @@ export function App({
             <NavigatorQueue
               client={queueClient}
               onCountChange={setQueueCount}
+              onOpenConversation={(runId) => {
+                window.location.hash = `#/conversations/${runId}`;
+              }}
               onViewWork={(nextProject, id, tab) => {
                 openProject(nextProject);
                 setBoardRequest({ id, tab });

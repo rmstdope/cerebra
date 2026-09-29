@@ -14,7 +14,10 @@ import {
   type NavigatorQueue,
   type ProjectRegistration,
 } from '@cerebra/backend';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createServer as createNodeServer } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, expect, test } from 'vitest';
 
 const servers: Array<{ close: () => Promise<void> }> = [];
@@ -43,6 +46,40 @@ test('serves a health response', async () => {
 
   expect(response.statusCode).toBe(200);
   expect(response.json()).toEqual({ status: 'ok' });
+});
+
+test('every response carries a strict Content-Security-Policy', async () => {
+  const uiDirectory = await mkdtemp(join(tmpdir(), 'cerebra-ui-'));
+  try {
+    await writeFile(join(uiDirectory, 'index.html'), '<!doctype html>');
+    const server = await createServer({ auth: authenticatedAuth, uiDirectory });
+    servers.push(server);
+
+    for (const url of ['/', '/health', '/api/projects', '/api/nothing-here']) {
+      const policy = String(
+        (await server.inject(url)).headers['content-security-policy'],
+      );
+      const directives = new Map(
+        policy.split(';').map((directive) => {
+          const [name = '', ...sources] = directive.trim().split(/\s+/);
+          return [name, sources.join(' ')] as const;
+        }),
+      );
+      expect(Object.fromEntries(directives), url).toEqual({
+        'default-src': "'self'",
+        'script-src': "'self'",
+        'style-src': "'self' 'unsafe-inline'",
+        'img-src': "'self' data:",
+        'connect-src': "'self'",
+        'object-src': "'none'",
+        'base-uri': "'none'",
+        'frame-ancestors': "'none'",
+        'form-action': "'self'",
+      });
+    }
+  } finally {
+    await rm(uiDirectory, { force: true, recursive: true });
+  }
 });
 
 test('lists saved projects without returning credential fields', async () => {

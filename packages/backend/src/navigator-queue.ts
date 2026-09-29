@@ -1,4 +1,4 @@
-import type { Kysely } from 'kysely';
+import { sql, type Kysely } from 'kysely';
 
 import {
   boardRoutes,
@@ -27,6 +27,8 @@ export interface QueueEntry {
   readonly priority: Priority | null;
   readonly projectId: string;
   readonly projectName: string;
+  /** The live run whose question this is; null for a work item. */
+  readonly run: { readonly id: string } | null;
   readonly since: Date;
   readonly title: string;
   readonly waitingReason: string | null;
@@ -139,6 +141,71 @@ function askerName(role: string | null): string | null {
   return role.charAt(0).toUpperCase() + role.slice(1);
 }
 
+function projectLabel(name: string, owner: string | null): string {
+  return owner === null ? name : `${owner}/${name}`;
+}
+
+/** The newest unanswered question of every live run in a project. */
+async function runQuestions(database: Kysely<Database>): Promise<QueueEntry[]> {
+  const rows = await database
+    .selectFrom('run_events as asked')
+    .innerJoin('runs', 'runs.id', 'asked.run_id')
+    .innerJoin('projects', 'projects.id', 'runs.project_id')
+    .select([
+      'runs.id as run_id',
+      'runs.agent_name',
+      'asked.event',
+      'asked.created_at',
+      'projects.id as project_id',
+      'projects.name as project_name',
+      'projects.owner as project_owner',
+    ])
+    .where('runs.status', 'in', ['starting', 'active', 'awaiting_input'])
+    .where(sql<string>`asked.event->>'kind'`, '=', 'question')
+    .where(({ not, exists, selectFrom }) =>
+      not(
+        exists(
+          selectFrom('run_events as answer')
+            .select('answer.id')
+            .whereRef('answer.run_id', '=', 'asked.run_id')
+            .where(sql<string>`answer.event->>'kind'`, '=', 'answer')
+            .where(
+              sql<string>`answer.event->>'questionId'`,
+              '=',
+              sql<string>`asked.event->>'questionId'`,
+            ),
+        ),
+      ),
+    )
+    .orderBy('asked.position', 'desc')
+    .execute();
+
+  const newest = new Map<string, QueueEntry>();
+  for (const row of rows) {
+    if (newest.has(row.run_id)) continue;
+    const event = row.event as {
+      questionId: string;
+      questions: readonly { question: string }[];
+    };
+    const text = event.questions[0]?.question ?? '';
+    newest.set(row.run_id, {
+      askedBy: row.agent_name ?? 'The assistant',
+      availableRoutes: [],
+      description: '',
+      id: `run:${row.run_id}:${event.questionId}`,
+      kind: 'question',
+      priority: null,
+      projectId: row.project_id,
+      projectName: projectLabel(row.project_name, row.project_owner),
+      run: { id: row.run_id },
+      since: row.created_at,
+      title: text,
+      waitingReason: text,
+    });
+  }
+  return [...newest.values()];
+}
+
 export function createNavigatorQueue(
   database: Kysely<Database>,
 ): NavigatorQueue {
@@ -194,16 +261,15 @@ export function createNavigatorQueue(
           kind,
           priority: row.priority,
           projectId: row.project_id,
-          projectName:
-            row.project_owner === null
-              ? row.project_name
-              : `${row.project_owner}/${row.project_name}`,
+          projectName: projectLabel(row.project_name, row.project_owner),
+          run: null,
           since: row.updated_at,
           title: row.title,
           waitingReason: row.waiting_reason,
         };
       });
 
+      entries.push(...(await runQuestions(database)));
       return { entries: orderQueue(entries), total: entries.length };
     },
 

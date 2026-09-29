@@ -273,6 +273,19 @@ function deliveriesBody(
   return deliveries;
 }
 
+const contentSecurityPolicy = [
+  "default-src 'self'",
+  "script-src 'self'",
+  // Radix's scroll lock injects a <style> element at runtime; scripts stay strict.
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data:",
+  "connect-src 'self'",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "frame-ancestors 'none'",
+  "form-action 'self'",
+].join('; ');
+
 export const createServer = async ({
   auth,
   board,
@@ -288,6 +301,11 @@ export const createServer = async ({
   uiDirectory = process.env.CEREBRA_UI_DIR,
 }: ServerOptions): Promise<FastifyInstance> => {
   const server = Fastify();
+
+  // The second layer behind rendering agent output as text (architecture §11).
+  server.addHook('onSend', async (_request, reply) => {
+    reply.header('content-security-policy', contentSecurityPolicy);
+  });
 
   await server.register(websocket);
   runnerGateway?.routes(server);

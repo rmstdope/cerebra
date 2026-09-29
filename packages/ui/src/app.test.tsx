@@ -498,6 +498,7 @@ describe('App', () => {
             priority: 'P1',
             projectId: 'project-1',
             projectName: 'acme/mobile',
+            run: null,
             since: '2026-09-29T00:00:00.000Z',
             title: 'Which release should we support?',
             waitingReason: 'Current app only?',
@@ -511,6 +512,7 @@ describe('App', () => {
             priority: 'P2',
             projectId: 'project-1',
             projectName: 'acme/mobile',
+            run: null,
             since: '2026-09-29T00:00:00.000Z',
             title: 'Check the payment flow',
             waitingReason: 'The build failed twice.',
@@ -868,6 +870,89 @@ describe('App', () => {
       ).toBeTruthy();
     },
   );
+
+  test('Answer on an assistant’s question opens its conversation with the question form focused', async () => {
+    const user = userEvent.setup();
+    const runId = '7c3c4a8e-8f0e-4c7a-9d57-1f2a3b4c5d6e';
+    const conversationClient: ConversationClient = {
+      answer: async () => undefined,
+      read: async (id) => ({
+        events: [
+          {
+            createdAt: '2026-10-01T09:31:00.000Z',
+            event: {
+              kind: 'question',
+              questionId: 'q-1',
+              questions: [
+                {
+                  header: '',
+                  multiSelect: false,
+                  options: [{ description: '', label: 'Postgres' }],
+                  question: 'Which database should the demo use?',
+                },
+              ],
+            },
+            position: 1,
+          },
+        ],
+        run: {
+          agentId: 'agent-astra',
+          agentName: 'Astra',
+          agentRole: 'assistant',
+          endedAt: null,
+          failure: null,
+          id,
+          item: null,
+          startedAt: '2026-10-01T09:30:00.000Z',
+          state: 'awaiting_input',
+        },
+      }),
+      send: async () => undefined,
+      stop: async () => undefined,
+      subscribe: () => () => undefined,
+    };
+    const queueClient: QueueClient = {
+      ...emptyQueue,
+      list: async () => ({
+        entries: [
+          {
+            askedBy: 'Astra',
+            availableRoutes: [],
+            description: '',
+            id: `run:${runId}:q-1`,
+            kind: 'question',
+            priority: null,
+            projectId: 'project-1',
+            projectName: 'acme/mobile',
+            run: { id: runId },
+            since: '2026-10-01T09:31:00.000Z',
+            title: 'Which database should the demo use?',
+            waitingReason: 'Which database should the demo use?',
+          },
+        ],
+        total: 1,
+      }),
+    };
+
+    render(
+      <App
+        authClient={authenticatedAuth}
+        conversationClient={conversationClient}
+        mediaQuery={new FakeMediaQuery(false)}
+        queueClient={queueClient}
+        storage={{ getItem: () => null, setItem: () => undefined }}
+      />,
+    );
+
+    await user.click(await screen.findByRole('button', { name: 'Answer' }));
+
+    expect(window.location.hash).toBe(`#/conversations/${runId}`);
+    const form = await screen.findByRole('form', {
+      name: 'Which database should the demo use?',
+    });
+    await waitFor(() => expect(document.activeElement).toBe(form));
+    window.location.hash = '';
+  });
 
   test('switching projects discards a previous project’s delayed credential response', async () => {
     const user = userEvent.setup();

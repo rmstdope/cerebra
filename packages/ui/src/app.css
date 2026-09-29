@@ -12,6 +12,9 @@
   --accent-muted: #eeeaff;
   --focus: #5a43d6;
   --danger: #b42318;
+  --success: #067647;
+  --diff-added: #dcfae6;
+  --diff-removed: #fee4e2;
 }
 
 :root[data-theme='dark'] {
@@ -26,6 +29,9 @@
   --accent-muted: #302665;
   --focus: #b7a9ff;
   --danger: #ffb4ab;
+  --success: #75e0a7;
+  --diff-added: #0b3b24;
+  --diff-removed: #4a1512;
 }
 
 body {

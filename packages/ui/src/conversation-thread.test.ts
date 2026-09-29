@@ -1,0 +1,236 @@
+import { expect, test } from 'vitest';
+
+import {
+  buildThread,
+  describeStep,
+  exitCodeOf,
+  fileChangeOf,
+  lineDiff,
+  stepCountOf,
+  type ThreadItem,
+} from './conversation-thread';
+import type { RecordedEvent, RunEvent } from './runs';
+
+const at = '2026-10-01T09:30:00.000Z';
+
+function records(events: readonly RunEvent[]): RecordedEvent[] {
+  return events.map((event, index) => ({
+    createdAt: at,
+    event,
+    position: index + 1,
+  }));
+}
+
+function kinds(items: readonly ThreadItem[]): string[] {
+  return items.map((item) => item.kind);
+}
+
+test('a step pairs its call with its result, in the order it was called', () => {
+  const items = buildThread(
+    records([
+      { kind: 'message', text: 'Looking.' },
+      {
+        input: { file_path: 'src/a.ts' },
+        kind: 'tool_call',
+        name: 'Read',
+        toolCallId: 't1',
+      },
+      {
+        input: { command: 'pnpm test' },
+        kind: 'tool_call',
+        name: 'Bash',
+        toolCallId: 't2',
+      },
+      { content: 'one', isError: false, kind: 'tool_result', toolCallId: 't1' },
+      { kind: 'message', text: 'Done.' },
+    ]),
+  );
+
+  expect(kinds(items)).toEqual(['assistant', 'step', 'step', 'assistant']);
+  expect(items[1]).toMatchObject({
+    name: 'Read',
+    result: { content: 'one', isError: false },
+    toolCallId: 't1',
+  });
+  expect(items[2]).toMatchObject({ result: null, toolCallId: 't2' });
+});
+
+test('a helper holds what it does, nested helpers included, and counts its own steps', () => {
+  const items = buildThread(
+    records([
+      {
+        description: 'Review the diff',
+        kind: 'subagent_start',
+        subagentType: 'reviewer',
+        toolCallId: 'h1',
+      },
+      { kind: 'message', parentToolCallId: 'h1', text: 'Reading.' },
+      {
+        input: {},
+        kind: 'tool_call',
+        name: 'Read',
+        parentToolCallId: 'h1',
+        toolCallId: 't1',
+      },
+      {
+        content: 'x',
+        isError: false,
+        kind: 'tool_result',
+        parentToolCallId: 'h1',
+        toolCallId: 't1',
+      },
+      {
+        description: '',
+        kind: 'subagent_start',
+        parentToolCallId: 'h1',
+        subagentType: 'explore',
+        toolCallId: 'h2',
+      },
+      {
+        input: {},
+        kind: 'tool_call',
+        name: 'Grep',
+        parentToolCallId: 'h2',
+        toolCallId: 't2',
+      },
+      { isError: false, kind: 'subagent_end', toolCallId: 'h1' },
+    ]),
+  );
+
+  expect(kinds(items)).toEqual(['helper']);
+  const helper = items[0];
+  if (helper?.kind !== 'helper') throw new Error('not a helper');
+  expect(helper.task).toBe('Review the diff');
+  expect(helper.end).toEqual({ isError: false });
+  expect(kinds(helper.items)).toEqual(['assistant', 'step', 'helper']);
+  const nested = helper.items[2];
+  if (nested?.kind !== 'helper') throw new Error('not a helper');
+  expect(nested.task).toBe('explore');
+  expect(nested.end).toBeNull();
+  expect(kinds(nested.items)).toEqual(['step']);
+  expect(stepCountOf(helper)).toBe(2);
+});
+
+test('an event whose helper is unknown stays in the main thread', () => {
+  const items = buildThread(
+    records([{ kind: 'message', parentToolCallId: 'gone', text: 'Hi' }]),
+  );
+  expect(kinds(items)).toEqual(['assistant']);
+});
+
+test('an answered question is shown as asked and answered where it was answered', () => {
+  const items = buildThread(
+    records([
+      {
+        kind: 'question',
+        questionId: 'q1',
+        questions: [
+          { header: '', multiSelect: false, options: [], question: 'Which?' },
+        ],
+      },
+      { answers: { 'Which?': 'That' }, kind: 'answer', questionId: 'q1' },
+      { kind: 'user_message', text: 'Thanks' },
+    ]),
+  );
+  expect(
+    items.map((item) =>
+      item.kind === 'assistant' || item.kind === 'navigator'
+        ? `${item.kind}:${item.text}`
+        : item.kind,
+    ),
+  ).toEqual(['assistant:Which?', 'navigator:That', 'navigator:Thanks']);
+});
+
+test('each kind of step is described in a few words', () => {
+  expect(describeStep('Bash', { command: 'pnpm test\n  --watch' })).toBe(
+    'Ran pnpm test',
+  );
+  expect(describeStep('Read', { file_path: 'src/a.ts' })).toBe('Read src/a.ts');
+  expect(describeStep('Edit', { file_path: 'src/a.ts' })).toBe(
+    'Edited src/a.ts',
+  );
+  expect(describeStep('MultiEdit', { file_path: 'src/a.ts' })).toBe(
+    'Edited src/a.ts',
+  );
+  expect(describeStep('Write', { file_path: 'b.md' })).toBe('Wrote b.md');
+  expect(describeStep('Grep', { pattern: 'transition' })).toBe(
+    'Searched “transition”',
+  );
+  expect(describeStep('Glob', { pattern: '**/*.ts' })).toBe(
+    'Found files matching “**/*.ts”',
+  );
+  expect(describeStep('WebFetch', { url: 'https://x.test' })).toBe(
+    'Fetched https://x.test',
+  );
+  expect(describeStep('WebSearch', { query: 'vite' })).toBe(
+    'Searched the web for “vite”',
+  );
+  expect(describeStep('TodoWrite', {})).toBe('Updated the to-do list');
+  expect(describeStep('Read', {})).toBe('Used Read');
+  expect(describeStep('mcp__cerebra__file', null)).toBe(
+    'Used mcp__cerebra__file',
+  );
+});
+
+test('file changes are read from Edit, MultiEdit and Write', () => {
+  expect(
+    fileChangeOf('Edit', {
+      file_path: 'src/board.ts',
+      new_string: 'const x = 2\nlog(x)',
+      old_string: 'const x = 1',
+    }),
+  ).toEqual({
+    lines: [
+      { kind: 'removed', text: 'const x = 1' },
+      { kind: 'added', text: 'const x = 2' },
+      { kind: 'added', text: 'log(x)' },
+    ],
+    path: 'src/board.ts',
+  });
+  expect(
+    fileChangeOf('MultiEdit', {
+      edits: [
+        { new_string: 'b', old_string: 'a' },
+        { new_string: 'd', old_string: 'c' },
+      ],
+      file_path: 'f',
+    })?.lines,
+  ).toEqual([
+    { kind: 'removed', text: 'a' },
+    { kind: 'added', text: 'b' },
+    { kind: 'removed', text: 'c' },
+    { kind: 'added', text: 'd' },
+  ]);
+  expect(fileChangeOf('Write', { content: 'a\nb', file_path: 'n' })).toEqual({
+    lines: [
+      { kind: 'added', text: 'a' },
+      { kind: 'added', text: 'b' },
+    ],
+    path: 'n',
+  });
+  expect(fileChangeOf('Read', { file_path: 'f' })).toBeNull();
+  expect(fileChangeOf('Edit', { file_path: 'f' })).toBeNull();
+});
+
+test('a line diff keeps unchanged lines between the changes', () => {
+  expect(lineDiff('a\nb\nc', 'a\nB\nc')).toEqual([
+    { kind: 'same', text: 'a' },
+    { kind: 'removed', text: 'b' },
+    { kind: 'added', text: 'B' },
+    { kind: 'same', text: 'c' },
+  ]);
+});
+
+test('a very large change falls back to all removed then all added', () => {
+  const before = Array.from({ length: 500 }, (_, i) => `l${i}`).join('\n');
+  const after = `${before}\nnew`;
+  const lines = lineDiff(before, after);
+  expect(lines.filter((line) => line.kind === 'removed')).toHaveLength(500);
+  expect(lines.filter((line) => line.kind === 'added')).toHaveLength(501);
+});
+
+test('an exit code is read from a failed command’s output', () => {
+  expect(exitCodeOf('Exit code 1\nFAIL src/a.test.ts')).toBe(1);
+  expect(exitCodeOf('Error: Exit code 127\nnot found')).toBe(127);
+  expect(exitCodeOf('String to replace not found')).toBeNull();
+});

@@ -82,6 +82,14 @@ function nextNeeded(entry: QueueEntry): string {
   }
 }
 
+export function waitingFor(since: string, now: Date): string {
+  const minutes = Math.floor((now.getTime() - Date.parse(since)) / 60_000);
+  if (minutes < 1) return 'less than a minute';
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  return hours < 24 ? `${hours} h` : `${Math.floor(hours / 24)} d`;
+}
+
 function browserStorage(): QueueStorage {
   try {
     return window.localStorage;
@@ -132,13 +140,18 @@ function groupByProject(
 
 export function NavigatorQueue({
   client = browserQueueClient,
+  now = () => new Date(),
   onCountChange,
+  onOpenConversation = () => undefined,
   onViewWork,
   pollIntervalMs = 30_000,
   storage: storageOverride,
 }: {
   readonly client?: QueueClient;
+  readonly now?: () => Date;
   readonly onCountChange?: (count: number) => void;
+  /** Opens the conversation of the run that asked a question. */
+  readonly onOpenConversation?: (runId: string) => void;
   readonly onViewWork: (
     projectId: string,
     itemId: string,
@@ -196,7 +209,8 @@ export function NavigatorQueue({
       setArrivals(0);
       setRefreshError(false);
       setSelectedId((current) =>
-        current !== null && next.entries.some((entry) => entry.id === current)
+        current !== null &&
+        next.entries.some((entry) => entry.id === current && entry.run === null)
           ? current
           : null,
       );
@@ -311,7 +325,9 @@ export function NavigatorQueue({
     );
 
   const entries = shown?.entries ?? [];
-  const selected = entries.find((entry) => entry.id === selectedId) ?? null;
+  const selected =
+    entries.find((entry) => entry.id === selectedId && entry.run === null) ??
+    null;
   const groups = groupByProject(entries);
   const visible = groups.flatMap((group) =>
     collapsed.includes(group.id) ? [] : group.entries,
@@ -515,36 +531,74 @@ export function NavigatorQueue({
                     </button>
                     <div hidden={!open} id={`queue-project-${group.id}`}>
                       {open
-                        ? group.entries.map((entry) => (
-                            <button
-                              aria-current={
-                                selectedId === entry.id ? 'true' : undefined
-                              }
-                              className={`grid w-full grid-cols-1 gap-2 border-b border-[var(--border)] p-4 text-left outline-none focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-[var(--focus)] sm:grid-cols-[auto_1fr] sm:gap-3 ${selectedId === entry.id ? 'bg-[var(--accent-muted)] shadow-[inset_3px_0_var(--accent)]' : ''}`}
-                              key={entry.id}
-                              onClick={() => select(entry.id)}
-                              ref={(element) => {
-                                if (element === null)
-                                  rows.current.delete(entry.id);
-                                else rows.current.set(entry.id, element);
-                              }}
-                              type="button"
-                            >
-                              <span
-                                className={`w-max self-start rounded-full px-2 py-1 text-xs font-bold ${kindBadges[entry.kind]}`}
+                        ? group.entries.map((entry) =>
+                            entry.run !== null ? (
+                              <div
+                                className="grid grid-cols-1 gap-2 border-b border-[var(--border)] p-4 sm:grid-cols-[auto_1fr_auto] sm:items-center sm:gap-3"
+                                data-run={entry.run.id}
+                                key={entry.id}
                               >
-                                {kindLabels[entry.kind]}
-                              </span>
-                              <span className="min-w-0">
-                                <strong className="block break-words">
-                                  {entry.title}
-                                </strong>
-                                <span className="mt-1 block text-sm text-[var(--muted)]">
-                                  {nextNeeded(entry)}
+                                <span
+                                  className={`w-max self-start rounded-full px-2 py-1 text-xs font-bold ${kindBadges.question}`}
+                                >
+                                  {kindLabels.question}
                                 </span>
-                              </span>
-                            </button>
-                          ))
+                                <span className="min-w-0">
+                                  <strong className="block break-words">
+                                    {`${asker(entry)} asks: ${entry.title}`}
+                                  </strong>
+                                  <span className="mt-1 block text-sm text-[var(--muted)]">
+                                    {`Waiting ${waitingFor(entry.since, now())}`}
+                                  </span>
+                                </span>
+                                <button
+                                  className="primary-button w-max"
+                                  onClick={() => {
+                                    if (entry.run !== null) {
+                                      onOpenConversation(entry.run.id);
+                                    }
+                                  }}
+                                  ref={(element) => {
+                                    if (element === null)
+                                      rows.current.delete(entry.id);
+                                    else rows.current.set(entry.id, element);
+                                  }}
+                                  type="button"
+                                >
+                                  Answer
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                aria-current={
+                                  selectedId === entry.id ? 'true' : undefined
+                                }
+                                className={`grid w-full grid-cols-1 gap-2 border-b border-[var(--border)] p-4 text-left outline-none focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-[var(--focus)] sm:grid-cols-[auto_1fr] sm:gap-3 ${selectedId === entry.id ? 'bg-[var(--accent-muted)] shadow-[inset_3px_0_var(--accent)]' : ''}`}
+                                key={entry.id}
+                                onClick={() => select(entry.id)}
+                                ref={(element) => {
+                                  if (element === null)
+                                    rows.current.delete(entry.id);
+                                  else rows.current.set(entry.id, element);
+                                }}
+                                type="button"
+                              >
+                                <span
+                                  className={`w-max self-start rounded-full px-2 py-1 text-xs font-bold ${kindBadges[entry.kind]}`}
+                                >
+                                  {kindLabels[entry.kind]}
+                                </span>
+                                <span className="min-w-0">
+                                  <strong className="block break-words">
+                                    {entry.title}
+                                  </strong>
+                                  <span className="mt-1 block text-sm text-[var(--muted)]">
+                                    {nextNeeded(entry)}
+                                  </span>
+                                </span>
+                              </button>
+                            ),
+                          )
                         : null}
                     </div>
                   </div>
