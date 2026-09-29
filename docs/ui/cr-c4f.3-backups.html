@@ -1,0 +1,49 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Cerebra - Backups (agreed states)</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f7f8fb;color:#172033;font:15px/1.45 system-ui,sans-serif}
+main{width:min(920px,calc(100% - 32px));margin:24px auto 60px}.tag{display:inline-block;margin:36px 0 8px;padding:3px 9px;border-radius:99px;background:#172033;color:#fff;font-size:12px;font-weight:700}
+.frame{padding:22px;border:1px solid #dbe1ea;border-radius:14px;background:#fff}.eyebrow{color:#667085;font-size:12px;font-weight:800;text-transform:uppercase}h1{margin:4px 0;font-size:28px}.lede{margin:0 0 18px;color:#536078}
+.notice{display:flex;gap:10px;align-items:flex-start;margin-bottom:18px;padding:14px 16px;border-radius:12px;border:1px solid}.notice b,.notice span{display:block}.ok{background:#f0faf2;border-color:#b9d6c0}.bad{background:#fdf1f0;border-color:#e6b4ae}.info{background:#f1f5fd;border-color:#b8c8ec}.run{background:#fbf7ec;border-color:#e5d4a4}
+.grid{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(240px,.75fr);gap:18px}.card{padding:18px;border:1px solid #dbe1ea;border-radius:12px}h2{margin:0 0 6px;font-size:17px}.muted{color:#596780;font-size:14px;margin:0}
+.row{display:flex;justify-content:space-between;gap:12px;padding:12px 0;border-top:1px solid #edf0f5}.row span{display:block;color:#596780;font-size:13px}.failed b{color:#a8281c}
+dt{margin-top:12px;color:#78849a;font-size:11px;font-weight:800;text-transform:uppercase}dd{margin:2px 0 0;font-size:14px}code{font-size:13px}
+button{min-height:40px;margin-top:14px;padding:0 13px;border:1px solid #8ca4df;border-radius:8px;background:#fff;color:#26469c;font:inherit;font-weight:700}button.primary{background:#26469c;color:#fff}button:disabled{opacity:.55}button:focus-visible{outline:3px solid #5a43d6;outline-offset:3px}
+.q{padding:14px;border:1px solid #dbe1ea;border-radius:10px;display:flex;justify-content:space-between;gap:10px;align-items:center}
+@media(max-width:680px){.grid{grid-template-columns:1fr}.q{flex-direction:column;align-items:flex-start}}
+</style></head><body><main>
+
+<span class="tag">1 · Normal</span>
+<div class="frame"><div class="eyebrow">Settings</div><h1>Backups</h1><p class="lede">Cerebra saves a daily copy of this instance so it can be restored if needed.</p>
+<div class="notice ok"><b>✓</b><div><b>Backups are up to date</b><span>The latest backup finished today at 02:14.</span></div></div>
+<div class="grid"><section class="card"><h2>Recent backups</h2><p class="muted">7 backups kept. Older ones are removed automatically.</p>
+<div class="row"><div><b>Today, 02:14</b><span>Completed</span></div><span>48.2 MB</span></div>
+<div class="row"><div><b>Yesterday, 02:13</b><span>Completed</span></div><span>47.9 MB</span></div>
+<div class="row"><div><b>Sunday, 02:15</b><span>Completed</span></div><span>47.6 MB</span></div>
+<div class="row"><div><b>Saturday, 02:14</b><span>Completed</span></div><span>47.1 MB</span></div>
+<p class="muted" style="margin-top:8px">…all kept backups are listed; the list never grows past the number kept.</p></section>
+<section class="card"><h2>Backup schedule</h2><dl><dt>Runs</dt><dd>Every day at 02:00</dd><dt>Next backup</dt><dd>Tomorrow, 02:00</dd><dt>Saved to</dt><dd><code>/backups</code></dd><dt>Keeps</dt><dd>The last 7 backups</dd></dl>
+<p class="muted" style="margin-top:14px">These settings are part of how Cerebra was installed. To change them, edit the install settings and restart Cerebra.</p>
+<button class="primary">Back up now</button></section></div></div>
+
+<span class="tag">2 · Backing up now (scheduled or “Back up now”)</span>
+<div class="frame"><div class="notice run"><b>⟳</b><div><b>Backing up…</b><span>Started at 14:02. You can keep working.</span></div></div><button class="primary" disabled>Back up now</button> <span class="muted">A backup is already running.</span></div>
+
+<span class="tag">3 · Before the first backup</span>
+<div class="frame"><div class="notice info"><b>i</b><div><b>No backups yet</b><span>The first backup runs tonight at 02:00.</span></div></div>
+<section class="card"><h2>Recent backups</h2><p class="muted">No completed backups yet. They’ll appear here once the first one finishes.</p></section></div>
+
+<span class="tag">4 · Last backup failed (older backups still listed)</span>
+<div class="frame"><div class="notice bad"><b>!</b><div><b>The last backup didn’t finish</b><span>Tonight’s backup at 02:00 failed: the backup folder is full. Your earlier backups are untouched. Cerebra will try again at the next scheduled time.</span></div></div>
+<section class="card"><h2>Recent backups</h2>
+<div class="row failed"><div><b>Today, 02:00</b><span>Failed — the backup folder is full. Nothing was kept.</span></div><span>—</span></div>
+<div class="row"><div><b>Yesterday, 02:13</b><span>Completed</span></div><span>47.9 MB</span></div></section>
+<button class="primary">Back up now</button></div>
+
+<span class="tag">5 · The same failure in the queue</span>
+<div class="frame"><div class="q"><div><b>Backup failed</b><div class="muted">Today at 02:00 · the backup folder is full</div></div><button style="margin:0">Open Backups</button></div>
+<p class="muted" style="margin-top:10px">Leaves the queue on its own when the next backup completes.</p></div>
+
+<span class="tag">6 · Backup status can’t be read</span>
+<div class="frame"><div class="notice bad"><b>!</b><div><b>Couldn’t load backup status</b><span>Cerebra couldn’t read its backup records. This doesn’t mean backups are missing.</span></div></div><button>Try again</button></div>
+
+</main></body></html>
