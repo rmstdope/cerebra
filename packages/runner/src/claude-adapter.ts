@@ -33,7 +33,8 @@ export interface ClaudeRun {
   answer(questionId: string, answers: Answers): void;
   /** Ends the current turn; the run carries on and waits for the navigator. */
   interrupt(): Promise<void>;
-  stop(): void;
+  /** Ends the run: stopped, or failed when given the reason it cannot go on. */
+  stop(failure?: string): void;
   /** How the run ended, once its final result has been emitted. */
   readonly done: Promise<ResultEnd>;
 }
@@ -76,7 +77,7 @@ export function claudeQueryOptions(
     cwd: context.cwd ?? '/work',
     model: start.model,
     effort: start.effort as EffortLevel,
-    // Default mode, never bare: bare mode ignores the subscription login (decision D9).
+    // Default mode, never bare: bare mode ignores the subscription login (decision D20).
     permissionMode: 'default',
     canUseTool: context.canUseTool,
     settingSources: ['user', 'project', 'local'],
@@ -148,6 +149,7 @@ export function runClaude(context: {
   let status: RunStatus | undefined;
   let finished = false;
   let stopping = false;
+  let failure: string | undefined;
   let interrupting = false;
 
   function become(next: RunStatus): void {
@@ -261,9 +263,12 @@ export function runClaude(context: {
         );
       }
     }
-    return stopping
-      ? ending('stopped')
-      : ending('failed', 'Claude ended before the run finished');
+    if (stopping) {
+      return failure === undefined
+        ? ending('stopped')
+        : ending('failed', failure);
+    }
+    return ending('failed', 'Claude ended before the run finished');
   }
 
   const done = drive();
@@ -289,11 +294,12 @@ export function runClaude(context: {
       interrupting = true;
       await query.interrupt();
     },
-    stop() {
+    stop(reason) {
       if (finished || stopping) {
         return;
       }
       stopping = true;
+      failure = reason;
       for (const resolve of questions.values()) {
         resolve(undefined);
       }

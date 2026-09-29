@@ -491,6 +491,29 @@ describe('a Claude run', () => {
     expect(results[1]).toMatchObject({ end: 'turn' });
   });
 
+  test('fails the run when stopped for a reason', async () => {
+    const fake = fakeQuery(async ({ prompt }) => {
+      await prompt.next();
+      await prompt.next();
+    });
+    const record = recorder();
+    const run = runClaude({
+      start: start(),
+      query: fake.query,
+      env: {},
+      emit: record.emit,
+    });
+
+    run.stop('The gateway went away');
+
+    await expect(run.done).resolves.toBe('failed');
+    expect(record.events.at(-1)).toMatchObject({
+      end: 'failed',
+      error: 'The gateway went away',
+    });
+    expect(fake.close).toHaveBeenCalled();
+  });
+
   test('fails the run when the SDK throws, naming the error', async () => {
     const fake = fakeQuery(async ({ prompt }) => {
       await prompt.next();
