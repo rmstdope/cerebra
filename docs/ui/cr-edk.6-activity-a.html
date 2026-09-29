@@ -1,0 +1,13 @@
+<!doctype html><title>Option A — every step as a quiet line</title><style>body{font-family:system-ui;background:#0f1115;color:#e6e6e6;margin:0;padding:24px}.col{max-width:760px;margin:auto}
+.msg{background:#1a1d24;border-radius:10px;padding:12px 14px;margin:10px 0}.me{background:#23324d;margin-left:80px}
+.row{font:13px ui-monospace,monospace;color:#9aa4b2;padding:4px 8px;border-left:2px solid #333;margin:2px 0}
+.ok{color:#6fcf97}.err{color:#ff6b6b}.box{border:1px solid #333;border-radius:8px;padding:8px;margin:8px 0}
+.add{background:#12351f;color:#8ff0a4}.del{background:#3a1616;color:#ff9b9b}pre{margin:0;font-size:12px}
+h3{font-size:12px;text-transform:uppercase;color:#888;margin:24px 0 4px}.nest{margin-left:24px;border-left:2px dashed #555;padding-left:10px}
+.pill{font-size:11px;background:#333;border-radius:9px;padding:2px 8px}.btn{background:#3b82f6;color:#fff;border:0;border-radius:6px;padding:6px 12px}
+.side{position:fixed;right:0;top:0;bottom:0;width:340px;background:#15181e;border-left:1px solid #333;padding:16px}
+table{width:100%;border-collapse:collapse}td{padding:8px;border-bottom:1px solid #2a2a2a}</style><div class=col><h2>Option A — every step as a quiet line</h2><h3>Normal</h3><div class=msg>I'll look at the board code first.</div>
+<div class=row>▸ Read src/board.ts <span class=ok>✓</span></div><div class=row>▸ Searched "transition" — 12 matches <span class=ok>✓</span></div>
+<div class=row>▾ Edited src/board.ts <span class=ok>✓</span></div><div class=box><pre>src/board.ts  +2 −1</pre><pre class=del>- const x = 1</pre><pre class=add>+ const x = 2</pre><pre class=add>+ log(x)</pre></div><div class=row>▸ Ran pnpm test <span class=err>✗ failed — exit 1</span></div>
+<div class=msg>A test failed; fixing it.</div><h3>Still running</h3><div class=row>▸ Running pnpm test… </div>
+<h3>Very long output</h3><div class=row>▾ Ran pnpm test ✓</div><div class=box><pre>…first 20 lines…</pre><a>Show all 4,210 lines</a></div></div>
