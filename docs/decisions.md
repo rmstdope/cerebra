@@ -256,7 +256,7 @@ only when the item goes back to `design_ready`; the backend closes it, with a co
 Confirmed by the navigator during project definition on 2026-09-28. Amended by cr-c4f.4: a failed
 merge no longer returns the item to `build_ready` by itself; it waits for the navigator as a block
 (`spec.md` §4.5), who sends it back to the builder or returns it to design — agreed with the
-navigator on 2026-10-05.
+navigator on 2026-09-29.
 
 ### D26. v1 ships nine roles — decided
 
