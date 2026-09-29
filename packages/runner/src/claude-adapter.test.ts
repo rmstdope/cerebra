@@ -491,6 +491,42 @@ describe('a Claude run', () => {
     expect(results[1]).toMatchObject({ end: 'turn' });
   });
 
+  test('does not let an interrupt between turns hide the next turn failing', async () => {
+    const [first] = turns(recording('tools'));
+    const fake = fakeQuery(async ({ prompt, emit }) => {
+      await prompt.next();
+      emit(...(first ?? []));
+      await prompt.next();
+      emit({
+        type: 'result',
+        subtype: 'error_during_execution',
+        is_error: true,
+        errors: ['API Error: 500'],
+        total_cost_usd: 0.05,
+        modelUsage: {},
+        session_id: 'session-0001',
+      } as unknown as SDKMessage);
+      await prompt.next();
+    });
+    const record = recorder();
+    const run = runClaude({
+      start: start(),
+      query: fake.query,
+      env: {},
+      emit: record.emit,
+    });
+
+    await record.waitFor((event) => event.kind === 'result');
+    await run.interrupt();
+    run.send('Carry on');
+
+    await expect(run.done).resolves.toBe('failed');
+    expect(record.events.at(-1)).toMatchObject({
+      end: 'failed',
+      error: 'API Error: 500',
+    });
+  });
+
   test('fails the run when stopped for a reason', async () => {
     const fake = fakeQuery(async ({ prompt }) => {
       await prompt.next();

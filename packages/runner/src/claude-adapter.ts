@@ -151,6 +151,8 @@ export function runClaude(context: {
   let stopping = false;
   let failure: string | undefined;
   let interrupting = false;
+  /** From a message sent to Claude until its turn's result; an interrupt applies only then. */
+  let inTurn = false;
 
   function become(next: RunStatus): void {
     if (status !== next) {
@@ -161,6 +163,7 @@ export function runClaude(context: {
 
   function say(text: string): void {
     emit({ kind: 'user_message', text });
+    inTurn = true;
     become('active');
     prompt.push(userMessage(text));
   }
@@ -238,6 +241,7 @@ export function runClaude(context: {
           }
           const interrupted = interrupting;
           interrupting = false;
+          inTurn = false;
           if (interrupted && event.end === 'failed') {
             // An interrupted turn reports an execution error; the run itself is fine.
             const turn = { ...event };
@@ -291,6 +295,9 @@ export function runClaude(context: {
       resolve(answers);
     },
     async interrupt() {
+      if (!inTurn) {
+        return;
+      }
       interrupting = true;
       await query.interrupt();
     },
