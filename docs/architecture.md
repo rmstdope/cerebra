@@ -255,6 +255,15 @@ subscription serves every project, so the ceiling is also what keeps the fleet i
 limit. Each pairing is one transaction:
 claim the item, insert the run. Every decision, including a refusal, is logged with its reason.
 
+In the MVP the triggers are nudges to one coalescing pass: every successful request that changes
+something, every run's end, the backend's start, and a 30-second timer. Each pairing takes a
+transaction-scoped advisory lock and re-checks the pause, both limits and the agent's freedom
+inside it, so two passes never overshoot a limit. A refusal is logged when an item's reason
+changes, not on every pass. The running count covers every live run, including ones the navigator
+started; a navigator's start is never held back by a limit or the pause. The same planning
+explains, for the board, why each ready item has not started (`GET
+/api/projects/:id/automatic-starts`); the Cerebra-wide limit lives in `instance_settings`.
+
 The **scheduler** evaluates each type's cron expressions in UTC once a minute. A tick that comes
 due fires once; one refused by a limit, the project pause or a missing credential is spent, and
 ticks missed while the instance was down are not replayed.
@@ -373,6 +382,7 @@ the ones the lifecycle depends on are the implementer's.
 | `run_events` | `(run, seq, event)`: the normalised event stream the chat view replays. |
 | `secrets` | Name, scope, encrypted value, data key, last use. |
 | `dispatch_log` | Every dispatcher and scheduler decision, with its reason. |
+| `instance_settings` | One row of Cerebra-wide settings: the instance run limit. |
 
 ### Agent events
 
