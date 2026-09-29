@@ -69,6 +69,10 @@ describe('database migrations', { concurrent: false }, () => {
           status: 'Success',
         }),
         expect.objectContaining({
+          migrationName: '20260928220000_add_project_registration',
+          status: 'Success',
+        }),
+        expect.objectContaining({
           migrationName: '20260928220000_create_sessions',
           status: 'Success',
         }),
