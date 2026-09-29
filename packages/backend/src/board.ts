@@ -30,6 +30,10 @@ interface CreateProject {
 
 interface CreateWorkItem {
   readonly description?: string;
+  /** The item the filing run held, when it discovered this one while working (spec §4.10). */
+  readonly discoveredFromId?: string;
+  /** The run that filed it; absent when the navigator did. */
+  readonly filedByRunId?: string;
   readonly id: string;
   readonly priority?: WorkItem['priority'];
   readonly projectId: string;
@@ -59,6 +63,22 @@ export interface BoardComment {
   readonly body: string;
   readonly createdAt: Date;
   readonly id: number;
+}
+
+export interface BoardRecord {
+  readonly createdAt: Date;
+  readonly kind: string;
+  readonly record: unknown;
+}
+
+export interface BoardProvenance {
+  readonly discoveredFromId: string | null;
+  /** The run that filed the item, or `null` when the navigator filed it. */
+  readonly filedBy: {
+    readonly agentName: string | null;
+    readonly role: string;
+    readonly runId: string;
+  } | null;
 }
 
 export type BoardRoute = 'build_ready' | 'design_ready' | 'grooming_ready';
@@ -138,6 +158,8 @@ export interface Board {
   createProject(input: CreateProject): Promise<void>;
   createWorkItem(input: CreateWorkItem): Promise<void>;
   getHistory(itemId: string): Promise<readonly BoardHistoryEntry[]>;
+  getProvenance(itemId: string): Promise<BoardProvenance>;
+  listRecords(itemId: string): Promise<readonly BoardRecord[]>;
   getWorkItem(itemId: string): Promise<BoardWorkItem>;
   listComments(itemId: string): Promise<readonly BoardComment[]>;
   listWorkItems(projectId: string, query?: BoardQuery): Promise<BoardPage>;
@@ -188,6 +210,8 @@ export function createBoard(database: Kysely<Database>): Board {
     },
 
     async createWorkItem({
+      discoveredFromId,
+      filedByRunId,
       id,
       projectId,
       priority,
@@ -220,9 +244,48 @@ export function createBoard(database: Kysely<Database>): Board {
             return_state: item.returnState,
             attempts: item.attempts,
             rounds: item.rounds,
+            discovered_from_id: discoveredFromId ?? null,
+            filed_by_run_id: filedByRunId ?? null,
           })
           .execute();
       });
+    },
+
+    async getProvenance(itemId) {
+      await assertWorkItemExists(database, itemId);
+      const row = await database
+        .selectFrom('work_items')
+        .leftJoin('runs', 'runs.id', 'work_items.filed_by_run_id')
+        .select([
+          'work_items.discovered_from_id',
+          'runs.id as run_id',
+          'runs.agent_name',
+          'runs.role',
+        ])
+        .where('work_items.id', '=', itemId)
+        .executeTakeFirstOrThrow();
+      return {
+        discoveredFromId: row.discovered_from_id,
+        filedBy:
+          row.run_id === null || row.role === null
+            ? null
+            : { agentName: row.agent_name, role: row.role, runId: row.run_id },
+      };
+    },
+
+    async listRecords(itemId) {
+      await assertWorkItemExists(database, itemId);
+      const rows = await database
+        .selectFrom('work_item_records')
+        .select(['created_at', 'kind', 'payload'])
+        .where('work_item_id', '=', itemId)
+        .orderBy('id', 'asc')
+        .execute();
+      return rows.map((row) => ({
+        createdAt: row.created_at,
+        kind: row.kind,
+        record: row.payload,
+      }));
     },
 
     async listWorkItems(projectId, query = {}) {

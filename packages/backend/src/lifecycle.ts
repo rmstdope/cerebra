@@ -324,7 +324,7 @@ export function transition(
   }
 
   if (rule.requires !== undefined) {
-    const missing = missingEvidence(rule, request);
+    const missing = missingEvidence(rule, rule.requires, request);
     if (missing !== undefined) {
       return refusal(missing);
     }
@@ -513,29 +513,30 @@ const evidenceNames: Record<RequiredEvidence, string> = {
 };
 
 function missingEvidence(
-  rule: TransitionRule & { readonly requires: RequiredEvidence },
+  rule: TransitionRule,
+  requires: RequiredEvidence,
   request: TransitionRequest,
 ): string | undefined {
   const needs = `Moving a work item from ${rule.from} to ${rule.to} needs`;
-  if (rule.requires === 'reason') {
+  if (requires === 'reason') {
     return (request.reason ?? '').trim() === ''
       ? `${needs} a reason.`
       : undefined;
   }
   const record = request.record;
-  const kind = rule.requires.startsWith('review') ? 'review' : rule.requires;
+  const kind = requires.startsWith('review') ? 'review' : requires;
   if (record?.kind !== kind) {
-    return `${needs} ${evidenceNames[rule.requires]}.`;
+    return `${needs} ${evidenceNames[requires]}.`;
   }
-  switch (rule.requires) {
+  switch (requires) {
     case 'outcome':
     case 'design':
-      return markdownProblem(rule.requires, record.markdown);
+      return markdownProblem(requires, record.markdown);
     case 'pull_request':
       return pullRequestProblem(record);
     case 'review_approved':
     case 'review_changes':
-      return reviewProblem(rule.requires, record, needs);
+      return reviewProblem(requires, record, needs);
   }
 }
 

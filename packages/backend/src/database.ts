@@ -130,6 +130,8 @@ export interface Database {
     attempts: number;
     created_at: Generated<Date>;
     description: string;
+    discovered_from_id: Generated<string | null>;
+    filed_by_run_id: Generated<string | null>;
     filed_sequence: Generated<string>;
     holder_run_id: string | null;
     id: string;
