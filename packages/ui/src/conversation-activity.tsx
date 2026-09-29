@@ -1,4 +1,6 @@
-import { useState, type ReactNode } from 'react';
+import { useId, useState, type ReactNode } from 'react';
+
+import { outcomeSections, type OutcomeSections } from '@cerebra/shared';
 
 import {
   describeStep,
@@ -12,6 +14,54 @@ import {
 } from './conversation-thread';
 
 const outputLimit = 20;
+
+export const outcomeTitle = 'Confirm the outcome and where it goes next';
+
+/** The five sections of an outcome, each under its heading. */
+export function OutcomeSectionsView({
+  sections,
+}: {
+  readonly sections: OutcomeSections;
+}): ReactNode {
+  return (
+    <div className="mt-3 rounded-lg border border-[var(--border)] bg-[var(--background)] p-3">
+      {outcomeSections.map((name) => (
+        <div className="mt-3 first:mt-0" key={name}>
+          <h3 className="text-sm font-bold">{name}</h3>
+          <p className="mt-1 whitespace-pre-wrap break-words text-sm">
+            {sections[name]}
+          </p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function AnsweredOutcome({
+  at,
+  name,
+  sections,
+  title,
+}: {
+  readonly at: string;
+  readonly name: string;
+  readonly sections: OutcomeSections;
+  readonly title: string;
+}): ReactNode {
+  const id = useId();
+  return (
+    <section
+      aria-labelledby={id}
+      className="max-w-[85%] self-start rounded-2xl border border-[var(--border)] p-4"
+    >
+      <h2 className="font-bold" id={id}>
+        {title}
+      </h2>
+      <OutcomeSectionsView sections={sections} />
+      <p className="mt-2 text-xs text-[var(--muted)]">{`${name} · ${timeOf(at)}`}</p>
+    </section>
+  );
+}
 
 const lineButton =
   'flex w-full min-w-0 items-baseline gap-2 rounded border-l-2 border-[var(--border)] px-2 py-1 text-left font-mono text-sm text-[var(--muted)] outline-none hover:bg-[var(--accent-muted)] focus-visible:ring-3 focus-visible:ring-[var(--focus)]';
@@ -169,10 +219,12 @@ function StepLine({
 }
 
 function HelperNest({
+  actions,
   helper,
   live,
   name,
 }: {
+  readonly actions: ThreadActions;
   readonly helper: HelperItem;
   readonly live: boolean;
   readonly name: string;
@@ -229,6 +281,7 @@ function HelperNest({
           role="group"
         >
           <ThreadView
+            actions={actions}
             helper
             items={helper.items}
             live={live}
@@ -241,14 +294,25 @@ function HelperNest({
   );
 }
 
+export interface ThreadActions {
+  /** Opens an item an agent filed; absent where there is nowhere to open it. */
+  readonly onOpenItem?: (itemId: string) => void;
+  /** Asks the agent to try a refused outcome again. */
+  readonly onRetryOutcome?: () => void;
+  /** The one refused outcome that offers Try again, if any. */
+  readonly retryKey?: string | null;
+}
+
 /** Every item of a thread, as text: nothing an assistant sends is rendered as markup. */
 export function ThreadView({
+  actions = {},
   helper = false,
   items,
   live,
   name,
   stillWorkingKey,
 }: {
+  readonly actions?: ThreadActions;
   readonly helper?: boolean;
   readonly items: readonly ThreadItem[];
   readonly live: boolean;
@@ -256,12 +320,79 @@ export function ThreadView({
   readonly stillWorkingKey: string | null;
 }): ReactNode {
   return items.map((item) => {
+    if (item.kind === 'outcome') {
+      return (
+        <AnsweredOutcome
+          at={item.at}
+          key={item.key}
+          name={name}
+          sections={item.outcome.sections}
+          title={item.outcome.title || outcomeTitle}
+        />
+      );
+    }
+    if (item.kind === 'filed') {
+      const { onOpenItem } = actions;
+      return (
+        <p
+          className="flex min-w-0 items-baseline gap-2 border-l-2 border-[var(--border)] px-2 py-1 text-sm text-[var(--muted)]"
+          key={item.key}
+        >
+          <Succeeded spoken={false} />
+          <span className="min-w-0 break-words">
+            Filed “
+            {onOpenItem === undefined ? (
+              item.title
+            ) : (
+              <button
+                className="rounded font-bold text-[var(--accent)] underline underline-offset-4 outline-none focus-visible:ring-3 focus-visible:ring-[var(--focus)]"
+                onClick={() => onOpenItem(item.itemId)}
+                type="button"
+              >
+                {item.title}
+              </button>
+            )}
+            ”
+          </span>
+        </p>
+      );
+    }
+    if (item.kind === 'outcome_failed') {
+      return (
+        <section
+          className="max-w-[85%] self-start rounded-2xl border border-[var(--danger)] bg-red-50 p-4 dark:bg-red-950"
+          key={item.key}
+        >
+          <h2 className="font-bold text-[var(--danger)]">
+            {`${name} couldn’t record the outcome.`}
+          </h2>
+          <p className="mt-1">
+            Nothing was moved. Your answer is kept; try again.
+          </p>
+          {item.key === actions.retryKey && actions.onRetryOutcome ? (
+            <button
+              className="primary-button mt-3"
+              onClick={actions.onRetryOutcome}
+              type="button"
+            >
+              Try again
+            </button>
+          ) : null}
+        </section>
+      );
+    }
     if (item.kind === 'step') {
       return <StepLine key={item.key} live={live} step={item} />;
     }
     if (item.kind === 'helper') {
       return (
-        <HelperNest helper={item} key={item.key} live={live} name={name} />
+        <HelperNest
+          actions={actions}
+          helper={item}
+          key={item.key}
+          live={live}
+          name={name}
+        />
       );
     }
     return (
