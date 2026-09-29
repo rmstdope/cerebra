@@ -331,7 +331,9 @@ test('files the chosen type, and chooses Feature again after adding', async () =
     await screen.findByText('Work item added. It is ready for you to review.'),
   ).toBeTruthy();
   expect(filed).toEqual([{ description: '', title: 'Login', type: 'bug' }]);
-  await user.click(screen.getAllByRole('button', { name: 'Add work item' })[0]!);
+  await user.click(
+    screen.getAllByRole('button', { name: 'Add work item' })[0]!,
+  );
   expect(typeOption('Feature').checked).toBe(true);
 });
 
@@ -388,7 +390,9 @@ test('offers the four types as one keyboard group announced as Type', async () =
   expect(
     document.getElementById(group.getAttribute('aria-describedby')!)
       ?.textContent,
-  ).toBe('Bugs go to the bug fixer; everything else is planned and built as usual.');
+  ).toBe(
+    'Bugs go to the bug fixer; everything else is planned and built as usual.',
+  );
 
   await user.tab();
   expect(document.activeElement).toBe(typeOption('Feature'));
@@ -442,8 +446,7 @@ test("shows the key and type above the item's title", async () => {
   renderBoard(
     createClient({
       item: async () => ({ ...workItem, key: 'WEB-12', type: 'bug' }),
-      list: async () =>
-        page([{ ...workItem, key: 'WEB-12', type: 'bug' }]),
+      list: async () => page([{ ...workItem, key: 'WEB-12', type: 'bug' }]),
     }),
   );
 
