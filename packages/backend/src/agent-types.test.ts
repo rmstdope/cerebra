@@ -93,9 +93,9 @@ describe('agent type definitions', () => {
     const directory = await mkdtemp(join(tmpdir(), 'agent-types-'));
     try {
       await writeFile(join(directory, 'producer.json'), JSON.stringify(valid));
-      await expect(
-        readAgentTypeDefinitions(directory),
-      ).rejects.toThrow(/producer\.md/);
+      await expect(readAgentTypeDefinitions(directory)).rejects.toThrow(
+        /producer\.md/,
+      );
     } finally {
       await rm(directory, { force: true, recursive: true });
     }

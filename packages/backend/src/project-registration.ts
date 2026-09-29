@@ -10,7 +10,9 @@ import {
   ProjectMirrorError,
   ProjectRegistrationService,
   type Project,
+  type ProjectStore,
 } from './projects.js';
+import { createDefaultFleet } from './fleet.js';
 
 function authorizationValue(credential: string): string {
   return ['Bearer', credential].join(' ');
@@ -41,12 +43,42 @@ function cloneMirror(
   });
 }
 
+/** Stores a registered project together with its default fleet, or neither. */
+export function createProjectStore(options: {
+  readonly database: Kysely<Database>;
+  readonly masterKey: string;
+}): ProjectStore {
+  const cipher = createProjectTokenCipher(options.masterKey);
+  return {
+    async create({ credential, project }) {
+      const token = cipher.encrypt(credential);
+      await options.database.transaction().execute(async (transaction) => {
+        await transaction
+          .insertInto('projects')
+          .values({
+            default_branch: project.defaultBranch,
+            github_token_ciphertext: token.ciphertext,
+            github_token_iv: token.iv,
+            github_token_tag: token.tag,
+            id: project.id,
+            key_prefix: project.prefix,
+            name: project.name,
+            owner: project.owner,
+            remote: project.remote,
+          })
+          .executeTakeFirstOrThrow();
+        await createDefaultFleet(transaction, project.id);
+      });
+      return project;
+    },
+  };
+}
+
 export function createProjectRegistrationService(options: {
   readonly dataDirectory: string;
   readonly database: Kysely<Database>;
   readonly masterKey: string;
 }): ProjectRegistrationService {
-  const cipher = createProjectTokenCipher(options.masterKey);
   const mirrorPath = (project: Project) =>
     join(options.dataDirectory, 'projects', project.id, 'mirror.git');
 
@@ -90,25 +122,6 @@ export function createProjectRegistrationService(options: {
         return { defaultBranch: body.default_branch, name, owner, remote };
       },
     },
-    store: {
-      async create({ credential, project }) {
-        const token = cipher.encrypt(credential);
-        await options.database
-          .insertInto('projects')
-          .values({
-            default_branch: project.defaultBranch,
-            github_token_ciphertext: token.ciphertext,
-            github_token_iv: token.iv,
-            github_token_tag: token.tag,
-            id: project.id,
-            key_prefix: project.prefix,
-            name: project.name,
-            owner: project.owner,
-            remote: project.remote,
-          })
-          .executeTakeFirstOrThrow();
-        return project;
-      },
-    },
+    store: createProjectStore(options),
   });
 }

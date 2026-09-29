@@ -7,23 +7,16 @@
   "interactive": true,
   "model": "opus",
   "name": "groomer",
-  "names": [
-    "Jubilee",
-    "Kitty"
-  ],
+  "names": ["Jubilee", "Kitty"],
   "network": "unrestricted",
   "resources": {
     "cpus": 2,
     "memoryMb": 4096
   },
   "role": "groomer",
-  "secrets": [
-    "CLAUDE_CODE_OAUTH_TOKEN"
-  ],
+  "secrets": ["CLAUDE_CODE_OAUTH_TOKEN"],
   "serves": {
-    "states": [
-      "grooming_ready"
-    ]
+    "states": ["grooming_ready"]
   },
   "skills": [],
   "tools": [

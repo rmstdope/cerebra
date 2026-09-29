@@ -7,23 +7,16 @@
   "interactive": false,
   "model": "opus",
   "name": "reviewer",
-  "names": [
-    "Emma",
-    "Cypher"
-  ],
+  "names": ["Emma", "Cypher"],
   "network": "unrestricted",
   "resources": {
     "cpus": 2,
     "memoryMb": 4096
   },
   "role": "reviewer",
-  "secrets": [
-    "CLAUDE_CODE_OAUTH_TOKEN"
-  ],
+  "secrets": ["CLAUDE_CODE_OAUTH_TOKEN"],
   "serves": {
-    "states": [
-      "review_ready"
-    ]
+    "states": ["review_ready"]
   },
   "skills": [],
   "tools": [

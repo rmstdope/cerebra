@@ -1,9 +1,38 @@
 import { type Generated, Kysely, PostgresDialect } from 'kysely';
 import { Pool } from 'pg';
 
+import type { AgentModel, AgentRole, AgentTrigger } from './agent-types.js';
 import type { Priority, WaitingKind, WorkItemState } from './lifecycle.js';
 
 export interface Database {
+  agent_type_overrides: {
+    agent_type_id: string;
+    fields: AgentTypeOverrideFields;
+    project_id: string;
+  };
+  agent_types: {
+    created_at: Generated<Date>;
+    default_count: number;
+    default_names: string[];
+    definition: unknown;
+    id: string;
+    instructions: string;
+    interactive: boolean;
+    model: AgentModel;
+    name: string;
+    position: number;
+    role: AgentRole;
+    triggers: AgentTrigger[];
+  };
+  agents: {
+    agent_type_id: string;
+    created_at: Generated<Date>;
+    created_sequence: Generated<string>;
+    enabled: Generated<boolean>;
+    id: string;
+    name: string;
+    project_id: string;
+  };
   authentication_configuration: {
     id: Generated<boolean>;
     user_id: string;
@@ -16,6 +45,7 @@ export interface Database {
     work_item_id: string;
   };
   runs: {
+    agent_id: Generated<string | null>;
     created_at: Generated<Date>;
     id: string;
     role: 'groomer' | 'designer' | 'builder' | 'reviewer' | 'verifier';
@@ -76,6 +106,7 @@ export interface Database {
     created_at: Generated<Date>;
     default_branch: Generated<string>;
     design_enabled: Generated<boolean>;
+    fleet_created: Generated<boolean>;
     grooming_enabled: Generated<boolean>;
     github_token_ciphertext: Generated<string>;
     github_token_iv: Generated<string>;
@@ -90,6 +121,11 @@ export interface Database {
     remote: Generated<string>;
     verify_enabled: Generated<boolean>;
   };
+}
+
+export interface AgentTypeOverrideFields {
+  readonly model?: AgentModel;
+  readonly triggers?: AgentTrigger[];
 }
 
 function searchPathOption(schema: string | undefined): string | undefined {

@@ -7,28 +7,17 @@
   "interactive": false,
   "model": "opus",
   "name": "producer",
-  "names": [
-    "Cyclops",
-    "Storm",
-    "Wolverine",
-    "Rogue"
-  ],
+  "names": ["Cyclops", "Storm", "Wolverine", "Rogue"],
   "network": "unrestricted",
   "resources": {
     "cpus": 2,
     "memoryMb": 4096
   },
   "role": "producer",
-  "secrets": [
-    "CLAUDE_CODE_OAUTH_TOKEN"
-  ],
+  "secrets": ["CLAUDE_CODE_OAUTH_TOKEN"],
   "serves": {
-    "states": [
-      "build_ready"
-    ],
-    "excludeTypes": [
-      "bug"
-    ]
+    "states": ["build_ready"],
+    "excludeTypes": ["bug"]
   },
   "skills": [],
   "tools": [
