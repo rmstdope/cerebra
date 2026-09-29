@@ -205,7 +205,7 @@ export function directoryPreparer(
 }
 
 /** Producers and bugfixers both run as builders. */
-function runRoleOf(role: AgentRole): RunRecord['role'] {
+export function runRoleOf(role: AgentRole): RunRecord['role'] {
   return role === 'producer' || role === 'bugfixer' ? 'builder' : role;
 }
 

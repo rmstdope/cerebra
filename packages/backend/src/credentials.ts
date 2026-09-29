@@ -105,6 +105,11 @@ export interface CredentialService {
     agentType: string,
   ): Promise<AgentCredentialSettings>;
   overview(projectId?: string): Promise<CredentialOverview>;
+  /** The credentials `resolveForRun` would refuse a run of the type for, read without opening any. */
+  problemsFor(request: {
+    readonly agentType: string;
+    readonly projectId: string;
+  }): Promise<readonly string[]>;
   recordInjectionFailure(credentialId: string): Promise<void>;
   remove(credentialId: string): Promise<void>;
   resolveForRun(request: {
@@ -288,6 +293,18 @@ export function createCredentialService(options: {
     return query.orderBy('id').execute();
   }
 
+  async function deliveriesFor(projectId: string, agentType: string) {
+    const declared = await declaredFor(projectId, agentType);
+    return [
+      ...builtInDeliveries(agentType),
+      ...declared.map((row) => ({
+        credentialName: row.credential_name,
+        delivery: row.delivery,
+        destination: row.destination,
+      })),
+    ];
+  }
+
   function resolver(stored: readonly StoredCredential[]) {
     return (name: string): StoredCredential | undefined =>
       stored.find((row) => row.name === name && row.project_id !== null) ??
@@ -445,18 +462,20 @@ export function createCredentialService(options: {
       }
     },
 
+    async problemsFor({ agentType, projectId }) {
+      const resolve = resolver(await storedFor(projectId));
+      const names = (await deliveriesFor(projectId, agentType))
+        .map((delivery) => delivery.credentialName)
+        .filter((name) => {
+          const row = resolve(name);
+          return row === undefined || row.problem !== null;
+        });
+      return [...new Set(names)];
+    },
+
     async resolveForRun({ agentType, projectId, runId }) {
-      const stored = await storedFor(projectId);
-      const resolve = resolver(stored);
-      const declared = await declaredFor(projectId, agentType);
-      const deliveries = [
-        ...builtInDeliveries(agentType),
-        ...declared.map((row) => ({
-          credentialName: row.credential_name,
-          delivery: row.delivery,
-          destination: row.destination,
-        })),
-      ];
+      const resolve = resolver(await storedFor(projectId));
+      const deliveries = await deliveriesFor(projectId, agentType);
       const problems: { name: string; reason: CredentialProblem }[] = [];
       const environment: Record<string, string> = {};
       const files: { path: string; value: string }[] = [];

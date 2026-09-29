@@ -454,38 +454,62 @@ export function createBoard(database: Kysely<Database>): Board {
     },
 
     async claim(itemId, role) {
-      return database.transaction().execute(async (transactionDatabase) => {
-        const current = await getLockedItem(transactionDatabase, itemId);
-        const runId = crypto.randomUUID();
-        const result = transition(
-          current.item,
-          {
-            actor: { role: 'backend', runId },
-            record: { kind: 'claim', role },
-            to: workingStateFor(role),
-          },
-          current.context,
-        );
-
-        if (!result.ok) {
+      return database
+        .transaction()
+        .execute(async (transactionDatabase) => {
+          const runId = crypto.randomUUID();
+          await transactionDatabase
+            .insertInto('runs')
+            .values({ id: runId, role, status: 'active' })
+            .execute();
+          const result = await claimForRun(
+            transactionDatabase,
+            itemId,
+            runId,
+            role,
+          );
+          if (!result.ok) {
+            throw new ClaimRefusedError(result.reason);
+          }
           return result;
-        }
-
-        await transactionDatabase
-          .insertInto('runs')
-          .values({ id: runId, role, status: 'active' })
-          .execute();
-        await persistTransition(
-          transactionDatabase,
-          itemId,
-          current.item,
-          result,
-          { actor: { role: 'backend', runId }, to: result.item.state },
-        );
-        return result;
-      });
+        })
+        .catch((error: unknown) => {
+          if (error instanceof ClaimRefusedError) {
+            return { ok: false as const, reason: error.message };
+          }
+          throw error;
+        });
     },
   };
+}
+
+class ClaimRefusedError extends Error {}
+
+/**
+ * Claims a queued item for a run already inserted in the caller's transaction (spec §4.4): the
+ * item moves to the role's working state with the run as its holder, or nothing changes and the
+ * refusal is returned for the caller to roll back.
+ */
+export async function claimForRun(
+  database: Transaction<Database>,
+  itemId: string,
+  runId: string,
+  role: RunRole,
+): Promise<TransitionResult> {
+  const current = await getLockedItem(database, itemId);
+  const request: TransitionRequest = {
+    actor: { role: 'backend', runId },
+    record: { kind: 'claim', role },
+    to: workingStateFor(role),
+  };
+  const result = transition(current.item, request, current.context);
+  if (result.ok) {
+    await persistTransition(database, itemId, current.item, result, {
+      actor: request.actor,
+      to: result.item.state,
+    });
+  }
+  return result;
 }
 
 export const routeUnavailable = {

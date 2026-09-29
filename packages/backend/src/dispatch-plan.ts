@@ -104,7 +104,8 @@ function serves(type: PlanType, item: PlanItem): boolean {
 type PendingReason =
   | { readonly kind: 'paused' }
   | { readonly kind: 'credential_missing'; readonly service: string }
-  | { readonly kind: 'project_limit' | 'instance_limit' }
+  | { readonly kind: 'project_limit' }
+  | { readonly kind: 'instance_limit' }
   | { readonly kind: 'no_free_agent'; readonly role: string };
 
 /**

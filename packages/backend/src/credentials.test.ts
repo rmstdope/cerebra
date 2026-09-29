@@ -498,6 +498,42 @@ describe('resolving credentials for a run', { concurrent: false }, () => {
     });
   });
 
+  test('names what a run would be refused for, without opening anything', async () => {
+    await withCredentials(async ({ credentials, database, projectId }) => {
+      expect(
+        await credentials.problemsFor({ agentType: 'producer', projectId }),
+      ).toEqual([modelCredentialName, agentGitHubCredentialName]);
+
+      await saveModelAndGitHub(credentials, projectId);
+      await database
+        .updateTable('credentials')
+        .set({ value_tag: Buffer.alloc(16).toString('base64') })
+        .execute();
+
+      expect(
+        await credentials.problemsFor({ agentType: 'producer', projectId }),
+      ).toEqual([]);
+      await database
+        .updateTable('credentials')
+        .set({ problem: 'injection_failed' })
+        .where('name', '=', agentGitHubCredentialName)
+        .execute();
+      expect(
+        await credentials.problemsFor({ agentType: 'producer', projectId }),
+      ).toEqual([agentGitHubCredentialName]);
+      expect(
+        await credentials.problemsFor({ agentType: 'reviewer', projectId }),
+      ).toEqual([]);
+      expect(
+        await database
+          .selectFrom('credentials')
+          .select('name')
+          .where('last_used_at', 'is not', null)
+          .execute(),
+      ).toEqual([]);
+    });
+  });
+
   test('marks a credential it cannot decrypt, until it is replaced', async () => {
     await withCredentials(async ({ credentials, database, projectId }) => {
       await saveModelAndGitHub(credentials, projectId);
