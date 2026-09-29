@@ -1,0 +1,20 @@
+<!doctype html><meta charset=utf-8><title>cr-axc — work item type and key</title><style>body{font-family:system-ui;background:#f6f7f9;color:#1b1f24;margin:0;padding:24px}
+h1{font-size:18px}.row{display:flex;gap:12px;align-items:center;background:#fff;border:1px solid #dde;border-radius:10px;padding:10px;margin:6px 0}
+.p{background:#fde68a;border-radius:4px;padding:2px 8px;font-size:12px;font-weight:700}.st{background:#e0e7ff;border-radius:99px;padding:2px 8px;font-size:12px;font-weight:700}
+.key{font-family:ui-monospace,monospace;font-size:12px;color:#5b6470}.t{flex:1;font-weight:700}
+.panel{background:#fff;border:1px solid #dde;border-radius:10px;padding:16px;max-width:460px;margin-top:10px}
+label{display:block;font-weight:600;margin:12px 0 4px}input,select,textarea{width:100%;padding:8px;border:1px solid #bbc;border-radius:6px;box-sizing:border-box}
+.seg{display:flex;border:1px solid #bbc;border-radius:6px;overflow:hidden}.seg span{flex:1;text-align:center;padding:7px;border-right:1px solid #bbc}.seg .on{background:#3b4bd8;color:#fff}
+.hint{font-size:13px;color:#5b6470}.btn{background:#3b4bd8;color:#fff;border-radius:6px;padding:8px 14px;display:inline-block;margin-top:14px}
+section{margin-bottom:34px}.narrow{max-width:360px}.err{color:#b42318;font-size:13px} .tag{border:1px solid #bbc;border-radius:4px;padding:1px 6px;font-size:12px;color:#3b4250}.tag.bug{border-color:#e7a5a0;color:#b42318}</style><h1>Work item type and key (agreed)</h1>
+<section><h3>Adding a work item</h3><div class=panel><b style="color:#3b4bd8">New work item</b><label>What needs to change?</label><input value="Login fails after password change"><label>Type</label><div class="seg"><span class="on">Feature</span><span>Bug</span><span>Task</span><span>Refactoring</span></div><p class="hint">Bugs go to the bug fixer; everything else is planned and built as usual.</p><label>Optional</label><textarea rows=3></textarea><span class=btn>Add work item</span> <span>Cancel</span></div></section>
+<section><h3>Adding — couldn't file</h3><div class=panel><b style="color:#3b4bd8">New work item</b><label>Type</label><div class="seg"><span class="on">Feature</span><span>Bug</span><span>Task</span><span>Refactoring</span></div><p class="hint">Bugs go to the bug fixer; everything else is planned and built as usual.</p><p class=err>Cerebra couldn’t add this work item. Try again.</p></div></section>
+<section><h3>Adding — couldn't save (type choice kept)</h3><div class=panel><b style='color:#3b4bd8'>New work item</b><label>Type</label><div class="seg"><span class="on">Feature</span><span>Bug</span><span>Task</span><span>Refactoring</span></div><p class="hint">Bugs go to the bug fixer; everything else is planned and built as usual.</p><p class=err>Cerebra couldn’t save your changes. Try again.</p></div></section>
+<section><h3>Board rows — every row shows key and type</h3>
+<div class=row><span class=p>P1</span><span class=key>WEB-12</span><span class=tag bug>Bug</span><span class=t>Login fails after password change</span><span class=st>In progress</span></div>
+<div class=row><span class=p>P2</span><span class=key>WEB-9</span><span class=tag>Feature</span><span class=t>Show costs per project on the board</span><span class=st>Ranked</span></div>
+<div class=row><span class=p>—</span><span class=key>WEB-41</span><span class=tag>Refactoring</span><span class=t>Tidy the settings module</span><span class=st>Filed</span></div>
+<div class=row><span class=p>P3</span><span class=key>WEB-40</span><span class=tag>Task</span><span class=t>Rotate the backup credentials</span><span class=st>Filed</span></div>
+<h3>Narrow window</h3><div class="narrow"><div class=row style="flex-wrap:wrap"><span class=p>P1</span><span class=key>WEB-12</span><span class=tag bug>Bug</span><span class=st>In progress</span><span class=t style="flex-basis:100%">Login fails after password change</span></div></div>
+</section>
+<section><h3>The item's page (top)</h3><div class=panel><p class=key style='margin:0'>WEB-12 · Bug</p><h2 style='margin:4px 0'>Login fails after password change</h2></div></section>
