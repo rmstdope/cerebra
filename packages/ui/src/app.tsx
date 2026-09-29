@@ -25,6 +25,9 @@ import type { BoardClient } from './board';
 import { NavigatorQueue, type WorkTab } from './navigator-queue';
 import { ProjectBoard } from './project-board';
 import type { QueueClient } from './queue';
+import { AgentCredentialsPage, AgentTypesList } from './agent-credentials';
+import type { CredentialClient } from './credentials';
+import { CredentialsPage } from './credentials-page';
 
 export interface ThemeMediaQuery {
   readonly matches: boolean;
@@ -47,6 +50,23 @@ interface AppProps {
   authClient?: AuthClient;
   boardClient?: BoardClient;
   queueClient?: QueueClient;
+  credentialClient?: CredentialClient;
+}
+
+type SettingsRoute =
+  | { readonly page: 'credentials' }
+  | { readonly page: 'agents' }
+  | { readonly page: 'agent'; readonly agentType: string };
+
+function settingsRoute(hash: string): SettingsRoute | null {
+  if (hash === '#/settings' || hash === '#/settings/credentials') {
+    return { page: 'credentials' };
+  }
+  if (hash === '#/settings/agents') {
+    return { page: 'agents' };
+  }
+  const agent = /^#\/settings\/agents\/([a-z][a-z0-9-]*)$/.exec(hash);
+  return agent === null ? null : { agentType: agent[1], page: 'agent' };
 }
 
 const preferences: ThemePreference[] = ['light', 'dark', 'system'];
@@ -87,6 +107,7 @@ export function App({
   authClient = browserAuthClient,
   boardClient,
   queueClient,
+  credentialClient,
 }: AppProps): ReactNode {
   const [preference, setPreference] = useState<ThemePreference>(() =>
     getInitialPreference(storage),
@@ -117,6 +138,9 @@ export function App({
     readonly id: string;
     readonly tab: WorkTab;
   } | null>(null);
+  const [hash, setHash] = useState(() => window.location.hash);
+  const focusQueue = useRef(false);
+  const settings = settingsRoute(hash);
   const updateButton = useRef<HTMLButtonElement>(null);
   const items = useRef<Record<ThemePreference, HTMLDivElement | null>>({
     light: null,
@@ -134,6 +158,19 @@ export function App({
     return () =>
       mediaQuery.removeEventListener('change', updateSystemPreference);
   }, [mediaQuery]);
+
+  useEffect(() => {
+    const followHash = () => setHash(window.location.hash);
+    window.addEventListener('hashchange', followHash);
+    return () => window.removeEventListener('hashchange', followHash);
+  }, []);
+
+  useEffect(() => {
+    if (settings === null && focusQueue.current) {
+      focusQueue.current = false;
+      document.getElementById('navigator-queue-heading')?.focus();
+    }
+  });
 
   useEffect(() => {
     document.documentElement.dataset.theme = effectiveTheme;
@@ -442,6 +479,16 @@ export function App({
           href="#navigator-queue-heading"
           onClick={(event) => {
             event.preventDefault();
+            if (settings !== null) {
+              focusQueue.current = true;
+              window.history.pushState(
+                null,
+                '',
+                window.location.pathname + window.location.search,
+              );
+              setHash('');
+              return;
+            }
             document.getElementById('navigator-queue-heading')?.focus();
           }}
         >
@@ -451,6 +498,13 @@ export function App({
               {queueCount}
             </span>
           ) : null}
+        </a>
+        <a
+          aria-current={settings !== null ? 'page' : undefined}
+          className="mr-2 rounded-lg px-2 py-2 text-sm font-bold outline-none focus-visible:ring-3 focus-visible:ring-[var(--focus)] sm:text-base"
+          href="#/settings/credentials"
+        >
+          Settings
         </a>
         <DropdownMenu.Root
           onOpenChange={(open) => {
@@ -549,243 +603,302 @@ export function App({
           </p>
         ) : null}
       </header>
-      <main className="mx-auto w-full max-w-255 px-5 py-10 sm:py-14">
-        <p className="text-xs font-extrabold uppercase tracking-widest text-[var(--accent)]">
-          This Mac
-        </p>
-        <h1 className="mt-2 text-3xl font-bold tracking-tight sm:text-4xl">
-          Manage Cerebra
-        </h1>
-        <p className="mt-1 text-[var(--muted)]">
-          Your private workspace is available only on this computer.
-        </p>
-        <div className="mt-10">
-          <NavigatorQueue
-            client={queueClient}
-            onCountChange={setQueueCount}
-            onViewWork={(nextProject, id, tab) => {
-              setProjectId(nextProject);
-              setBoardRequest({ id, tab });
-              try {
-                storage.setItem('cerebra.project', nextProject);
-              } catch {
-                // The board still opens; it just isn't remembered.
-              }
-            }}
-            storage={storage}
-          />
-        </div>
-        {projectId !== null ? (
-          <ProjectBoard
-            boardClient={boardClient}
-            key={projectId}
-            openRequest={boardRequest}
-            projectId={projectId}
-            storage={storage}
-          />
-        ) : (
-          <div className="mt-7">
-            <ProjectRegistration
-              onProjectAdded={(project) => {
-                setProjectId(project.id);
+      {settings !== null ? (
+        <main className="mx-auto w-full max-w-255 px-5 py-10 sm:py-14">
+          <nav aria-label="Settings" className="mb-8 flex gap-2">
+            {(
+              [
+                ['credentials', 'Credentials', '#/settings/credentials'],
+                ['agents', 'Agent types', '#/settings/agents'],
+              ] as const
+            ).map(([page, label, href]) => {
+              const current =
+                page === 'credentials'
+                  ? settings.page === 'credentials'
+                  : settings.page !== 'credentials';
+              return (
+                <a
+                  aria-current={current ? 'page' : undefined}
+                  className={`rounded-lg px-3 py-2 text-sm font-bold outline-none focus-visible:ring-3 focus-visible:ring-[var(--focus)] ${
+                    current
+                      ? 'bg-[var(--accent-muted)] text-[var(--accent)]'
+                      : 'text-[var(--muted)]'
+                  }`}
+                  href={href}
+                  key={page}
+                >
+                  {label}
+                </a>
+              );
+            })}
+          </nav>
+          {settings.page === 'credentials' ? (
+            <CredentialsPage
+              client={credentialClient}
+              projectId={projectId}
+              storage={storage}
+            />
+          ) : settings.page === 'agents' ? (
+            <AgentTypesList />
+          ) : projectId === null ? (
+            <p className="card">
+              Add a project first, then give its agents credentials.
+            </p>
+          ) : (
+            <AgentCredentialsPage
+              agentType={settings.agentType}
+              client={credentialClient}
+              key={`${projectId}:${settings.agentType}`}
+              projectId={projectId}
+            />
+          )}
+        </main>
+      ) : (
+        <main className="mx-auto w-full max-w-255 px-5 py-10 sm:py-14">
+          <p className="text-xs font-extrabold uppercase tracking-widest text-[var(--accent)]">
+            This Mac
+          </p>
+          <h1 className="mt-2 text-3xl font-bold tracking-tight sm:text-4xl">
+            Manage Cerebra
+          </h1>
+          <p className="mt-1 text-[var(--muted)]">
+            Your private workspace is available only on this computer.
+          </p>
+          <div className="mt-10">
+            <NavigatorQueue
+              client={queueClient}
+              onCountChange={setQueueCount}
+              onViewWork={(nextProject, id, tab) => {
+                setProjectId(nextProject);
+                setBoardRequest({ id, tab });
                 try {
-                  storage.setItem('cerebra.project', project.id);
+                  storage.setItem('cerebra.project', nextProject);
                 } catch {
-                  return;
+                  // The board still opens; it just isn't remembered.
                 }
               }}
+              storage={storage}
             />
           </div>
-        )}
-        {instance === null && instanceError !== 'restart-failed' ? (
-          <section className="mt-7 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6 shadow-sm">
-            <h2 className="text-lg font-bold">Cerebra isn’t running</h2>
-            <p className="mt-2 text-[var(--muted)]">
-              Start Cerebra, then try again.
-            </p>
-            <code className="mt-4 block rounded-lg bg-slate-900 p-3 text-sm text-slate-100">
-              ./cerebra start
-            </code>
-            <div className="mt-5 flex flex-col gap-3 sm:flex-row">
-              <button
-                className="primary-button"
-                onClick={() => void refreshInstance()}
-                type="button"
-              >
-                Try again
-              </button>
-              <button className="secondary-button" type="button">
-                View setup help
-              </button>
+          {projectId !== null ? (
+            <ProjectBoard
+              boardClient={boardClient}
+              key={projectId}
+              openRequest={boardRequest}
+              projectId={projectId}
+              storage={storage}
+            />
+          ) : (
+            <div className="mt-7">
+              <ProjectRegistration
+                onProjectAdded={(project) => {
+                  setProjectId(project.id);
+                  try {
+                    storage.setItem('cerebra.project', project.id);
+                  } catch {
+                    return;
+                  }
+                }}
+              />
             </div>
-          </section>
-        ) : instanceError === 'restart-failed' ? (
-          <section className="mt-7 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6 shadow-sm">
-            <h2 className="text-lg font-bold text-[var(--danger)]">
-              Cerebra couldn’t restart
-            </h2>
-            <p className="mt-2 text-[var(--muted)]">
-              Your data is still safe. Read the update details, then try again.
-            </p>
-            <div className="mt-5 flex flex-col gap-3 sm:flex-row">
-              <button
-                className="primary-button"
-                onClick={() => void refreshInstance()}
-                type="button"
-              >
-                Try again
-              </button>
-              <button className="secondary-button" type="button">
-                View update details
-              </button>
-            </div>
-          </section>
-        ) : (
-          <div className="mt-7 grid gap-5 lg:grid-cols-[1.35fr_.85fr]">
-            <section className="card">
-              <h2>Instance status</h2>
-              <p className="mt-3 font-bold text-emerald-700 dark:text-emerald-300">
-                Running
+          )}
+          {instance === null && instanceError !== 'restart-failed' ? (
+            <section className="mt-7 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6 shadow-sm">
+              <h2 className="text-lg font-bold">Cerebra isn’t running</h2>
+              <p className="mt-2 text-[var(--muted)]">
+                Start Cerebra, then try again.
               </p>
-              <p className="mt-1 text-[var(--muted)]">
-                Cerebra is ready at{' '}
-                <strong>{instance?.address ?? 'http://localhost:4317'}</strong>.
-              </p>
-              <div className="mt-6 grid gap-4 border-t border-[var(--border)] pt-5 sm:grid-cols-2">
-                <p>
-                  <strong>Data</strong>
-                  <br />
-                  <span className="text-sm text-[var(--muted)]">
-                    Stored locally
-                  </span>
-                </p>
-                <p>
-                  <strong>Last updated</strong>
-                  <br />
-                  <span className="text-sm text-[var(--muted)]">
-                    {instance
-                      ? new Date(instance.lastUpdatedAt).toLocaleString()
-                      : 'Loading…'}
-                  </span>
-                </p>
-              </div>
-              <a
-                className="primary-button mt-5 inline-block"
-                href={instance?.address ?? 'http://localhost:4317'}
-              >
-                Open Cerebra
-              </a>
-            </section>
-            <section className="card">
-              <h2>Get started</h2>
-              <ol className="mt-3 space-y-4 text-sm text-[var(--muted)]">
-                <li>
-                  <strong className="block text-[var(--foreground)]">
-                    1. Install Podman
-                  </strong>
-                  Set up the local container service.
-                </li>
-                <li>
-                  <strong className="block text-[var(--foreground)]">
-                    2. Start Cerebra
-                  </strong>
-                  Run one command from the Cerebra folder.
-                </li>
-                <li>
-                  <strong className="block text-[var(--foreground)]">
-                    3. Choose a password
-                  </strong>
-                  Then add your first project.
-                </li>
-              </ol>
-              <button className="secondary-button mt-5" type="button">
-                View setup steps
-              </button>
-            </section>
-          </div>
-        )}
-        <section className="card mt-5">
-          <h2>Update Cerebra</h2>
-          <p className="mt-2 text-[var(--muted)]">
-            Get the latest version when you are ready.
-          </p>
-          <p className="mt-5 rounded-lg border-l-4 border-amber-500 bg-amber-50 p-4 text-sm text-amber-950 dark:bg-amber-950 dark:text-amber-50">
-            <strong>Running work will stop.</strong> Updating restarts Cerebra.
-            Work that was still running returns to its queue and can be started
-            again.
-          </p>
-          <button
-            ref={updateButton}
-            className="primary-button mt-5"
-            disabled={updating}
-            onClick={() => setConfirmingUpdate(true)}
-            type="button"
-          >
-            Update and restart
-          </button>
-        </section>
-        {confirmingUpdate ? (
-          <div
-            aria-labelledby="update-title"
-            aria-modal="true"
-            className="fixed inset-0 grid place-items-center bg-black/40 p-5"
-            onKeyDown={(event) => {
-              if (event.key === 'Escape') {
-                setConfirmingUpdate(false);
-                updateButton.current?.focus();
-              }
-              if (event.key === 'Tab') {
-                const buttons = Array.from(
-                  event.currentTarget.querySelectorAll<HTMLButtonElement>(
-                    'button',
-                  ),
-                );
-                const first = buttons[0];
-                const last = buttons.at(-1);
-                if (event.shiftKey && document.activeElement === first) {
-                  event.preventDefault();
-                  last?.focus();
-                } else if (!event.shiftKey && document.activeElement === last) {
-                  event.preventDefault();
-                  first?.focus();
-                }
-              }
-            }}
-            role="dialog"
-          >
-            <section className="card w-full max-w-md">
-              <h2 id="update-title">Update Cerebra?</h2>
-              <p className="mt-3 text-[var(--muted)]">
-                The latest version will be installed and Cerebra will restart.
-              </p>
-              <p className="mt-3 text-sm text-[var(--muted)]">
-                <strong>Running work will stop.</strong> Work that was still
-                running returns to its queue and can be started again.
-              </p>
-              <div className="mt-6 flex gap-3">
-                <button
-                  autoFocus
-                  className="secondary-button"
-                  onClick={() => {
-                    setConfirmingUpdate(false);
-                    updateButton.current?.focus();
-                  }}
-                  type="button"
-                >
-                  Cancel
-                </button>
+              <code className="mt-4 block rounded-lg bg-slate-900 p-3 text-sm text-slate-100">
+                ./cerebra start
+              </code>
+              <div className="mt-5 flex flex-col gap-3 sm:flex-row">
                 <button
                   className="primary-button"
-                  onClick={() => void updateInstance()}
+                  onClick={() => void refreshInstance()}
                   type="button"
                 >
-                  Update and restart
+                  Try again
+                </button>
+                <button className="secondary-button" type="button">
+                  View setup help
                 </button>
               </div>
             </section>
-          </div>
-        ) : null}
-      </main>
+          ) : instanceError === 'restart-failed' ? (
+            <section className="mt-7 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6 shadow-sm">
+              <h2 className="text-lg font-bold text-[var(--danger)]">
+                Cerebra couldn’t restart
+              </h2>
+              <p className="mt-2 text-[var(--muted)]">
+                Your data is still safe. Read the update details, then try
+                again.
+              </p>
+              <div className="mt-5 flex flex-col gap-3 sm:flex-row">
+                <button
+                  className="primary-button"
+                  onClick={() => void refreshInstance()}
+                  type="button"
+                >
+                  Try again
+                </button>
+                <button className="secondary-button" type="button">
+                  View update details
+                </button>
+              </div>
+            </section>
+          ) : (
+            <div className="mt-7 grid gap-5 lg:grid-cols-[1.35fr_.85fr]">
+              <section className="card">
+                <h2>Instance status</h2>
+                <p className="mt-3 font-bold text-emerald-700 dark:text-emerald-300">
+                  Running
+                </p>
+                <p className="mt-1 text-[var(--muted)]">
+                  Cerebra is ready at{' '}
+                  <strong>
+                    {instance?.address ?? 'http://localhost:4317'}
+                  </strong>
+                  .
+                </p>
+                <div className="mt-6 grid gap-4 border-t border-[var(--border)] pt-5 sm:grid-cols-2">
+                  <p>
+                    <strong>Data</strong>
+                    <br />
+                    <span className="text-sm text-[var(--muted)]">
+                      Stored locally
+                    </span>
+                  </p>
+                  <p>
+                    <strong>Last updated</strong>
+                    <br />
+                    <span className="text-sm text-[var(--muted)]">
+                      {instance
+                        ? new Date(instance.lastUpdatedAt).toLocaleString()
+                        : 'Loading…'}
+                    </span>
+                  </p>
+                </div>
+                <a
+                  className="primary-button mt-5 inline-block"
+                  href={instance?.address ?? 'http://localhost:4317'}
+                >
+                  Open Cerebra
+                </a>
+              </section>
+              <section className="card">
+                <h2>Get started</h2>
+                <ol className="mt-3 space-y-4 text-sm text-[var(--muted)]">
+                  <li>
+                    <strong className="block text-[var(--foreground)]">
+                      1. Install Podman
+                    </strong>
+                    Set up the local container service.
+                  </li>
+                  <li>
+                    <strong className="block text-[var(--foreground)]">
+                      2. Start Cerebra
+                    </strong>
+                    Run one command from the Cerebra folder.
+                  </li>
+                  <li>
+                    <strong className="block text-[var(--foreground)]">
+                      3. Choose a password
+                    </strong>
+                    Then add your first project.
+                  </li>
+                </ol>
+                <button className="secondary-button mt-5" type="button">
+                  View setup steps
+                </button>
+              </section>
+            </div>
+          )}
+          <section className="card mt-5">
+            <h2>Update Cerebra</h2>
+            <p className="mt-2 text-[var(--muted)]">
+              Get the latest version when you are ready.
+            </p>
+            <p className="mt-5 rounded-lg border-l-4 border-amber-500 bg-amber-50 p-4 text-sm text-amber-950 dark:bg-amber-950 dark:text-amber-50">
+              <strong>Running work will stop.</strong> Updating restarts
+              Cerebra. Work that was still running returns to its queue and can
+              be started again.
+            </p>
+            <button
+              ref={updateButton}
+              className="primary-button mt-5"
+              disabled={updating}
+              onClick={() => setConfirmingUpdate(true)}
+              type="button"
+            >
+              Update and restart
+            </button>
+          </section>
+          {confirmingUpdate ? (
+            <div
+              aria-labelledby="update-title"
+              aria-modal="true"
+              className="fixed inset-0 grid place-items-center bg-black/40 p-5"
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                  setConfirmingUpdate(false);
+                  updateButton.current?.focus();
+                }
+                if (event.key === 'Tab') {
+                  const buttons = Array.from(
+                    event.currentTarget.querySelectorAll<HTMLButtonElement>(
+                      'button',
+                    ),
+                  );
+                  const first = buttons[0];
+                  const last = buttons.at(-1);
+                  if (event.shiftKey && document.activeElement === first) {
+                    event.preventDefault();
+                    last?.focus();
+                  } else if (
+                    !event.shiftKey &&
+                    document.activeElement === last
+                  ) {
+                    event.preventDefault();
+                    first?.focus();
+                  }
+                }
+              }}
+              role="dialog"
+            >
+              <section className="card w-full max-w-md">
+                <h2 id="update-title">Update Cerebra?</h2>
+                <p className="mt-3 text-[var(--muted)]">
+                  The latest version will be installed and Cerebra will restart.
+                </p>
+                <p className="mt-3 text-sm text-[var(--muted)]">
+                  <strong>Running work will stop.</strong> Work that was still
+                  running returns to its queue and can be started again.
+                </p>
+                <div className="mt-6 flex gap-3">
+                  <button
+                    autoFocus
+                    className="secondary-button"
+                    onClick={() => {
+                      setConfirmingUpdate(false);
+                      updateButton.current?.focus();
+                    }}
+                    type="button"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    className="primary-button"
+                    onClick={() => void updateInstance()}
+                    type="button"
+                  >
+                    Update and restart
+                  </button>
+                </div>
+              </section>
+            </div>
+          ) : null}
+        </main>
+      )}
     </div>
   );
 }
