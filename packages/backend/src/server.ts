@@ -36,7 +36,9 @@ import {
   type Fleet,
   type RunControl,
 } from './fleet.js';
+import type { AutomaticStartStatus, Dispatcher } from './dispatcher.js';
 import { createInstanceService, type InstanceService } from './instance.js';
+import { LimitInputError, type StartSettings } from './start-settings.js';
 import { workItemStates, type Priority } from './lifecycle.js';
 import type {
   NavigatorQueue,
@@ -87,6 +89,12 @@ export interface ServerOptions {
   /** Serves `/mcp`, the agents' board tools, authenticated by run token; absent alongside `runs`. */
   readonly mcp?: McpEndpoint;
   readonly uiDirectory?: string;
+  /** The automatic-start pause and the run limits. */
+  readonly startSettings?: StartSettings;
+  /** Explains waiting work; absent when no container engine is configured. */
+  readonly dispatcher?: Pick<Dispatcher, 'status'>;
+  /** Called after every request that changed something, so waiting work can be looked at again. */
+  readonly onMutation?: () => void;
 }
 
 const sessionCookieName = 'cerebra_session';
@@ -303,6 +311,9 @@ export const createServer = async ({
   runnerGateway,
   mcp,
   uiDirectory = process.env.CEREBRA_UI_DIR,
+  startSettings,
+  dispatcher,
+  onMutation,
 }: ServerOptions): Promise<FastifyInstance> => {
   const server = Fastify();
 
@@ -310,6 +321,18 @@ export const createServer = async ({
   server.addHook('onSend', async (_request, reply) => {
     reply.header('content-security-policy', contentSecurityPolicy);
   });
+
+  if (onMutation !== undefined) {
+    server.addHook('onResponse', async (request, reply) => {
+      if (
+        request.method !== 'GET' &&
+        request.method !== 'HEAD' &&
+        reply.statusCode < 400
+      ) {
+        onMutation();
+      }
+    });
+  }
 
   await server.register(websocket);
   runnerGateway?.routes(server);
@@ -1038,6 +1061,104 @@ export const createServer = async ({
     });
   }
 
+  const startSettingsRoute =
+    (
+      handler: (
+        settings: StartSettings,
+        params: Record<string, string>,
+        request: FastifyRequest,
+        reply: FastifyReply,
+      ) => Promise<unknown>,
+    ) =>
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      if (startSettings === undefined) {
+        return reply
+          .status(503)
+          .send({ error: 'Automatic starts are unavailable.' });
+      }
+      try {
+        return await handler(
+          startSettings,
+          request.params as Record<string, string>,
+          request,
+          reply,
+        );
+      } catch (error) {
+        if (error instanceof ProjectNotFoundError) {
+          return reply.status(404).send({ error: error.message });
+        }
+        if (error instanceof LimitInputError) {
+          return reply
+            .status(400)
+            .send({ code: 'invalid_limit', error: error.message });
+        }
+        throw error;
+      }
+    };
+
+  server.get(
+    '/api/projects/:projectId/automatic-starts',
+    async (request, reply) => {
+      if (dispatcher === undefined) {
+        return reply
+          .status(503)
+          .send({ error: 'Automatic starts are unavailable.' });
+      }
+      const { projectId } = request.params as { projectId: string };
+      try {
+        return automaticStartBody(await dispatcher.status(projectId));
+      } catch (error) {
+        if (error instanceof ProjectNotFoundError) {
+          return reply.status(404).send({ error: error.message });
+        }
+        throw error;
+      }
+    },
+  );
+
+  server.put(
+    '/api/projects/:projectId/automatic-starts',
+    startSettingsRoute(async (settings, { projectId }, request, reply) => {
+      const body = objectBody(request.body);
+      if (body === null || typeof body.paused !== 'boolean') {
+        return reply
+          .status(400)
+          .send({ error: 'Say whether automatic starts are paused.' });
+      }
+      await settings.setPaused(projectId ?? '', body.paused);
+      return { paused: body.paused };
+    }),
+  );
+
+  server.get(
+    '/api/projects/:projectId/limits',
+    startSettingsRoute(async (settings, { projectId }) =>
+      settings.limits(projectId ?? ''),
+    ),
+  );
+
+  server.put(
+    '/api/projects/:projectId/limits',
+    startSettingsRoute(async (settings, { projectId }, request) =>
+      settings.setProjectLimit(
+        projectId ?? '',
+        objectBody(request.body)?.projectLimit,
+      ),
+    ),
+  );
+
+  server.get(
+    '/api/settings/limits',
+    startSettingsRoute(async (settings) => settings.limits()),
+  );
+
+  server.put(
+    '/api/settings/limits',
+    startSettingsRoute(async (settings, _params, request) =>
+      settings.setInstanceLimit(objectBody(request.body)?.instanceLimit),
+    ),
+  );
+
   return server;
 };
 
@@ -1217,4 +1338,13 @@ function sendAuthenticationResult(
     `${sessionCookieName}=${result.sessionToken}; HttpOnly; Max-Age=${sessionCookieLifetimeSeconds}; Path=/; SameSite=Strict`,
   );
   return reply.status(successStatus).send({ state: 'authenticated' });
+}
+
+function automaticStartBody(status: AutomaticStartStatus) {
+  return {
+    limit: status.limit,
+    paused: status.paused,
+    running: status.running,
+    waiting: status.waiting.map(({ itemId, reason }) => ({ itemId, reason })),
+  };
 }

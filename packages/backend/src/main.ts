@@ -22,7 +22,9 @@ import { createRunnerGateway } from './runner-gateway.js';
 import { createRunStore } from './runs.js';
 import { createMcpEndpoint } from './mcp.js';
 import { createServer } from './server.js';
+import { createStartSettings } from './start-settings.js';
 import { createSupervisor, directoryPreparer } from './supervisor.js';
+import { createDispatcher, type Dispatcher } from './dispatcher.js';
 
 const port = Number(process.env.CEREBRA_PORT ?? 4317);
 const database = createDatabase(process.env.DATABASE_URL ?? '');
@@ -44,6 +46,8 @@ try {
           cipher: createEnvelopeCipher(projectTokenKey),
           database,
         });
+  // The dispatcher is created after the supervisor, which tells it whenever a run ends.
+  const nudge = { current: () => {} };
   // Agents run only when the engine's socket is mounted and credentials can be resolved.
   const supervisor =
     podmanSocket === undefined ||
@@ -69,10 +73,24 @@ try {
             process.env.CEREBRA_GATEWAY_URL ?? 'ws://main:4317/runner',
           mcpUrl: process.env.CEREBRA_MCP_URL ?? 'http://main:4317/mcp',
           log: (message) => console.error(message),
+          onRunEnded: () => nudge.current(),
           prepareDirectories: directoryPreparer(dataDirectory),
           runs: createRunStore(database),
         });
   await supervisor?.recoverAfterRestart();
+  const dispatcher: Dispatcher | undefined =
+    supervisor === undefined || credentials === undefined
+      ? undefined
+      : createDispatcher({
+          credentials,
+          database,
+          launch: (run) => supervisor.launchDispatched(run),
+          log: (message) => console.error(message),
+        });
+  nudge.current = () => dispatcher?.nudge();
+  nudge.current();
+  // A backstop for anything that changes without passing a request or a run's end.
+  const dispatchTimer = setInterval(() => nudge.current(), 30_000).unref();
   const board = createBoard(database);
   const server = await createServer({
     auth: createAuthService(database),
@@ -102,9 +120,16 @@ try {
             tools: createBoardTools({ board, database }),
           }),
     runs: supervisor,
+    dispatcher,
+    onMutation: () => nudge.current(),
+    startSettings: createStartSettings(database),
     uiDirectory: new URL('../../ui/dist', import.meta.url).pathname,
   });
-  server.addHook('onClose', async () => database.destroy());
+  server.addHook('onClose', async () => {
+    clearInterval(dispatchTimer);
+    await dispatcher?.idle();
+    await database.destroy();
+  });
   await server.listen({ host: '0.0.0.0', port });
 } catch (error) {
   await database.destroy();
