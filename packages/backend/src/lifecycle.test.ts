@@ -527,6 +527,48 @@ describe('the record an agent transition requires', () => {
   });
 
   test.each([
+    ['grooming', 'split', 'groomer', {}],
+    ['grooming', 'cancelled', 'groomer', { reason: 'Duplicate.' }],
+    ['building', 'design_ready', 'builder', { reason: 'Needs a design.' }],
+  ] satisfies ReadonlyArray<
+    readonly [WorkItemState, WorkItemState, string, object]
+  >)(
+    'refuses a record on %s -> %s by a %s, which needs none',
+    (from, to, role, extra) => {
+      expect(
+        transition(
+          held(from),
+          by(role, to, { ...extra, record: { kind: 'claim', role: 'x' } }),
+          { ...context, supportsSplitting: true },
+        ),
+      ).toEqual({
+        ok: false,
+        reason: `Moving a work item from ${from} to ${to} takes no record.`,
+      });
+    },
+  );
+
+  test('refuses a record on an agent’s wait for the navigator', () => {
+    expect(
+      transition(
+        held('grooming'),
+        by('groomer', 'waiting', {
+          record: { kind: 'triage' },
+          waiting: {
+            kind: 'question',
+            reason: 'Which?',
+            returnState: 'grooming_ready',
+          },
+        }),
+        context,
+      ),
+    ).toEqual({
+      ok: false,
+      reason: 'Moving a work item from grooming to waiting takes no record.',
+    });
+  });
+
+  test.each([
     ['grooming', 'cancelled', 'groomer'],
     ['building', 'design_ready', 'builder'],
   ] satisfies ReadonlyArray<readonly [WorkItemState, WorkItemState, string]>)(

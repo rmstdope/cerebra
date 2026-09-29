@@ -245,6 +245,27 @@ describe('the MCP endpoint', () => {
     expect(nameless.json()).toMatchObject({ error: { code: -32602 }, id: 9 });
   });
 
+  test('answers a JSON-RPC parse error for a body that is not JSON', async () => {
+    const app = await serve();
+
+    const response = await app.inject({
+      body: '{"jsonrpc": "2.0",',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      method: 'POST',
+      url: '/mcp',
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({
+      error: { code: -32700, message: 'Parse error' },
+      id: null,
+      jsonrpc: '2.0',
+    });
+  });
+
   test('hides a tool’s failure behind an internal error', async () => {
     const app = await serve(async () => {
       throw new Error('connection terminated: password=hunter2');

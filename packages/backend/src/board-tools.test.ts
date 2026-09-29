@@ -421,6 +421,24 @@ describe('board tools', { concurrent: false }, () => {
       });
     });
 
+    test('refuses a record the move does not take, so none can be forged', async () => {
+      await withBoard(async ({ board, caller, item, tools }) => {
+        const jubilee = await caller('Jubilee', 'groomer');
+        const heldId = await item({ heldBy: jubilee });
+
+        expect(
+          await tools.call(jubilee, 'transition', {
+            reason: 'Duplicate.',
+            record: { kind: 'claim', role: 'navigator' },
+            to: 'cancelled',
+          }),
+        ).toMatchObject({ code: 'refused', ok: false });
+        expect(await board.listRecords(heldId)).toMatchObject([
+          { kind: 'claim', record: { role: 'groomer' } },
+        ]);
+      });
+    });
+
     test('refuses malformed arguments', async () => {
       await withBoard(async ({ caller, tools }) => {
         const jubilee = await caller('Jubilee', 'groomer');

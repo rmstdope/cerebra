@@ -340,7 +340,7 @@ export function createBoardTools({
       descriptor: {
         name: 'wait_for_navigator',
         description:
-          'Put the held work item in front of the navigator with a question; it returns to its queue once answered.',
+          'Put the held work item in front of the navigator with a question. This gives up the hold: the item returns to its queue once answered, and this run holds nothing after.',
         inputSchema: {
           type: 'object',
           properties: { question: { type: 'string', minLength: 1 } },

@@ -227,7 +227,8 @@ the run token as its bearer.
 `tools/list` answers the tools the calling type allows that exist so far. Every `tools/call` is
 checked, in order, against the type's allowed tools, the run's project (an item of another
 project is refused, not hidden), the item the run holds, and the lifecycle, whose pure transition
-function also refuses a transition without the record it needs (`spec.md` §4.4, §4.11). A refusal
+function also refuses a transition without the record it needs (`spec.md` §4.4, §4.11), and an
+agent's record on a move that takes none, so an agent cannot write a record of the backend's kind. A refusal
 is a tool result with `isError` set and `{ "error": code, "message": … }` as its text, so the
 agent can read why; an unexpected failure is a JSON-RPC internal error that names nothing.
 `transition` and `wait_for_navigator` act only on the item the run holds, re-checked under the

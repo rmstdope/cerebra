@@ -335,6 +335,15 @@ export function transition(
     }
   }
 
+  // An agent's record is evidence for the move it asks for, never a record of the backend's kind.
+  const agentMove = rule.role !== 'backend' && rule.role !== 'navigator';
+  const takesRecord = rule.requires !== undefined && rule.requires !== 'reason';
+  if (agentMove && !takesRecord && request.record !== undefined) {
+    return refusal(
+      `Moving a work item from ${item.state} to ${request.to} takes no record.`,
+    );
+  }
+
   if (
     item.state === 'new' &&
     request.to !== 'cancelled' &&

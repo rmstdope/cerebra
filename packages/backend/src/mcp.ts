@@ -22,6 +22,7 @@ export interface McpEndpoint {
 export const mcpPath = '/mcp';
 
 const supportedVersions = ['2025-06-18', '2025-03-26', '2024-11-05'];
+const parseError = -32700;
 const invalidRequest = -32600;
 const methodNotFound = -32601;
 const invalidParams = -32602;
@@ -123,7 +124,22 @@ export function createMcpEndpoint<Caller>({
 
   return {
     routes(server) {
-      server.post(mcpPath, handle);
+      server.post(
+        mcpPath,
+        {
+          // A body Fastify cannot parse still gets a JSON-RPC answer, not Fastify's own.
+          errorHandler: (error, _request, reply) => {
+            const status = (error as { statusCode?: number }).statusCode;
+            if (status === 400 || status === 415) {
+              return reply
+                .status(status)
+                .send(failure(null, parseError, 'Parse error'));
+            }
+            throw error;
+          },
+        },
+        handle,
+      );
       server.route({
         handler: async (_request, reply) =>
           reply.status(405).header('allow', 'POST').send(),
