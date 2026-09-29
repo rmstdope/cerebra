@@ -1,0 +1,23 @@
+<html><head><meta charset=utf-8><style>body{font-family:system-ui;margin:0;background:#f6f7f9;color:#1b1e24}h1{font-size:20px}h2{font-size:15px;margin:24px 0 8px;color:#555;text-transform:uppercase;letter-spacing:.05em}
+.frame{background:#fff;border:1px solid #dde;border-radius:10px;padding:16px;margin:12px 0}.banner{background:#fff6e0;border:1px solid #f0c36d;border-radius:8px;padding:10px 14px;display:flex;gap:12px;align-items:center;justify-content:space-between}
+.err{background:#fdecec;border-color:#e99}.btn{border:1px solid #bbc;border-radius:6px;padding:5px 12px;background:#fff;font:inherit;cursor:pointer}.pri{background:#2d5bd7;color:#fff;border-color:#2d5bd7}
+.row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #eee;align-items:center}.chip{font-size:12px;border-radius:99px;padding:2px 9px;background:#eef}.wait{background:#fff3d6}.bad{background:#fde2e2}
+.muted{color:#667;font-size:13px}.wrap{max-width:900px;margin:auto;padding:20px}label{display:block;margin:10px 0 4px;font-weight:600}input[type=number]{width:70px;padding:4px}.log td{padding:6px 10px;border-bottom:1px solid #eee;font-size:13px}
+</style></head><body><div class=wrap>
+<h1>Option A — controls on the board, reasons on each waiting item</h1>
+<h2>1. Board header, running normally</h2><div class=frame><div class=row><b>Project board — shop-web</b><span><span class=muted>Starting work automatically · 2 of 3 running</span> <button class=btn>Pause automatic starts</button></span></div></div>
+<h2>2. Board header, paused</h2><div class="frame banner"><span><b>Automatic starts are paused.</b> Work already running continues, and you can still start anyone yourself from the fleet.</span><button class="btn pri">Resume</button></div>
+<h2>3. A waiting item says why it hasn't started</h2><div class=frame>
+<div class=row><span>Make reports easier to share <span class=muted>P1</span></span><span class="chip wait">Waiting — project limit reached (3 of 3 running)</span></div>
+<div class=row><span>Fix export timeout <span class=muted>P2</span></span><span class="chip wait">Waiting — no producer is free</span></div>
+<div class=row><span>Add dark theme to settings <span class=muted>P2</span></span><span class="chip wait">Waiting — Cerebra-wide limit reached (6 of 6 running)</span></div>
+<div class=row><span>Clean up login copy <span class=muted>P3</span></span><span class="chip wait">Waiting — automatic starts are paused</span></div>
+<div class=row><span>Upgrade build tools <span class=muted>P2</span></span><span class="chip bad">Can't start — GitHub credential missing · <a href=#>Fix in settings</a></span></div></div>
+<h2>4. Limits in project settings</h2><div class=frame><label>Work running at once in this project</label><input type=number value=3> <span class=muted>Cerebra-wide limit is 6.</span>
+<label>Work running at once across all projects</label><span class=muted>(Cerebra settings)</span> <input type=number value=6><p><button class=btn>Cancel</button> <button class="btn pri">Save changes</button></p></div>
+
+<h2>5. Pausing failed</h2><div class="frame banner err"><span>Cerebra couldn't pause automatic starts. Nothing has changed. </span><button class=btn>Try again</button></div>
+<h2>6. Couldn't read why it's waiting</h2><div class=frame><div class=row><span>Fix export timeout</span><span class="chip bad">Couldn't check why this is waiting · Try again</span></div></div>
+<h2>7. Limit field errors</h2><div class=frame><input type=number value=0> <span style="color:#b00">Enter a whole number of 1 or more.</span><br><br><input type=number value=9> <span style="color:#b00">This can't be higher than the Cerebra-wide limit (6).</span></div>
+<h2>8. Narrow window</h2><div class=frame style="width:320px"><b>Project board — shop-web</b><div class=muted>Starting work automatically · 2 of 3 running</div><button class=btn>Pause automatic starts</button><div class="chip wait" style="margin-top:8px">Waiting — project limit reached (3 of 3 running)</div></div>
+</div></body></html>
