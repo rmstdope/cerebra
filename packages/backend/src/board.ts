@@ -108,8 +108,22 @@ export interface BoardQuery extends BoardFilters {
   readonly sort?: BoardSort;
 }
 
+/** Who filed a listed item, fixed when it was filed; null when the navigator did (spec §4.10). */
+export interface BoardFiledBy {
+  readonly agentName: string | null;
+  readonly discoveredFrom: {
+    readonly id: string;
+    readonly title: string;
+  } | null;
+  readonly role: string;
+}
+
+export interface BoardListedWorkItem extends BoardWorkItem {
+  readonly filedBy: BoardFiledBy | null;
+}
+
 export interface BoardPage {
-  readonly items: readonly BoardWorkItem[];
+  readonly items: readonly BoardListedWorkItem[];
   readonly nextCursor: string | null;
   readonly snapshot: string;
   readonly total: number;
@@ -329,8 +343,16 @@ export function createBoard(database: Kysely<Database>): Board {
         .where('filed_sequence', '<=', snapshot)
         .executeTakeFirstOrThrow();
 
+      const items = page.slice(0, limit).map(toBoardWorkItem);
+      const filedBy = await filedByOf(
+        database,
+        items.map((item) => item.id),
+      );
       return {
-        items: page.slice(0, limit).map(toBoardWorkItem),
+        items: items.map((item) => ({
+          ...item,
+          filedBy: filedBy.get(item.id) ?? null,
+        })),
         nextCursor: page.length > limit ? String(offset + limit) : null,
         snapshot,
         total: Number(total.count),
@@ -559,6 +581,43 @@ export async function transitionLocked<R extends { readonly ok: false }>(
     }
     return result;
   });
+}
+
+async function filedByOf(
+  database: Kysely<Database>,
+  itemIds: readonly string[],
+): Promise<Map<string, BoardFiledBy>> {
+  if (itemIds.length === 0) return new Map();
+  const rows = await database
+    .selectFrom('work_items as item')
+    .innerJoin('runs', 'runs.id', 'item.filed_by_run_id')
+    .leftJoin(
+      'work_items as original',
+      'original.id',
+      'item.discovered_from_id',
+    )
+    .select([
+      'item.id',
+      'runs.agent_name',
+      'runs.role',
+      'original.id as original_id',
+      'original.title as original_title',
+    ])
+    .where('item.id', 'in', itemIds)
+    .execute();
+  return new Map(
+    rows.map((row) => [
+      row.id,
+      {
+        agentName: row.agent_name,
+        discoveredFrom:
+          row.original_id === null || row.original_title === null
+            ? null
+            : { id: row.original_id, title: row.original_title },
+        role: row.role,
+      },
+    ]),
+  );
 }
 
 const boardColumns = [
