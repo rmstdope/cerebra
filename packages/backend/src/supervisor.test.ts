@@ -1123,7 +1123,6 @@ describe('runs the dispatcher starts', { concurrent: false }, () => {
         state: 'build_ready',
         title: 'Fix export timeout',
       });
-      const failures: string[] = [];
       await createDispatcher({
         credentials: { problemsFor: async () => [] },
         database: harness.database,
@@ -1133,7 +1132,6 @@ describe('runs the dispatcher starts', { concurrent: false }, () => {
             ...run,
             agentId: crypto.randomUUID(),
           }),
-        log: (message) => failures.push(message),
       }).dispatch();
 
       expect(await harness.runs.live()).toEqual([]);
@@ -1143,6 +1141,7 @@ describe('runs the dispatcher starts', { concurrent: false }, () => {
         .where('id', '=', itemId)
         .executeTakeFirstOrThrow();
       expect(item).toEqual({ holder_run_id: null, state: 'build_ready' });
+      expect(harness.logs.join('\n')).toMatch(/could not start/);
     });
   });
 

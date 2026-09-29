@@ -331,6 +331,55 @@ describe('the dispatcher', () => {
     });
   });
 
+  test('leaves an agent alone for a while after its run failed to start, but not after other failures', async () => {
+    await withTestDatabase(async (database) => {
+      const projectId = await registerTestProject(database);
+      const cyclops = await agentNamed(database, projectId, 'Cyclops');
+      const endedRun = async (startFailed: boolean) =>
+        database
+          .insertInto('runs')
+          .values({
+            agent_id: cyclops,
+            agent_name: 'Cyclops',
+            ended_at: new Date(),
+            id: crypto.randomUUID(),
+            project_id: projectId,
+            role: 'builder',
+            start_failed: startFailed,
+            status: 'failed',
+          })
+          .execute();
+      await fileItem(database, projectId, 'Fix export');
+      const { dispatcher, launched } = dispatcherFor(database);
+
+      await endedRun(true);
+      await dispatcher.dispatch();
+      expect(launched.map((run) => run.agentId)).not.toContain(cyclops);
+    });
+    await withTestDatabase(async (database) => {
+      const projectId = await registerTestProject(database);
+      const cyclops = await agentNamed(database, projectId, 'Cyclops');
+      await database
+        .insertInto('runs')
+        .values({
+          agent_id: cyclops,
+          agent_name: 'Cyclops',
+          ended_at: new Date(),
+          id: crypto.randomUUID(),
+          project_id: projectId,
+          role: 'builder',
+          status: 'failed',
+        })
+        .execute();
+      await fileItem(database, projectId, 'Fix export');
+      const { dispatcher, launched } = dispatcherFor(database);
+
+      await dispatcher.dispatch();
+
+      expect(launched.map((run) => run.agentId)).toEqual([cyclops]);
+    });
+  });
+
   test('answers an unknown project as not found', async () => {
     await withTestDatabase(async (database) => {
       const { dispatcher } = dispatcherFor(database);

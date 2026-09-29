@@ -42,7 +42,7 @@ export interface DispatcherOptions {
   /** Starts a claimed run's container; a failure it cannot start ends the run itself. */
   readonly launch: (run: DispatchedRun) => Promise<void>;
   readonly log?: (message: string) => void;
-  /** How long an agent whose last run failed is left alone, so a fault that repeats cannot loop. */
+  /** How long an agent whose last run failed to start is left alone, so a repeating fault cannot loop. */
   readonly failureCooloffMs?: number;
 }
 
@@ -146,23 +146,19 @@ export function createDispatcher({
       .orderBy('created_sequence')
       .execute();
     const busy = new Set(liveRuns.map((run) => run.agent_id));
+    // An agent whose latest run failed to start is left alone for a while (a failed start is
+    // created and ended within moments, so only recent runs need reading).
     const latestRuns = await database
       .selectFrom('runs')
-      .select(['agent_id', 'status', 'ended_at'])
+      .select(['agent_id', 'start_failed'])
       .where('agent_id', 'is not', null)
+      .where('created_at', '>', new Date(Date.now() - failureCooloffMs))
       .distinctOn('agent_id')
       .orderBy('agent_id')
       .orderBy('created_at', 'desc')
       .execute();
     const cooling = new Set(
-      latestRuns
-        .filter(
-          (run) =>
-            run.status === 'failed' &&
-            run.ended_at !== null &&
-            run.ended_at.getTime() > Date.now() - failureCooloffMs,
-        )
-        .map((run) => run.agent_id),
+      latestRuns.filter((run) => run.start_failed).map((run) => run.agent_id),
     );
 
     const planTypes: PlanSnapshot['types'][number][] = [];
