@@ -21,6 +21,7 @@ import { createServer as createNodeServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, test } from 'vitest';
+import { createWorkItem } from './lifecycle.js';
 
 const servers: Array<{ close: () => Promise<void> }> = [];
 const authenticatedAuth = {
@@ -443,6 +444,8 @@ function fakeBoard(overrides: Partial<Board> = {}): Board {
     getWorkItem: unused,
     listComments: unused,
     listWorkItems: unused,
+    returnToDesign: unused,
+    sendBack: unused,
     transition: unused,
     triage: unused,
     ...overrides,
@@ -583,6 +586,102 @@ test('reads an item’s delivery activity, earlier pages by cursor', async () =>
     { itemId: 'item-1', page: {} },
     { itemId: 'item-1', page: { before: '12' } },
   ]);
+});
+
+test('sends a blocked item back to the builder and answers the item', async () => {
+  const sent: string[] = [];
+  const server = await createServer({
+    auth: authenticatedAuth,
+    board: fakeBoard({
+      getWorkItem: async () => ({ ...boardItem, state: 'build_ready' }),
+      sendBack: async (itemId) => {
+        sent.push(itemId);
+        return {
+          effects: [],
+          item: createWorkItem({ state: 'build_ready' }),
+          ok: true,
+        };
+      },
+    }),
+  });
+  servers.push(server);
+
+  const response = await server.inject({
+    method: 'POST',
+    url: '/api/work-items/item-1/send-back',
+  });
+
+  expect(response.statusCode).toBe(200);
+  expect(response.json()).toMatchObject({ state: 'build_ready' });
+  expect(sent).toEqual(['item-1']);
+});
+
+test('refuses to answer an item that is no longer waiting', async () => {
+  const server = await createServer({
+    auth: authenticatedAuth,
+    board: fakeBoard({
+      sendBack: async () => ({
+        code: 'not_waiting',
+        ok: false,
+        reason: 'This item is no longer waiting for you.',
+      }),
+    }),
+  });
+  servers.push(server);
+
+  const response = await server.inject({
+    method: 'POST',
+    url: '/api/work-items/item-1/send-back',
+  });
+
+  expect(response.statusCode).toBe(409);
+  expect(response.json()).toEqual({
+    code: 'not_waiting',
+    error: 'This item is no longer waiting for you.',
+  });
+});
+
+test('returns a blocked item to design with the navigator’s reason', async () => {
+  const reasons: string[] = [];
+  const server = await createServer({
+    auth: authenticatedAuth,
+    board: fakeBoard({
+      getWorkItem: async () => ({ ...boardItem, state: 'design_ready' }),
+      returnToDesign: async (_itemId, reason) => {
+        reasons.push(reason);
+        return reason.trim() === ''
+          ? {
+              code: 'reason_required',
+              ok: false,
+              reason:
+                'Give a reason so the designer and the next builder know what to change.',
+            }
+          : {
+              effects: [],
+              item: createWorkItem({ state: 'design_ready' }),
+              ok: true,
+            };
+      },
+    }),
+  });
+  servers.push(server);
+
+  const empty = await server.inject({
+    method: 'POST',
+    payload: {},
+    url: '/api/work-items/item-1/return-to-design',
+  });
+  const given = await server.inject({
+    method: 'POST',
+    payload: { reason: 'New layout.' },
+    url: '/api/work-items/item-1/return-to-design',
+  });
+
+  expect(empty.statusCode).toBe(400);
+  expect(empty.json()).toMatchObject({ code: 'reason_required' });
+  expect(given.statusCode).toBe(200);
+  expect(given.json()).toMatchObject({ state: 'design_ready' });
+  expect(reasons).toEqual(['', 'New layout.']);
 });
 
 test('returns an unavailable route as an explicit refusal', async () => {

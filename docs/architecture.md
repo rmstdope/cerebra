@@ -340,7 +340,7 @@ startup. Deliveries (`agent_credentials`) are declared
 per project and agent type, by name, as an environment variable or an absolute file path outside
 `/work`. Two are built in and need no declaration: `Claude sign-in token` as
 `CLAUDE_CODE_OAUTH_TOKEN` to every type, and `GitHub access token` as `GH_TOKEN` to producer,
-bugfixer and assistant. `resolveForRun` returns exactly the variables and files a run may receive,
+bugfixer, reviewer (which posts its review on the pull request) and assistant. `resolveForRun` returns exactly the variables and files a run may receive,
 or the names it cannot have (missing, undecryptable, or failed at injection); a run with any
 problem does not start, and the Credentials page lists each problem until it is replaced or
 removed. The project GitHub token stays on `projects` and is never resolved for a run.

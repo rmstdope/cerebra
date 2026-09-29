@@ -15,6 +15,7 @@ import {
 import type { Kysely } from 'kysely';
 
 import type { AgentRole } from './agent-types.js';
+import { livePullRequest } from './board.js';
 import type { RunCheckouts } from './checkouts.js';
 import type { CredentialService } from './credentials.js';
 import type { Database, RunState } from './database.js';
@@ -424,7 +425,13 @@ export function createSupervisor({
     if (typeof definition.image !== 'string') {
       throw new Error('The agent type names no image.');
     }
-    await checkouts.create({ projectId, runId: run.id });
+    // A builder reworking an item, or a reviewer, works on the item's pull request branch.
+    const base = await pullRequestBranchFor(database, run.id);
+    await checkouts.create({
+      projectId,
+      runId: run.id,
+      ...(base === null ? {} : { base }),
+    });
     // Stopped while the checkout was being made: the ending removed nothing yet made.
     if (!live.has(run.id)) {
       await removeCheckout(run.id);
@@ -823,4 +830,21 @@ export function createSupervisor({
       }
     },
   };
+}
+
+async function pullRequestBranchFor(
+  database: Kysely<Database>,
+  runId: string,
+): Promise<string | null> {
+  const item = await database
+    .selectFrom('work_items')
+    .select('id')
+    .where('holder_run_id', '=', runId)
+    .where('state', 'in', ['building', 'reviewing'])
+    .executeTakeFirst();
+  if (item === undefined) return null;
+  const pullRequest = await livePullRequest(database, item.id);
+  return pullRequest === null || pullRequest.branch === ''
+    ? null
+    : pullRequest.branch;
 }

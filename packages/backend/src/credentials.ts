@@ -24,9 +24,11 @@ export const builtInAgentTypes = [
   'assistant',
 ] as const;
 
-const pushingAgentTypes: readonly string[] = [
+/** The types that reach GitHub as themselves: to push, or, for a reviewer, to post its review. */
+const gitHubAgentTypes: readonly string[] = [
   'producer',
   'bugfixer',
+  'reviewer',
   'assistant',
 ];
 
@@ -163,7 +165,7 @@ export function builtInDeliveries(
       delivery: 'environment',
       destination: 'CLAUDE_CODE_OAUTH_TOKEN',
     },
-    ...(pushingAgentTypes.includes(agentType)
+    ...(gitHubAgentTypes.includes(agentType)
       ? [
           {
             credentialName: agentGitHubCredentialName,

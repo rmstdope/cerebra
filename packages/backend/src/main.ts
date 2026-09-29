@@ -15,6 +15,8 @@ import { loadMasterKey } from './master-key.js';
 import { migrateToLatest } from './migrations/index.js';
 import { createAttention } from './attention.js';
 import { createCostReader } from './costs.js';
+import { projectGitHubForge } from './forge.js';
+import { createMergeWatcher } from './merge-watcher.js';
 import { createNavigatorQueue } from './navigator-queue.js';
 import { createNotificationSettings } from './notification-settings.js';
 import { createNotifier } from './notifier.js';
@@ -120,6 +122,17 @@ try {
   };
   backupTick();
   const backupTimer = setInterval(backupTick, 60_000).unref();
+  // The backend's merge and pull-request closing need the project's token.
+  const mergeWatcher =
+    projectTokenKey === undefined
+      ? undefined
+      : createMergeWatcher({
+          database,
+          forge: projectGitHubForge(database, projectTokenKey),
+          log: (message) => console.error(message),
+        });
+  mergeWatcher?.nudge();
+  const mergeTimer = setInterval(() => mergeWatcher?.nudge(), 30_000).unref();
   const board = createBoard(database);
   const queue = createNavigatorQueue(database);
   const attention = createAttention(database, queue);
@@ -178,7 +191,10 @@ try {
           }),
     runs: supervisor,
     dispatcher,
-    onMutation: () => nudge.current(),
+    onMutation: () => {
+      nudge.current();
+      mergeWatcher?.nudge();
+    },
     startSettings: createStartSettings(database),
     uiDirectory: new URL('../../ui/dist', import.meta.url).pathname,
   });
@@ -187,6 +203,7 @@ try {
     clearInterval(notificationTimer);
     notifications.stop();
     clearInterval(backupTimer);
+    clearInterval(mergeTimer);
     await dispatcher?.idle();
     await backups?.idle();
     await database.destroy();

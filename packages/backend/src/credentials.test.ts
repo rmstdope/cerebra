@@ -282,10 +282,15 @@ describe('agent credential deliveries', { concurrent: false }, () => {
         'GitHub access token',
       ]);
       expect(
-        (await credentials.agentCredentials(projectId, 'reviewer')).entries.map(
+        (await credentials.agentCredentials(projectId, 'designer')).entries.map(
           (entry) => entry.credentialName,
         ),
       ).toEqual([modelCredentialName]);
+      expect(
+        (await credentials.agentCredentials(projectId, 'reviewer')).entries.map(
+          (entry) => entry.credentialName,
+        ),
+      ).toEqual([modelCredentialName, agentGitHubCredentialName]);
     });
   });
 
@@ -423,7 +428,12 @@ describe('resolving credentials for a run', { concurrent: false }, () => {
     await withCredentials(async ({ credentials, projectId }) => {
       await saveModelAndGitHub(credentials, projectId);
 
-      for (const agentType of ['producer', 'bugfixer', 'assistant']) {
+      for (const agentType of [
+        'producer',
+        'bugfixer',
+        'reviewer',
+        'assistant',
+      ]) {
         const result = await credentials.resolveForRun({
           agentType,
           projectId,
@@ -431,7 +441,7 @@ describe('resolving credentials for a run', { concurrent: false }, () => {
         });
         expect(result.ok && result.environment.GH_TOKEN).toBe('ghp-agent');
       }
-      for (const agentType of ['groomer', 'designer', 'reviewer']) {
+      for (const agentType of ['groomer', 'designer']) {
         const result = await credentials.resolveForRun({
           agentType,
           projectId,
@@ -477,7 +487,7 @@ describe('resolving credentials for a run', { concurrent: false }, () => {
         scope: 'instance',
         value: 'claude',
       });
-      await credentials.setAgentCredentials(projectId, 'reviewer', [
+      await credentials.setAgentCredentials(projectId, 'designer', [
         {
           credentialName: 'Deploy key',
           delivery: 'environment',
@@ -487,7 +497,7 @@ describe('resolving credentials for a run', { concurrent: false }, () => {
 
       expect(
         await credentials.resolveForRun({
-          agentType: 'reviewer',
+          agentType: 'designer',
           projectId,
           runId: crypto.randomUUID(),
         }),
@@ -522,7 +532,7 @@ describe('resolving credentials for a run', { concurrent: false }, () => {
         await credentials.problemsFor({ agentType: 'producer', projectId }),
       ).toEqual([agentGitHubCredentialName]);
       expect(
-        await credentials.problemsFor({ agentType: 'reviewer', projectId }),
+        await credentials.problemsFor({ agentType: 'designer', projectId }),
       ).toEqual([]);
       expect(
         await database
@@ -557,7 +567,7 @@ describe('resolving credentials for a run', { concurrent: false }, () => {
       const overview = await credentials.overview(projectId);
       expect(overview.attention).toEqual([
         {
-          agentTypes: ['assistant', 'bugfixer', 'producer'],
+          agentTypes: ['assistant', 'bugfixer', 'producer', 'reviewer'],
           everyAgent: false,
           name: agentGitHubCredentialName,
           scope: 'project',
@@ -592,7 +602,7 @@ describe('resolving credentials for a run', { concurrent: false }, () => {
     await withCredentials(async ({ credentials, projectId }) => {
       await saveModelAndGitHub(credentials, projectId);
       const first = await credentials.resolveForRun({
-        agentType: 'reviewer',
+        agentType: 'designer',
         projectId,
         runId: crypto.randomUUID(),
       });
@@ -604,7 +614,7 @@ describe('resolving credentials for a run', { concurrent: false }, () => {
 
       expect(
         await credentials.resolveForRun({
-          agentType: 'reviewer',
+          agentType: 'designer',
           projectId,
           runId: crypto.randomUUID(),
         }),
@@ -623,7 +633,7 @@ describe('credentials needing attention', { concurrent: false }, () => {
   test('shows a credential an agent needs but nobody saved', async () => {
     await withCredentials(async ({ credentials, projectId }) => {
       await saveModelAndGitHub(credentials, projectId);
-      await credentials.setAgentCredentials(projectId, 'reviewer', [
+      await credentials.setAgentCredentials(projectId, 'designer', [
         {
           credentialName: 'Deploy key',
           delivery: 'environment',
@@ -635,7 +645,7 @@ describe('credentials needing attention', { concurrent: false }, () => {
 
       expect(overview.attention).toEqual([
         {
-          agentTypes: ['reviewer'],
+          agentTypes: ['designer'],
           everyAgent: false,
           name: 'Deploy key',
           scope: null,
@@ -650,7 +660,7 @@ describe('credentials needing attention', { concurrent: false }, () => {
         name: 'Deploy key',
         needsAttention: true,
         scope: 'project',
-        usedBy: ['reviewer'],
+        usedBy: ['designer'],
         usedByEveryAgent: false,
       });
     });
@@ -668,7 +678,7 @@ describe('credentials needing attention', { concurrent: false }, () => {
           scope: null,
         },
         {
-          agentTypes: ['assistant', 'bugfixer', 'producer'],
+          agentTypes: ['assistant', 'bugfixer', 'producer', 'reviewer'],
           everyAgent: false,
           name: agentGitHubCredentialName,
           scope: null,
@@ -699,7 +709,7 @@ describe('credentials needing attention', { concurrent: false }, () => {
         overview.projectCredentials.find(
           (row) => row.name === agentGitHubCredentialName,
         )?.usedBy,
-      ).toEqual(['assistant', 'bugfixer', 'producer']);
+      ).toEqual(['assistant', 'bugfixer', 'producer', 'reviewer']);
       expect(
         overview.instanceCredentials.find(
           (row) => row.name === agentGitHubCredentialName,

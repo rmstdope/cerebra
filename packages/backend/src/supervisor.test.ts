@@ -61,7 +61,7 @@ function recordingCheckouts(
   return {
     async create(input) {
       calls.push(
-        `create ${input.runId} ${input.projectId} ${container(input.runId)}`,
+        `create ${input.runId} ${input.projectId} ${container(input.runId)}${input.base === undefined ? '' : ` base=${input.base}`}`,
       );
       await overrides.create?.(input);
     },
@@ -1048,7 +1048,10 @@ describe('fetching files from a run’s checkout', { concurrent: false }, () => 
 });
 
 describe('runs the dispatcher starts', { concurrent: false }, () => {
-  async function dispatchOne(harness: Harness): Promise<string> {
+  async function dispatchOne(
+    harness: Harness,
+    before: (itemId: string) => Promise<void> = async () => {},
+  ): Promise<string> {
     const itemId = crypto.randomUUID();
     await createBoard(harness.database).createWorkItem({
       description: 'Exports time out after a minute.',
@@ -1058,6 +1061,7 @@ describe('runs the dispatcher starts', { concurrent: false }, () => {
       state: 'build_ready',
       title: 'Fix export timeout',
     });
+    await before(itemId);
     await createDispatcher({
       credentials: { problemsFor: async () => [] },
       database: harness.database,
@@ -1083,6 +1087,33 @@ describe('runs the dispatcher starts', { concurrent: false }, () => {
         interactive: false,
         type: 'start',
       });
+    });
+  });
+
+  test('a builder reworking an item checks out its pull request’s branch', async () => {
+    await withSupervisor(async (harness) => {
+      await dispatchOne(harness, async (itemId) => {
+        await harness.database
+          .insertInto('work_item_records')
+          .values({
+            kind: 'pull_request',
+            payload: JSON.stringify({
+              branch: 'WEB-1-export',
+              head: '0123456789abcdef0123456789abcdef01234567',
+              kind: 'pull_request',
+              url: 'https://github.com/acme/website/pull/482',
+            }),
+            work_item_id: itemId,
+          })
+          .execute();
+      });
+      const [run] = await harness.runs.live();
+
+      await harness.connect(run.id);
+
+      expect(harness.checkouts).toEqual([
+        `create ${run.id} ${harness.projectId} no container base=WEB-1-export`,
+      ]);
     });
   });
 
