@@ -732,6 +732,7 @@ describe('provenance and records', { concurrent: false }, () => {
       await board.createWorkItem({ id: itemId, projectId, title: 'Export' });
 
       expect(await board.deliveryActivity(itemId)).toEqual({
+        blocked: null,
         current: null,
         earlierCursor: null,
         events: [],

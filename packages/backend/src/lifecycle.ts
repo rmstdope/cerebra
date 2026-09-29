@@ -56,6 +56,8 @@ export interface LifecycleContext {
     readonly grooming: boolean;
     readonly verify: boolean;
   };
+  /** The project's `max_rounds` (spec §4.5): the send-back that reaches it waits instead. */
+  readonly maxRounds: number;
   readonly supportsSplitting: boolean;
 }
 
@@ -240,12 +242,6 @@ export const transitionTable: readonly TransitionRule[] = [
     holderMustMatch: false,
   },
   { from: 'merging', to: 'done', role: 'backend', holderMustMatch: false },
-  {
-    from: 'merging',
-    to: 'build_ready',
-    role: 'backend',
-    holderMustMatch: false,
-  },
   { from: 'verifying', to: 'done', role: 'verifier', holderMustMatch: true },
   {
     from: 'verifying',
@@ -391,6 +387,15 @@ export function transition(
     );
   }
 
+  const rounds = nextRounds(item, request);
+  if (
+    rule.from === 'reviewing' &&
+    rule.to === 'build_ready' &&
+    rounds >= context.maxRounds
+  ) {
+    return tooManyRounds(item, request, rounds);
+  }
+
   const next = createWorkItem({
     ...item,
     attempts: nextAttempts(item, request),
@@ -398,7 +403,7 @@ export function transition(
       ? (request.actor.runId ?? null)
       : null,
     priority: nextPriority(item, request),
-    rounds: nextRounds(item, request),
+    rounds,
     state: request.to,
     waitingKind: request.waiting?.kind ?? null,
     waitingReason: request.waiting?.reason ?? null,
@@ -413,6 +418,43 @@ export function transition(
       ...(request.record === undefined
         ? []
         : [{ kind: 'record' as const, record: request.record }]),
+    ],
+  };
+}
+
+/** The heading a person sees when changes requested reach `max_rounds` (spec §4.5). */
+export const tooManyRoundsReason = "Can't merge: too many rounds";
+
+/**
+ * A send-back that reaches `max_rounds` waits for the navigator instead (spec §4.5), keeping the
+ * review that requested it and recording why the item stopped.
+ */
+function tooManyRounds(
+  item: WorkItem,
+  request: TransitionRequest,
+  rounds: number,
+): TransitionResult {
+  return {
+    ok: true,
+    item: createWorkItem({
+      ...item,
+      attempts: 0,
+      holderRunId: null,
+      rounds,
+      state: 'waiting',
+      waitingKind: 'escalation',
+      waitingReason: tooManyRoundsReason,
+      returnState: 'build_ready',
+    }),
+    effects: [
+      { kind: 'history', reason: request.reason ?? tooManyRoundsReason },
+      ...(request.record === undefined
+        ? []
+        : [{ kind: 'record' as const, record: request.record }]),
+      {
+        kind: 'record',
+        record: { kind: 'blocked', reason: 'too_many_rounds', count: rounds },
+      },
     ],
   };
 }
@@ -664,6 +706,19 @@ function reviewProblem(
   if (record.verdict !== verdict) {
     return `${needs} a review verdict of ${verdict}.`;
   }
+  if (
+    typeof record.revision !== 'string' ||
+    !/^[0-9a-f]{7,64}$/i.test(record.revision)
+  ) {
+    return 'The review record has no valid revision.';
+  }
+  if (
+    record.url !== undefined &&
+    (typeof record.url !== 'string' ||
+      !/^https:\/\/github\.com\/\S+$/.test(record.url))
+  ) {
+    return 'The review record has no valid url.';
+  }
   const findings = record.findings;
   if (!Array.isArray(findings) || !findings.every(isFinding)) {
     return 'Every review finding needs a severity (blocking or advisory), a file and a problem.';
@@ -728,7 +783,28 @@ function isValidWaitingRequest(
   );
 }
 
+/** Which stage's attempts a state counts toward; `waiting` and the ends count toward none. */
+const attemptStage: Partial<Record<WorkItemState, string>> = {
+  build_ready: 'build',
+  building: 'build',
+  design_ready: 'design',
+  designing: 'design',
+  grooming: 'grooming',
+  grooming_ready: 'grooming',
+  merging: 'merge',
+  review_ready: 'review',
+  reviewing: 'review',
+  verify_ready: 'verify',
+  verifying: 'verify',
+};
+
 function nextAttempts(item: WorkItem, request: TransitionRequest): number {
+  if (
+    request.to !== 'waiting' &&
+    attemptStage[item.state] !== attemptStage[request.to]
+  ) {
+    return 0;
+  }
   const queue = queueForWorkingState[item.state];
   const runEnded =
     request.actor.role === 'backend' &&
@@ -761,6 +837,9 @@ function nextPriority(
 }
 
 function nextRounds(item: WorkItem, request: TransitionRequest): number {
+  if (item.state === 'waiting') {
+    return 0;
+  }
   if (
     request.to === 'build_ready' &&
     (item.state === 'reviewing' || item.state === 'merging')

@@ -21,6 +21,7 @@ const workingStates = new Set<WorkItemState>([
 
 const context: LifecycleContext = {
   stages: { design: true, grooming: true, verify: false },
+  maxRounds: 3,
   supportsSplitting: false,
 };
 
@@ -37,10 +38,17 @@ const pullRequest = {
   head: '0123456789abcdef0123456789abcdef01234567',
 };
 const delivered = { checks: 'passed', planRecorded: true } as const;
-const approved = { kind: 'review', verdict: 'approved', findings: [] };
+const revision = '89abcdef0123456789abcdef0123456789abcdef';
+const approved = {
+  kind: 'review',
+  verdict: 'approved',
+  revision,
+  findings: [],
+};
 const changesRequested = {
   kind: 'review',
   verdict: 'changes_requested',
+  revision,
   findings: [
     {
       severity: 'blocking',
@@ -96,7 +104,6 @@ describe('lifecycle transitions', () => {
     ['reviewing', 'merging', 'reviewer'],
     ['reviewing', 'build_ready', 'reviewer'],
     ['merging', 'done', 'backend'],
-    ['merging', 'build_ready', 'backend'],
     ['done', 'build_ready', 'navigator'],
     ['done', 'design_ready', 'navigator'],
   ] satisfies ReadonlyArray<readonly [WorkItemState, WorkItemState, string]>)(
@@ -868,5 +875,195 @@ describe('when the holding run ends', () => {
       ok: true,
       item: { attempts: 6, returnState: 'review_ready', state: 'waiting' },
     });
+  });
+});
+
+describe('review rounds and escalation (spec §4.5)', () => {
+  const reviewing = (rounds: number) =>
+    createWorkItem({
+      holderRunId: 'run-1',
+      rounds,
+      state: 'reviewing',
+    });
+  const requestChanges: TransitionRequest = {
+    actor: { role: 'reviewer', runId: 'run-1' },
+    record: changesRequested,
+    to: 'build_ready',
+  };
+
+  test('changes requested below max_rounds go back to the builder with one more round', () => {
+    expect(transition(reviewing(1), requestChanges, context)).toMatchObject({
+      ok: true,
+      item: { rounds: 2, state: 'build_ready', waitingKind: null },
+    });
+  });
+
+  test('changes requested that reach max_rounds wait for the navigator instead', () => {
+    const result = transition(reviewing(2), requestChanges, context);
+
+    expect(result).toMatchObject({
+      ok: true,
+      item: {
+        rounds: 3,
+        returnState: 'build_ready',
+        state: 'waiting',
+        waitingKind: 'escalation',
+        waitingReason: "Can't merge: too many rounds",
+      },
+      effects: [
+        { kind: 'history' },
+        { kind: 'record', record: changesRequested },
+        {
+          kind: 'record',
+          record: { kind: 'blocked', reason: 'too_many_rounds', count: 3 },
+        },
+      ],
+    });
+  });
+
+  test('rounds start again once the item leaves waiting', () => {
+    const waiting = createWorkItem({
+      rounds: 3,
+      returnState: 'build_ready',
+      state: 'waiting',
+      waitingKind: 'escalation',
+      waitingReason: "Can't merge: too many rounds",
+    });
+
+    expect(
+      transition(
+        waiting,
+        { actor: { role: 'navigator' }, to: 'build_ready' },
+        context,
+      ),
+    ).toMatchObject({ ok: true, item: { rounds: 0, state: 'build_ready' } });
+  });
+
+  test('an approval must name the revision it reviewed', () => {
+    expect(
+      transition(
+        reviewing(0),
+        {
+          actor: { role: 'reviewer', runId: 'run-1' },
+          record: { kind: 'review', verdict: 'approved', findings: [] },
+          to: 'merging',
+        },
+        context,
+      ),
+    ).toEqual({
+      ok: false,
+      reason: 'The review record has no valid revision.',
+    });
+  });
+
+  test('a review link must be a GitHub address', () => {
+    expect(
+      transition(
+        reviewing(0),
+        {
+          actor: { role: 'reviewer', runId: 'run-1' },
+          record: { ...approved, url: 'https://example.com/review' },
+          to: 'merging',
+        },
+        context,
+      ),
+    ).toEqual({ ok: false, reason: 'The review record has no valid url.' });
+    expect(
+      transition(
+        reviewing(0),
+        {
+          actor: { role: 'reviewer', runId: 'run-1' },
+          record: {
+            ...approved,
+            url: 'https://github.com/acme/website/pull/12#pullrequestreview-7',
+          },
+          to: 'merging',
+        },
+        context,
+      ),
+    ).toMatchObject({ ok: true });
+  });
+});
+
+describe('attempts per stage (spec §4.5)', () => {
+  test('attempts start again when the item moves to a different stage', () => {
+    const building = createWorkItem({
+      attempts: 2,
+      build: delivered,
+      holderRunId: 'run-1',
+      state: 'building',
+    });
+
+    expect(
+      transition(
+        building,
+        {
+          actor: { role: 'builder', runId: 'run-1' },
+          record: pullRequest,
+          to: 'review_ready',
+        },
+        context,
+      ),
+    ).toMatchObject({ ok: true, item: { attempts: 0 } });
+  });
+
+  test('a claim in the same stage keeps the attempts', () => {
+    expect(
+      transition(
+        createWorkItem({ attempts: 2, state: 'build_ready' }),
+        { actor: { role: 'backend', runId: 'run-2' }, to: 'building' },
+        context,
+      ),
+    ).toMatchObject({ ok: true, item: { attempts: 2 } });
+  });
+
+  test('an answered escalation starts the attempts again', () => {
+    expect(
+      transition(
+        createWorkItem({
+          attempts: 3,
+          returnState: 'build_ready',
+          state: 'waiting',
+          waitingKind: 'escalation',
+          waitingReason: 'Stopped: too many attempts',
+        }),
+        { actor: { role: 'navigator' }, to: 'build_ready' },
+        context,
+      ),
+    ).toMatchObject({ ok: true, item: { attempts: 0 } });
+  });
+});
+
+describe('a merge the backend cannot make (spec §4.4)', () => {
+  test('the backend escalates a merging item and returns it to merging', () => {
+    expect(
+      transition(
+        createWorkItem({ state: 'merging' }),
+        {
+          actor: { role: 'backend' },
+          reason: 'A required check failed.',
+          to: 'waiting',
+          waiting: {
+            kind: 'escalation',
+            reason: "Can't merge: a required check failed",
+            returnState: 'merging',
+          },
+        },
+        context,
+      ),
+    ).toMatchObject({
+      ok: true,
+      item: { returnState: 'merging', state: 'waiting' },
+    });
+  });
+
+  test('the backend can no longer send a merging item straight back to the builder', () => {
+    expect(
+      transition(
+        createWorkItem({ state: 'merging' }),
+        { actor: { role: 'backend' }, to: 'build_ready' },
+        context,
+      ),
+    ).toMatchObject({ ok: false });
   });
 });
