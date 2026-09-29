@@ -4,7 +4,9 @@ import {
   runnerProtocol,
   RunnerProtocolError,
   type AgentEvent,
+  maxFetchPaths,
   type DownMessage,
+  type UpMessage,
 } from '@cerebra/shared';
 import { describe, expect, test } from 'vitest';
 
@@ -81,6 +83,7 @@ describe('down messages', () => {
     { type: 'answer', questionId: 'q1', answers: { 'Which one?': 'B' } },
     { type: 'interrupt' },
     { type: 'stop' },
+    { type: 'fetch_files', requestId: 'r1', paths: ['mockups/a.html'] },
   ];
 
   test.each(messages)('parses $type', (message) => {
@@ -95,8 +98,27 @@ describe('down messages', () => {
 
   test('refuses an unknown message type', () => {
     expect(() =>
-      parseDownMessage(JSON.stringify({ type: 'fetch_files' })),
-    ).toThrow(new RunnerProtocolError('Unknown message type: fetch_files'));
+      parseDownMessage(JSON.stringify({ type: 'push_files' })),
+    ).toThrow(new RunnerProtocolError('Unknown message type: push_files'));
+  });
+
+  test('refuses fetch_files asking for no paths or too many', () => {
+    const ask = (paths: string[]) =>
+      parseDownMessage(
+        JSON.stringify({ type: 'fetch_files', requestId: 'r1', paths }),
+      );
+    expect(() => ask([])).toThrow(
+      new RunnerProtocolError(
+        `fetch_files.paths must name between 1 and ${maxFetchPaths} files`,
+      ),
+    );
+    expect(() =>
+      ask(Array.from({ length: maxFetchPaths + 1 }, (_, i) => `f${i}`)),
+    ).toThrow(
+      new RunnerProtocolError(
+        `fetch_files.paths must name between 1 and ${maxFetchPaths} files`,
+      ),
+    );
   });
 
   test('refuses a message missing a field', () => {
@@ -145,9 +167,50 @@ describe('up messages', () => {
   });
 
   test('refuses an unknown message type', () => {
-    expect(() => parseUpMessage(JSON.stringify({ type: 'files' }))).toThrow(
-      new RunnerProtocolError('Unknown message type: files'),
+    expect(() => parseUpMessage(JSON.stringify({ type: 'blobs' }))).toThrow(
+      new RunnerProtocolError('Unknown message type: blobs'),
     );
+  });
+
+  const answers: UpMessage[] = [
+    {
+      type: 'files',
+      requestId: 'r1',
+      files: [
+        {
+          path: 'mockups/a.html',
+          contentType: 'text/html',
+          content: Buffer.from('<p>a</p>').toString('base64'),
+        },
+      ],
+    },
+    {
+      type: 'files',
+      requestId: 'r1',
+      error: 'The path ../etc/passwd is outside the checkout.',
+    },
+  ];
+
+  test.each(answers)('parses files answering $requestId', (message) => {
+    expect(parseUpMessage(JSON.stringify(message))).toEqual(message);
+  });
+
+  test('refuses files that carry neither files nor an error', () => {
+    expect(() =>
+      parseUpMessage(JSON.stringify({ type: 'files', requestId: 'r1' })),
+    ).toThrow(new RunnerProtocolError('files.files must be a list'));
+  });
+
+  test('refuses file content that is not base64', () => {
+    expect(() =>
+      parseUpMessage(
+        JSON.stringify({
+          type: 'files',
+          requestId: 'r1',
+          files: [{ path: 'a', contentType: 'text/plain', content: '%%%' }],
+        }),
+      ),
+    ).toThrow(new RunnerProtocolError('files.files.0.content must be base64'));
   });
 });
 

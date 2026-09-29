@@ -5,6 +5,7 @@ import {
 import { createAuthService } from './auth.js';
 import { createBoard } from './board.js';
 import { createBoardTools, resolveCaller } from './board-tools.js';
+import { createRunCheckouts, projectGitAccess } from './checkouts.js';
 import { createEnvelopeCipher } from './credential-cipher.js';
 import { createCredentialService } from './credentials.js';
 import { createDatabase } from './database.js';
@@ -45,9 +46,15 @@ try {
         });
   // Agents run only when the engine's socket is mounted and credentials can be resolved.
   const supervisor =
-    podmanSocket === undefined || credentials === undefined
+    podmanSocket === undefined ||
+    projectTokenKey === undefined ||
+    credentials === undefined
       ? undefined
       : createSupervisor({
+          checkouts: createRunCheckouts({
+            dataDirectory,
+            project: projectGitAccess(database, projectTokenKey),
+          }),
           credentials,
           database,
           engine: createPodmanEngine({

@@ -1,8 +1,10 @@
 import {
+  maxFetchBytes,
   parseDownMessage,
   runnerProtocol,
   type AgentEvent,
   type DownMessage,
+  type FilesMessage,
   type ResultEnd,
   type StartMessage,
 } from '@cerebra/shared';
@@ -13,6 +15,7 @@ import {
   type ClaudeQuery,
   type ClaudeRun,
 } from './claude-adapter.js';
+import { readCheckoutFiles } from './files.js';
 import { installProjectSkills } from './skills.js';
 
 function reason(error: unknown): string {
@@ -50,6 +53,22 @@ export function runRunnerSession(context: {
       if (socket.readyState === WebSocket.OPEN) {
         seq += 1;
         socket.send(JSON.stringify({ type: 'event', seq, event }));
+      }
+    }
+
+    /** Answers the backend's request for files; nothing about the run changes. */
+    async function answerFiles(requestId: string, paths: readonly string[]) {
+      const answer = await readCheckoutFiles(
+        context.checkout,
+        paths,
+        maxFetchBytes,
+      );
+      const message: FilesMessage =
+        'error' in answer
+          ? { type: 'files', requestId, error: answer.error }
+          : { type: 'files', requestId, files: answer.files };
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify(message));
       }
     }
 
@@ -148,6 +167,8 @@ export function runRunnerSession(context: {
         }
         started = true;
         void begin(message);
+      } else if (message.type === 'fetch_files') {
+        void answerFiles(message.requestId, message.paths);
       } else if (run === undefined) {
         early.push(message);
       } else {
