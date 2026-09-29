@@ -224,14 +224,19 @@ export function planDispatch(snapshot: PlanSnapshot): DispatchPlan {
       const pending = reasons.get(item.id) as PendingReason;
       const project = projectOf.get(item.projectId) as PlanProject;
       let reason: WaitingReason;
-      if (pending.kind === 'project_limit') {
+      const projectRunning =
+        project.running + (admittedIn.get(project.id) ?? 0);
+      // Slots proposals held until the instance ceiling refused them were never really used.
+      const projectFull = projectRunning >= project.limit;
+      if (pending.kind === 'project_limit' && projectFull) {
         reason = {
           kind: 'project_limit',
           limit: project.limit,
-          running: project.running + (admittedIn.get(project.id) ?? 0),
+          running: projectRunning,
         };
       } else if (
         pending.kind === 'instance_limit' ||
+        pending.kind === 'project_limit' ||
         (pending.kind === 'no_free_agent' && instanceFull)
       ) {
         reason = {

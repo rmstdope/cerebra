@@ -16,7 +16,7 @@ import {
 } from './dispatch-plan.js';
 import { createRunToken } from './runner-gateway.js';
 import { isUuid } from './runs.js';
-import { runRoleOf } from './supervisor.js';
+import { isUniqueViolation, runRoleOf } from './supervisor.js';
 
 /** A run the dispatcher has claimed an item for, ready for the supervisor to start. */
 export interface DispatchedRun {
@@ -42,6 +42,8 @@ export interface DispatcherOptions {
   /** Starts a claimed run's container; a failure it cannot start ends the run itself. */
   readonly launch: (run: DispatchedRun) => Promise<void>;
   readonly log?: (message: string) => void;
+  /** How long an agent whose last run failed is left alone, so a fault that repeats cannot loop. */
+  readonly failureCooloffMs?: number;
 }
 
 export interface Dispatcher {
@@ -108,6 +110,7 @@ export function createDispatcher({
   credentials,
   launch,
   log = () => {},
+  failureCooloffMs = 5 * 60_000,
 }: DispatcherOptions): Dispatcher {
   const lastRefusal = new Map<string, string>();
   let pass: Promise<void> | null = null;
@@ -143,6 +146,24 @@ export function createDispatcher({
       .orderBy('created_sequence')
       .execute();
     const busy = new Set(liveRuns.map((run) => run.agent_id));
+    const latestRuns = await database
+      .selectFrom('runs')
+      .select(['agent_id', 'status', 'ended_at'])
+      .where('agent_id', 'is not', null)
+      .distinctOn('agent_id')
+      .orderBy('agent_id')
+      .orderBy('created_at', 'desc')
+      .execute();
+    const cooling = new Set(
+      latestRuns
+        .filter(
+          (run) =>
+            run.status === 'failed' &&
+            run.ended_at !== null &&
+            run.ended_at.getTime() > Date.now() - failureCooloffMs,
+        )
+        .map((run) => run.agent_id),
+    );
 
     const planTypes: PlanSnapshot['types'][number][] = [];
     const queueStates = new Set<string>();
@@ -197,7 +218,7 @@ export function createDispatcher({
 
     return {
       agents: agents.map((agent) => ({
-        free: agent.enabled && !busy.has(agent.id),
+        free: agent.enabled && !busy.has(agent.id) && !cooling.has(agent.id),
         id: agent.id,
         projectId: agent.project_id,
         typeId: `${agent.project_id}:${agent.agent_type_id}`,
@@ -341,13 +362,20 @@ export function createDispatcher({
       lastRefusal.delete(pairing.itemId);
       return started;
     } catch (error) {
-      if (!(error instanceof PairingRefused)) throw error;
+      // A navigator's start can take the agent between the check and the insert.
+      const refusal =
+        error instanceof PairingRefused
+          ? error.message
+          : isUniqueViolation(error)
+            ? 'the agent is no longer free'
+            : null;
+      if (refusal === null) throw error;
       await logDecision({
         agentId: pairing.agentId,
         decision: 'refused',
         itemId: pairing.itemId,
         projectId: pairing.projectId,
-        reason: error.message,
+        reason: refusal,
       });
       return null;
     }

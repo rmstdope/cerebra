@@ -1082,6 +1082,70 @@ describe('runs the dispatcher starts', { concurrent: false }, () => {
     });
   });
 
+  test('an agent whose run failed to start is not started again at once, so a repeating fault cannot loop', async () => {
+    await withSupervisor(async (harness) => {
+      harness.engine.failNext(
+        'start',
+        new EngineError('start', 'No such image.'),
+      );
+      const itemId = await dispatchOne(harness);
+
+      await createDispatcher({
+        credentials: { problemsFor: async () => [] },
+        database: harness.database,
+        launch: (run) => harness.supervisor.launchDispatched(run),
+      }).dispatch();
+
+      const runs = await harness.database
+        .selectFrom('runs')
+        .select('id')
+        .where('agent_id', '=', await harness.agent('Cyclops'))
+        .execute();
+      // Another free producer may take the item; the one that just failed is left alone.
+      expect(runs).toHaveLength(1);
+      const item = await harness.database
+        .selectFrom('work_items')
+        .select('holder_run_id')
+        .where('id', '=', itemId)
+        .executeTakeFirstOrThrow();
+      expect(item.holder_run_id).not.toBe(runs[0]?.id);
+    });
+  });
+
+  test('a dispatched run that fails before its container is asked for still ends and gives its item back', async () => {
+    await withSupervisor(async (harness) => {
+      const itemId = crypto.randomUUID();
+      await createBoard(harness.database).createWorkItem({
+        description: '',
+        id: itemId,
+        priority: 'P1',
+        projectId: harness.projectId,
+        state: 'build_ready',
+        title: 'Fix export timeout',
+      });
+      const failures: string[] = [];
+      await createDispatcher({
+        credentials: { problemsFor: async () => [] },
+        database: harness.database,
+        // As if the agent were removed between the claim and the launch.
+        launch: (run) =>
+          harness.supervisor.launchDispatched({
+            ...run,
+            agentId: crypto.randomUUID(),
+          }),
+        log: (message) => failures.push(message),
+      }).dispatch();
+
+      expect(await harness.runs.live()).toEqual([]);
+      const item = await harness.database
+        .selectFrom('work_items')
+        .select(['state', 'holder_run_id'])
+        .where('id', '=', itemId)
+        .executeTakeFirstOrThrow();
+      expect(item).toEqual({ holder_run_id: null, state: 'build_ready' });
+    });
+  });
+
   test('every run that ends is reported, so waiting work can start', async () => {
     const ended: string[] = [];
     await withSupervisor(

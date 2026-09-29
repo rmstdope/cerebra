@@ -222,7 +222,7 @@ function failureText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function isUniqueViolation(error: unknown): boolean {
+export function isUniqueViolation(error: unknown): boolean {
   return (
     typeof error === 'object' &&
     error !== null &&
@@ -684,10 +684,29 @@ export function createSupervisor({
     },
 
     async launchDispatched({ agentId, firstMessage, runId, token }) {
-      const agent = await agentToStart(agentId);
-      const run = await runs.get(runId);
-      if (run === null) throw new RunNotFoundError(runId);
-      if (run.endedAt !== null) throw new RunEndedError();
+      let prepared: {
+        agent: Awaited<ReturnType<typeof agentToStart>>;
+        run: NonNullable<Awaited<ReturnType<typeof runs.get>>>;
+      };
+      try {
+        const agent = await agentToStart(agentId);
+        const run = await runs.get(runId);
+        if (run === null) throw new RunNotFoundError(runId);
+        if (run.endedAt !== null) throw new RunEndedError();
+        prepared = { agent, run };
+      } catch (error) {
+        // The run is already inserted and holds its item; it must not stay live.
+        const failure = failureText(error);
+        log(`Run ${runId} could not start: ${failure}`);
+        await end(runId, {
+          failure,
+          reason: `The run failed to start: ${failure}`,
+          startFailed: true,
+          state: 'failed',
+        });
+        throw error;
+      }
+      const { agent, run } = prepared;
       await begin(run, agentId, agent, token, {
         firstMessage,
         interactive: agent.interactive,

@@ -278,6 +278,34 @@ describe('planning a dispatch', () => {
     ]);
   });
 
+  test('blames the Cerebra-wide limit when it, not the project, held the work back', () => {
+    const plan = planDispatch(
+      snapshot({
+        agents: [
+          agent('a1', 'a-producer', 'a'),
+          agent('a2', 'a-producer', 'a'),
+          agent('a3', 'a-producer', 'a'),
+        ],
+        instanceLimit: 1,
+        instanceRunning: 1,
+        items: [
+          item('first', 'a', { claimableSince: at(1) }),
+          item('second', 'a', { claimableSince: at(2) }),
+          item('third', 'a', { claimableSince: at(3) }),
+        ],
+        projects: [project('a', { limit: 2, running: 0 })],
+        types: [producer('a')],
+      }),
+    );
+
+    expect(plan.pairings).toEqual([]);
+    expect(plan.waiting.map(({ reason }) => reason)).toEqual([
+      { kind: 'instance_limit', limit: 1, running: 1 },
+      { kind: 'instance_limit', limit: 1, running: 1 },
+      { kind: 'instance_limit', limit: 1, running: 1 },
+    ]);
+  });
+
   test('says no role is free when a project has none of that type', () => {
     const plan = planDispatch(
       snapshot({
