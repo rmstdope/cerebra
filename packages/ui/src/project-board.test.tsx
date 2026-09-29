@@ -398,6 +398,60 @@ test('offers the four types as one keyboard group announced as Type', async () =
   expect(document.activeElement).toBe(screen.getByLabelText(/Optional/));
 });
 
+test("shows each row's key and type tag after the priority and before the title", async () => {
+  const bug: WorkItem = {
+    ...workItem,
+    id: 'item-12',
+    key: 'WEB-12',
+    priority: 'P1',
+    state: 'building',
+    title: 'Login fails after password change',
+    type: 'bug',
+  };
+  const chore: WorkItem = {
+    ...workItem,
+    id: 'item-41',
+    key: 'WEB-41',
+    title: 'Tidy the settings module',
+    type: 'refactoring',
+  };
+  renderBoard(createClient({ list: async () => page([bug, chore]) }));
+
+  const bugRow = await screen.findByRole('button', { name: /Login fails/ });
+  const bugText = bugRow.textContent ?? '';
+  expect(bugText.indexOf('P1')).toBeLessThan(bugText.indexOf('WEB-12'));
+  expect(bugText.indexOf('WEB-12')).toBeLessThan(bugText.indexOf('Bug'));
+  expect(bugText.indexOf('Bug')).toBeLessThan(bugText.indexOf('Login fails'));
+  expect(within(bugRow).getByText('WEB-12')).toBeTruthy();
+  expect(within(bugRow).getByText('Bug')).toBeTruthy();
+
+  const choreRow = screen.getByRole('button', { name: /Tidy the settings/ });
+  const choreText = choreRow.textContent ?? '';
+  expect(choreText.startsWith('—WEB-41Refactoring')).toBe(true);
+});
+
+test('tags every row with its type, features included', async () => {
+  renderBoard(createClient());
+
+  const row = await screen.findByRole('button', { name: /Show the board/ });
+  expect(within(row).getByText('WEB-1')).toBeTruthy();
+  expect(within(row).getByText('Feature')).toBeTruthy();
+});
+
+test("shows the key and type above the item's title", async () => {
+  renderBoard(
+    createClient({
+      item: async () => ({ ...workItem, key: 'WEB-12', type: 'bug' }),
+      list: async () =>
+        page([{ ...workItem, key: 'WEB-12', type: 'bug' }]),
+    }),
+  );
+
+  await openItem();
+  const panel = screen.getByRole('region', { name: 'Selected work item' });
+  expect(await within(panel).findByText('WEB-12 · Bug')).toBeTruthy();
+});
+
 test('triages the selected item in place', async () => {
   const user = userEvent.setup();
   const calls: unknown[] = [];

@@ -936,7 +936,7 @@ export function ProjectBoard({
                         aria-describedby={
                           describedBy === '' ? undefined : describedBy
                         }
-                        className="flex min-w-0 flex-1 items-center gap-3 rounded-lg p-2 text-left outline-none focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-[var(--focus)]"
+                        className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1 rounded-lg p-2 text-left outline-none focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-[var(--focus)] sm:flex-nowrap"
                         onClick={() => openItem(item.id)}
                         ref={(element) => {
                           if (element === null) rows.current.delete(item.id);
@@ -947,7 +947,11 @@ export function ProjectBoard({
                         <span className="rounded bg-amber-100 px-2 py-1 text-xs font-bold text-amber-950 dark:bg-amber-900 dark:text-amber-50">
                           {item.priority ?? '—'}
                         </span>
-                        <strong className="min-w-0 flex-1 break-words">
+                        <span className="shrink-0 font-mono text-xs whitespace-nowrap text-[var(--muted)]">
+                          {item.key}
+                        </span>
+                        <TypeTag type={item.type} />
+                        <strong className="order-last min-w-0 basis-full break-words sm:order-none sm:flex-1 sm:basis-auto">
                           {item.title}
                         </strong>
                         <span className="rounded-full bg-[var(--accent-muted)] px-2 py-1 text-xs font-bold">
@@ -1103,6 +1107,16 @@ export function ProjectBoard({
         </div>
       </div>
     </section>
+  );
+}
+
+function TypeTag({ type }: { readonly type: WorkItemType }): ReactNode {
+  return (
+    <span
+      className={`shrink-0 rounded border px-1.5 py-0.5 text-xs whitespace-nowrap ${type === 'bug' ? 'border-[var(--danger)] text-[var(--danger)]' : 'border-[var(--control-border)] text-[var(--muted)]'}`}
+    >
+      {typeLabel(type)}
+    </span>
   );
 }
 
@@ -1299,7 +1313,10 @@ function ItemDetail({
           </span>
         ) : null}
       </p>
-      <h2 className="mt-2 text-xl font-bold break-words">{item.title}</h2>
+      <p className="mt-2 font-mono text-sm text-[var(--muted)]">
+        {item.key} · {typeLabel(item.type)}
+      </p>
+      <h2 className="mt-1 text-xl font-bold break-words">{item.title}</h2>
       {itemRead.error ? (
         <ReadFailure onRetry={onRetryItem} surface="work item" />
       ) : null}
