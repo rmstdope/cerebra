@@ -80,12 +80,41 @@ export type LifecycleEffect =
       readonly record: Readonly<Record<string, unknown>>;
     };
 
+/** What an agent transition must carry before the engine accepts it (spec §4.4, §4.11). */
+export type RequiredEvidence =
+  | 'design'
+  | 'outcome'
+  | 'pull_request'
+  | 'reason'
+  | 'review_approved'
+  | 'review_changes';
+
 interface TransitionRule {
   readonly from: WorkItemState;
   readonly holderMustMatch: boolean;
+  readonly requires?: RequiredEvidence;
   readonly role: LifecycleRole;
   readonly to: WorkItemState;
 }
+
+/** The `##` headings of each Markdown record, spelled exactly (spec §4.11). */
+export const recordHeadings = {
+  outcome: [
+    'Problem',
+    'Who benefits',
+    'Outcome',
+    'Out of scope',
+    'How we will know',
+    'Route',
+  ],
+  design: [
+    'The agreed experience',
+    'The states',
+    'The words, exactly',
+    'What was considered and rejected',
+    'The mockup',
+  ],
+} as const;
 
 export const transitionTable: readonly TransitionRule[] = [
   {
@@ -114,15 +143,23 @@ export const transitionTable: readonly TransitionRule[] = [
     to: 'design_ready',
     role: 'groomer',
     holderMustMatch: true,
+    requires: 'outcome',
   },
   {
     from: 'grooming',
     to: 'build_ready',
     role: 'groomer',
     holderMustMatch: true,
+    requires: 'outcome',
   },
   { from: 'grooming', to: 'split', role: 'groomer', holderMustMatch: true },
-  { from: 'grooming', to: 'cancelled', role: 'groomer', holderMustMatch: true },
+  {
+    from: 'grooming',
+    to: 'cancelled',
+    role: 'groomer',
+    holderMustMatch: true,
+    requires: 'reason',
+  },
   {
     from: 'design_ready',
     to: 'designing',
@@ -134,6 +171,7 @@ export const transitionTable: readonly TransitionRule[] = [
     to: 'build_ready',
     role: 'designer',
     holderMustMatch: true,
+    requires: 'design',
   },
   {
     from: 'build_ready',
@@ -146,12 +184,14 @@ export const transitionTable: readonly TransitionRule[] = [
     to: 'review_ready',
     role: 'builder',
     holderMustMatch: true,
+    requires: 'pull_request',
   },
   {
     from: 'building',
     to: 'design_ready',
     role: 'builder',
     holderMustMatch: true,
+    requires: 'reason',
   },
   {
     from: 'review_ready',
@@ -159,12 +199,19 @@ export const transitionTable: readonly TransitionRule[] = [
     role: 'backend',
     holderMustMatch: false,
   },
-  { from: 'reviewing', to: 'merging', role: 'reviewer', holderMustMatch: true },
+  {
+    from: 'reviewing',
+    to: 'merging',
+    role: 'reviewer',
+    holderMustMatch: true,
+    requires: 'review_approved',
+  },
   {
     from: 'reviewing',
     to: 'build_ready',
     role: 'reviewer',
     holderMustMatch: true,
+    requires: 'review_changes',
   },
   {
     from: 'merging',
@@ -274,6 +321,13 @@ export function transition(
 
   if (rule.holderMustMatch && item.holderRunId !== request.actor.runId) {
     return refusal('The actor does not hold this work item.');
+  }
+
+  if (rule.requires !== undefined) {
+    const missing = missingEvidence(rule, request);
+    if (missing !== undefined) {
+      return refusal(missing);
+    }
   }
 
   if (
@@ -446,6 +500,135 @@ function refusalForMissingRule(
 
   return refusal(
     `${request.actor.role} cannot move a work item from ${item.state} to ${request.to}.`,
+  );
+}
+
+const evidenceNames: Record<RequiredEvidence, string> = {
+  design: 'a design record',
+  outcome: 'an outcome record',
+  pull_request: 'a pull_request record',
+  reason: 'a reason',
+  review_approved: 'a review record',
+  review_changes: 'a review record',
+};
+
+function missingEvidence(
+  rule: TransitionRule & { readonly requires: RequiredEvidence },
+  request: TransitionRequest,
+): string | undefined {
+  const needs = `Moving a work item from ${rule.from} to ${rule.to} needs`;
+  if (rule.requires === 'reason') {
+    return (request.reason ?? '').trim() === ''
+      ? `${needs} a reason.`
+      : undefined;
+  }
+  const record = request.record;
+  const kind = rule.requires.startsWith('review') ? 'review' : rule.requires;
+  if (record?.kind !== kind) {
+    return `${needs} ${evidenceNames[rule.requires]}.`;
+  }
+  switch (rule.requires) {
+    case 'outcome':
+    case 'design':
+      return markdownProblem(rule.requires, record.markdown);
+    case 'pull_request':
+      return pullRequestProblem(record);
+    case 'review_approved':
+    case 'review_changes':
+      return reviewProblem(rule.requires, record, needs);
+  }
+}
+
+function markdownProblem(
+  kind: keyof typeof recordHeadings,
+  markdown: unknown,
+): string | undefined {
+  const text = typeof markdown === 'string' ? markdown : '';
+  const lines = text.split(/\r?\n/);
+  const headingLines = lines
+    .map((line, index) => ({ index, match: /^##\s+(.*?)\s*$/.exec(line) }))
+    .filter((entry) => entry.match !== null)
+    .map((entry) => ({ index: entry.index, title: entry.match?.[1] ?? '' }));
+  for (const heading of recordHeadings[kind]) {
+    const found = headingLines.filter((entry) => entry.title === heading);
+    if (found.length === 0) {
+      return `The ${kind} record is missing its "## ${heading}" section.`;
+    }
+    if (found.length > 1) {
+      return `The ${kind} record has more than one "## ${heading}" section.`;
+    }
+    const start = found[0]?.index ?? 0;
+    const next = headingLines.find((entry) => entry.index > start);
+    const body = lines.slice(start + 1, next?.index ?? lines.length).join('');
+    if (body.trim() === '') {
+      return `The ${kind} record's "## ${heading}" section is empty; write None. and why if it does not apply.`;
+    }
+  }
+  return undefined;
+}
+
+function pullRequestProblem(
+  record: Readonly<Record<string, unknown>>,
+): string | undefined {
+  const invalid = (field: string) =>
+    `The pull_request record has no valid ${field}.`;
+  if (
+    typeof record.url !== 'string' ||
+    !/^https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+$/.test(record.url)
+  ) {
+    return invalid('url');
+  }
+  if (typeof record.branch !== 'string' || record.branch.trim() === '') {
+    return invalid('branch');
+  }
+  if (
+    typeof record.head !== 'string' ||
+    !/^[0-9a-f]{7,64}$/i.test(record.head)
+  ) {
+    return invalid('head');
+  }
+  return undefined;
+}
+
+function reviewProblem(
+  requires: 'review_approved' | 'review_changes',
+  record: Readonly<Record<string, unknown>>,
+  needs: string,
+): string | undefined {
+  const verdict =
+    requires === 'review_approved' ? 'approved' : 'changes_requested';
+  if (record.verdict !== verdict) {
+    return `${needs} a review verdict of ${verdict}.`;
+  }
+  const findings = record.findings;
+  if (!Array.isArray(findings) || !findings.every(isFinding)) {
+    return 'Every review finding needs a severity (blocking or advisory), a file and a problem.';
+  }
+  const blocking = findings.some((finding) => finding.severity === 'blocking');
+  if (verdict === 'approved' && blocking) {
+    return 'An approved review cannot carry a blocking finding.';
+  }
+  if (verdict === 'changes_requested' && !blocking) {
+    return 'Requesting changes needs at least one blocking finding.';
+  }
+  return undefined;
+}
+
+function isFinding(
+  value: unknown,
+): value is { readonly severity: 'advisory' | 'blocking' } {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const finding = value as Record<string, unknown>;
+  return (
+    (finding.severity === 'blocking' || finding.severity === 'advisory') &&
+    typeof finding.file === 'string' &&
+    finding.file.trim() !== '' &&
+    typeof finding.problem === 'string' &&
+    finding.problem.trim() !== '' &&
+    (finding.line === undefined ||
+      (Number.isInteger(finding.line) && (finding.line as number) > 0))
   );
 }
 

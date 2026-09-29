@@ -2,9 +2,11 @@ import { describe, expect, test } from 'vitest';
 
 import {
   createWorkItem,
+  recordHeadings,
   runEndedRequest,
   transition,
   type LifecycleContext,
+  type TransitionRequest,
   type WorkItemState,
 } from './lifecycle.js';
 
@@ -20,6 +22,58 @@ const context: LifecycleContext = {
   stages: { design: true, grooming: true, verify: false },
   supportsSplitting: false,
 };
+
+function markdown(headings: readonly string[]): string {
+  return headings.map((heading) => `## ${heading}\n\nNone.\n`).join('\n');
+}
+
+const outcome = { kind: 'outcome', markdown: markdown(recordHeadings.outcome) };
+const design = { kind: 'design', markdown: markdown(recordHeadings.design) };
+const pullRequest = {
+  kind: 'pull_request',
+  url: 'https://github.com/acme/website/pull/12',
+  branch: 'web-12-export',
+  head: '0123456789abcdef0123456789abcdef01234567',
+};
+const approved = { kind: 'review', verdict: 'approved', findings: [] };
+const changesRequested = {
+  kind: 'review',
+  verdict: 'changes_requested',
+  findings: [
+    {
+      severity: 'blocking',
+      file: 'src/export.ts',
+      line: 4,
+      problem: 'The header row is missing.',
+    },
+  ],
+};
+
+/** What each agent transition must carry (spec §4.4, §4.11); other rules take a generic record. */
+function evidenceFor(
+  from: WorkItemState,
+  to: WorkItemState,
+): Pick<TransitionRequest, 'reason' | 'record'> {
+  const key = `${from}->${to}`;
+  switch (key) {
+    case 'grooming->design_ready':
+    case 'grooming->build_ready':
+      return { record: outcome };
+    case 'designing->build_ready':
+      return { record: design };
+    case 'building->review_ready':
+      return { record: pullRequest };
+    case 'reviewing->merging':
+      return { record: approved };
+    case 'reviewing->build_ready':
+      return { record: changesRequested };
+    case 'grooming->cancelled':
+    case 'building->design_ready':
+      return { reason: 'The navigator decided otherwise.' };
+    default:
+      return { record: { kind: 'test' } };
+  }
+}
 
 describe('lifecycle transitions', () => {
   test.each([
@@ -61,7 +115,7 @@ describe('lifecycle transitions', () => {
           },
           priority: from === 'new' ? 'P1' : undefined,
           to,
-          record: { kind: 'test' },
+          ...evidenceFor(from, to),
         },
         context,
       );
@@ -131,7 +185,7 @@ describe('lifecycle transitions', () => {
       {
         actor: { role: 'builder', runId: 'run-1' },
         to: 'design_ready',
-        record: { kind: 'experience_problem' },
+        reason: 'The agreed experience cannot be built as written.',
       },
       context,
     );
@@ -436,6 +490,225 @@ describe('lifecycle transitions', () => {
     ).toEqual({
       ok: false,
       reason: 'Verification is unavailable in the MVP.',
+    });
+  });
+});
+
+describe('the record an agent transition requires', () => {
+  function held(state: WorkItemState) {
+    return createWorkItem({ holderRunId: 'run-1', priority: 'P1', state });
+  }
+  function by(role: string, to: WorkItemState, extra: object = {}) {
+    return { actor: { role, runId: 'run-1' }, to, ...extra };
+  }
+
+  test.each([
+    ['grooming', 'design_ready', 'groomer', 'an outcome record'],
+    ['grooming', 'build_ready', 'groomer', 'an outcome record'],
+    ['designing', 'build_ready', 'designer', 'a design record'],
+    ['building', 'review_ready', 'builder', 'a pull_request record'],
+    ['reviewing', 'merging', 'reviewer', 'a review record'],
+    ['reviewing', 'build_ready', 'reviewer', 'a review record'],
+  ] satisfies ReadonlyArray<
+    readonly [WorkItemState, WorkItemState, string, string]
+  >)('refuses %s -> %s by a %s without %s', (from, to, role, needed) => {
+    for (const record of [undefined, { kind: 'test' }]) {
+      expect(
+        transition(
+          held(from),
+          by(role, to, record === undefined ? {} : { record }),
+          context,
+        ),
+      ).toEqual({
+        ok: false,
+        reason: `Moving a work item from ${from} to ${to} needs ${needed}.`,
+      });
+    }
+  });
+
+  test.each([
+    ['grooming', 'cancelled', 'groomer'],
+    ['building', 'design_ready', 'builder'],
+  ] satisfies ReadonlyArray<readonly [WorkItemState, WorkItemState, string]>)(
+    'refuses %s -> %s by a %s without a reason',
+    (from, to, role) => {
+      for (const reason of [undefined, '   ']) {
+        expect(
+          transition(
+            held(from),
+            by(role, to, reason === undefined ? {} : { reason }),
+            context,
+          ),
+        ).toEqual({
+          ok: false,
+          reason: `Moving a work item from ${from} to ${to} needs a reason.`,
+        });
+      }
+    },
+  );
+
+  test('names a missing heading of an outcome record', () => {
+    const withoutRoute = markdown(
+      recordHeadings.outcome.filter((heading) => heading !== 'Route'),
+    );
+
+    expect(
+      transition(
+        held('grooming'),
+        by('groomer', 'design_ready', {
+          record: { kind: 'outcome', markdown: withoutRoute },
+        }),
+        context,
+      ),
+    ).toEqual({
+      ok: false,
+      reason: 'The outcome record is missing its "## Route" section.',
+    });
+  });
+
+  test('refuses a heading left empty or written twice', () => {
+    const empty = outcome.markdown.replace(
+      '## Problem\n\nNone.\n',
+      '## Problem\n\n',
+    );
+    const twice = `${outcome.markdown}\n## Problem\n\nAgain.\n`;
+
+    expect(
+      transition(
+        held('grooming'),
+        by('groomer', 'build_ready', {
+          record: { kind: 'outcome', markdown: empty },
+        }),
+        context,
+      ),
+    ).toEqual({
+      ok: false,
+      reason:
+        'The outcome record\'s "## Problem" section is empty; write None. and why if it does not apply.',
+    });
+    expect(
+      transition(
+        held('grooming'),
+        by('groomer', 'build_ready', {
+          record: { kind: 'outcome', markdown: twice },
+        }),
+        context,
+      ),
+    ).toEqual({
+      ok: false,
+      reason: 'The outcome record has more than one "## Problem" section.',
+    });
+  });
+
+  test('names a missing heading of a design record', () => {
+    expect(
+      transition(
+        held('designing'),
+        by('designer', 'build_ready', {
+          record: { kind: 'design', markdown: markdown(['The states']) },
+        }),
+        context,
+      ),
+    ).toEqual({
+      ok: false,
+      reason:
+        'The design record is missing its "## The agreed experience" section.',
+    });
+  });
+
+  test.each([
+    [{ url: 'http://github.com/acme/website/pull/12' }, 'url'],
+    [{ url: 'https://example.com/acme/website/pull/12' }, 'url'],
+    [{ branch: ' ' }, 'branch'],
+    [{ head: 'main' }, 'head'],
+  ])('refuses a pull request record with a bad %o', (change, field) => {
+    expect(
+      transition(
+        held('building'),
+        by('builder', 'review_ready', {
+          record: { ...pullRequest, ...change },
+        }),
+        context,
+      ),
+    ).toEqual({
+      ok: false,
+      reason: `The pull_request record has no valid ${field}.`,
+    });
+  });
+
+  test('refuses an approval that carries a blocking finding', () => {
+    expect(
+      transition(
+        held('reviewing'),
+        by('reviewer', 'merging', {
+          record: { ...changesRequested, verdict: 'approved' },
+        }),
+        context,
+      ),
+    ).toEqual({
+      ok: false,
+      reason: 'An approved review cannot carry a blocking finding.',
+    });
+  });
+
+  test('refuses a verdict that does not match the move', () => {
+    expect(
+      transition(
+        held('reviewing'),
+        by('reviewer', 'build_ready', { record: approved }),
+        context,
+      ),
+    ).toEqual({
+      ok: false,
+      reason:
+        'Moving a work item from reviewing to build_ready needs a review verdict of changes_requested.',
+    });
+  });
+
+  test('refuses changes requested without a blocking finding', () => {
+    expect(
+      transition(
+        held('reviewing'),
+        by('reviewer', 'build_ready', {
+          record: { ...changesRequested, findings: [] },
+        }),
+        context,
+      ),
+    ).toEqual({
+      ok: false,
+      reason: 'Requesting changes needs at least one blocking finding.',
+    });
+  });
+
+  test('refuses a finding without its file or problem', () => {
+    expect(
+      transition(
+        held('reviewing'),
+        by('reviewer', 'build_ready', {
+          record: {
+            ...changesRequested,
+            findings: [{ severity: 'blocking', file: '', problem: 'x' }],
+          },
+        }),
+        context,
+      ),
+    ).toEqual({
+      ok: false,
+      reason:
+        'Every review finding needs a severity (blocking or advisory), a file and a problem.',
+    });
+  });
+
+  test('keeps the record it accepted as the transition’s effect', () => {
+    expect(
+      transition(
+        held('grooming'),
+        by('groomer', 'design_ready', { record: outcome }),
+        context,
+      ),
+    ).toMatchObject({
+      ok: true,
+      effects: [{ kind: 'history' }, { kind: 'record', record: outcome }],
     });
   });
 });
