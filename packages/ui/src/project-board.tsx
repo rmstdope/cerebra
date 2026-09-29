@@ -19,6 +19,13 @@ import {
   type Priority,
   type WorkItem,
 } from './board';
+import {
+  browserAutomaticStartsClient,
+  reasonText,
+  type AutomaticStartStatus,
+  type AutomaticStartsClient,
+  type WaitingReason,
+} from './automatic-starts';
 
 type BoardStorage = Pick<Storage, 'getItem' | 'setItem'>;
 type Tab = 'overview' | 'discussion' | 'history';
@@ -129,6 +136,57 @@ function browserStorage(): BoardStorage {
   }
 }
 
+function isReady(state: string): boolean {
+  return state.endsWith('_ready');
+}
+
+function WaitingChip({
+  error,
+  id,
+  onRetry,
+  reason,
+}: {
+  readonly error: boolean;
+  readonly id: string;
+  readonly onRetry: () => void;
+  readonly reason: WaitingReason | null;
+}): ReactNode {
+  const blocked = error || reason?.kind === 'credential_missing';
+  return (
+    <span className="flex flex-wrap items-center gap-2 text-xs sm:ml-auto">
+      <span
+        className={`rounded-full px-2 py-1 font-bold ${
+          blocked
+            ? 'bg-red-50 text-[var(--danger)] dark:bg-red-950'
+            : 'bg-amber-100 text-amber-950 dark:bg-amber-900 dark:text-amber-50'
+        }`}
+        id={id}
+      >
+        {error || reason === null
+          ? "Couldn't check why this is waiting"
+          : reasonText(reason)}
+      </span>
+      {error ? (
+        <button
+          aria-describedby={id}
+          className="font-bold underline"
+          onClick={onRetry}
+          type="button"
+        >
+          Try again
+        </button>
+      ) : reason?.kind === 'credential_missing' ? (
+        <a
+          className="font-bold underline outline-none focus-visible:ring-3 focus-visible:ring-[var(--focus)]"
+          href="#/settings/credentials"
+        >
+          Fix in settings
+        </a>
+      ) : null}
+    </span>
+  );
+}
+
 function isFiltered(filters: BoardFilters): boolean {
   return (
     filters.search.trim() !== '' ||
@@ -139,13 +197,16 @@ function isFiltered(filters: BoardFilters): boolean {
 
 export function ProjectBoard({
   arrivalsIntervalMs = 30_000,
+  automaticStartsClient = browserAutomaticStartsClient,
   boardClient = browserBoardClient,
   onClose,
   openRequest = null,
   projectId,
+  statusIntervalMs = 10_000,
   storage: storageOverride,
 }: {
   readonly arrivalsIntervalMs?: number;
+  readonly automaticStartsClient?: AutomaticStartsClient;
   readonly boardClient?: BoardClient;
   /** Called when an open item or draft is closed, so a caller can return to where it came from. */
   readonly onClose?: () => void;
@@ -155,6 +216,7 @@ export function ProjectBoard({
     readonly tab: 'discussion' | 'overview';
   } | null;
   readonly projectId: string;
+  readonly statusIntervalMs?: number;
   readonly storage?: BoardStorage;
 }): ReactNode {
   const [storage] = useState<BoardStorage>(
@@ -194,6 +256,70 @@ export function ProjectBoard({
   const listRequest = useRef(0);
   const shownItem = useRef<string | null>(null);
   const boardHeading = useRef<HTMLHeadingElement>(null);
+  const [startStatus, setStartStatus] = useState<AutomaticStartStatus | null>(
+    null,
+  );
+  const [startStatusError, setStartStatusError] = useState(false);
+  const [toggleError, setToggleError] = useState<'pause' | 'resume' | null>(
+    null,
+  );
+  const [toggling, setToggling] = useState(false);
+  const [toggleFocus, setToggleFocus] = useState<'pause' | 'resume' | null>(
+    null,
+  );
+  const pauseButton = useRef<HTMLButtonElement>(null);
+  const resumeButton = useRef<HTMLButtonElement>(null);
+  const statusRequest = useRef(0);
+
+  const loadStartStatus = useCallback(async () => {
+    const request = ++statusRequest.current;
+    try {
+      const next = await automaticStartsClient.status(projectId);
+      if (request !== statusRequest.current) return;
+      setStartStatus(next);
+      setStartStatusError(false);
+    } catch {
+      if (request !== statusRequest.current) return;
+      setStartStatusError(true);
+    }
+  }, [automaticStartsClient, projectId]);
+
+  useEffect(() => {
+    void loadStartStatus();
+    const timer = window.setInterval(
+      () => void loadStartStatus(),
+      statusIntervalMs,
+    );
+    return () => window.clearInterval(timer);
+  }, [loadStartStatus, statusIntervalMs]);
+
+  useEffect(() => {
+    if (toggleFocus === null) return;
+    (toggleFocus === 'resume' ? resumeButton : pauseButton).current?.focus();
+    setToggleFocus(null);
+  }, [toggleFocus]);
+
+  const setPaused = async (paused: boolean) => {
+    setToggling(true);
+    try {
+      await automaticStartsClient.setPaused(projectId, paused);
+      // A read already on its way may predate the change; its answer is dropped.
+      statusRequest.current += 1;
+      setStartStatus((current) =>
+        current === null ? current : { ...current, paused },
+      );
+      setToggleError(null);
+      setToggleFocus(paused ? 'resume' : 'pause');
+      void loadStartStatus();
+    } catch {
+      setToggleError(paused ? 'pause' : 'resume');
+    } finally {
+      setToggling(false);
+    }
+  };
+  const waitingReasons = new Map(
+    (startStatus?.waiting ?? []).map(({ itemId, reason }) => [itemId, reason]),
+  );
 
   const loadList = useCallback(
     async (current: BoardFilters) => {
@@ -513,10 +639,66 @@ export function ProjectBoard({
             See what is waiting, in progress and finished.
           </p>
         </div>
-        <button className="primary-button" onClick={openDraft} type="button">
-          Add work item
-        </button>
+        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end">
+          {startStatus !== null && !startStatus.paused ? (
+            <>
+              <span className="text-sm text-[var(--muted)]">
+                Starting work automatically · {startStatus.running} of{' '}
+                {startStatus.limit} running
+              </span>
+              <button
+                className="secondary-button"
+                disabled={toggling}
+                onClick={() => void setPaused(true)}
+                ref={pauseButton}
+                type="button"
+              >
+                Pause automatic starts
+              </button>
+            </>
+          ) : null}
+          <button className="primary-button" onClick={openDraft} type="button">
+            Add work item
+          </button>
+        </div>
       </div>
+      {toggleError !== null ? (
+        <div
+          className="auth-error flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
+          role="alert"
+        >
+          <span>
+            {toggleError === 'pause'
+              ? "Cerebra couldn't pause automatic starts. Nothing has changed."
+              : "Cerebra couldn't resume automatic starts. Nothing has changed."}
+          </span>
+          <button
+            className="secondary-button"
+            disabled={toggling}
+            onClick={() => void setPaused(toggleError === 'pause')}
+            type="button"
+          >
+            Try again
+          </button>
+        </div>
+      ) : null}
+      {startStatus?.paused === true ? (
+        <div className="mt-5 flex flex-col gap-3 rounded-lg border-l-4 border-amber-500 bg-amber-50 p-3 text-sm text-amber-950 sm:flex-row sm:items-center sm:justify-between dark:bg-amber-950 dark:text-amber-50">
+          <p>
+            <strong>Automatic starts are paused.</strong> Work already running
+            continues, and you can still start anyone yourself from the fleet.
+          </p>
+          <button
+            className="primary-button"
+            disabled={toggling}
+            onClick={() => void setPaused(false)}
+            ref={resumeButton}
+            type="button"
+          >
+            Resume
+          </button>
+        </div>
+      ) : null}
       <div className="mt-6 flex flex-wrap gap-3">
         <input
           aria-label="Search work items"
@@ -650,29 +832,48 @@ export function ProjectBoard({
             )
           ) : (
             <div>
-              {list.items.map((item) => (
-                <button
-                  aria-current={selectedId === item.id ? 'true' : undefined}
-                  className={`flex w-full items-center gap-3 border-b border-[var(--border)] p-4 text-left outline-none last:border-0 focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-[var(--focus)] ${selectedId === item.id ? 'bg-[var(--accent-muted)]' : ''}`}
-                  key={item.id}
-                  onClick={() => openItem(item.id)}
-                  ref={(element) => {
-                    if (element === null) rows.current.delete(item.id);
-                    else rows.current.set(item.id, element);
-                  }}
-                  type="button"
-                >
-                  <span className="rounded bg-amber-100 px-2 py-1 text-xs font-bold text-amber-950 dark:bg-amber-900 dark:text-amber-50">
-                    {item.priority ?? '—'}
-                  </span>
-                  <strong className="min-w-0 flex-1 break-words">
-                    {item.title}
-                  </strong>
-                  <span className="rounded-full bg-[var(--accent-muted)] px-2 py-1 text-xs font-bold">
-                    {stateLabel(item.state)}
-                  </span>
-                </button>
-              ))}
+              {list.items.map((item) => {
+                const reason = waitingReasons.get(item.id) ?? null;
+                const chipShown =
+                  isReady(item.state) && (startStatusError || reason !== null);
+                const chipId = `waiting-${item.id}`;
+                return (
+                  <div
+                    className={`flex flex-col gap-2 border-b border-[var(--border)] p-2 last:border-0 sm:flex-row sm:items-center ${selectedId === item.id ? 'bg-[var(--accent-muted)]' : ''}`}
+                    key={item.id}
+                  >
+                    <button
+                      aria-current={selectedId === item.id ? 'true' : undefined}
+                      aria-describedby={chipShown ? chipId : undefined}
+                      className="flex min-w-0 flex-1 items-center gap-3 rounded-lg p-2 text-left outline-none focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-[var(--focus)]"
+                      onClick={() => openItem(item.id)}
+                      ref={(element) => {
+                        if (element === null) rows.current.delete(item.id);
+                        else rows.current.set(item.id, element);
+                      }}
+                      type="button"
+                    >
+                      <span className="rounded bg-amber-100 px-2 py-1 text-xs font-bold text-amber-950 dark:bg-amber-900 dark:text-amber-50">
+                        {item.priority ?? '—'}
+                      </span>
+                      <strong className="min-w-0 flex-1 break-words">
+                        {item.title}
+                      </strong>
+                      <span className="rounded-full bg-[var(--accent-muted)] px-2 py-1 text-xs font-bold">
+                        {stateLabel(item.state)}
+                      </span>
+                    </button>
+                    {chipShown ? (
+                      <WaitingChip
+                        error={startStatusError}
+                        id={chipId}
+                        onRetry={() => void loadStartStatus()}
+                        reason={reason}
+                      />
+                    ) : null}
+                  </div>
+                );
+              })}
               {list.nextCursor !== null ? (
                 <div className="p-4">
                   {moreError ? (

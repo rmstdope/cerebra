@@ -220,6 +220,20 @@ export {
   type SupervisorOptions,
 } from './supervisor.js';
 export {
+  createStartSettings,
+  LimitInputError,
+  type Limits,
+  type StartSettings,
+} from './start-settings.js';
+export {
+  createDispatcher,
+  type AutomaticStartStatus,
+  type DispatchedRun,
+  type Dispatcher,
+  type DispatcherOptions,
+} from './dispatcher.js';
+export type { WaitingReason } from './dispatch-plan.js';
+export {
   createServer,
   startServer,
   type ConversationControl,

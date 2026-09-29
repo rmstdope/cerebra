@@ -62,6 +62,20 @@ export interface Database {
     value_iv: string;
     value_tag: string;
   };
+  dispatch_log: {
+    agent_id: string | null;
+    created_at: Generated<Date>;
+    decision: 'started' | 'refused';
+    id: Generated<string>;
+    project_id: string | null;
+    reason: string;
+    run_id: string | null;
+    work_item_id: string | null;
+  };
+  instance_settings: {
+    id: Generated<boolean>;
+    max_concurrent_runs: Generated<number>;
+  };
   lifecycle_events: {
     created_at: Generated<Date>;
     id: Generated<number>;
@@ -152,6 +166,7 @@ export interface Database {
     work_item_id: string;
   };
   projects: {
+    automatic_starts_paused: Generated<boolean>;
     created_at: Generated<Date>;
     default_branch: Generated<string>;
     design_enabled: Generated<boolean>;

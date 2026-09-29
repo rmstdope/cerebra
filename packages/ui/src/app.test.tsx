@@ -605,7 +605,7 @@ describe('App', () => {
     ).toBeTruthy();
   });
 
-  test('opens credential and agent settings from the header, and returns to the queue', async () => {
+  test('opens credential, agent and limit settings from the header, and returns to the queue', async () => {
     const user = userEvent.setup();
     const projects: Array<string | null> = [];
     const credentialClient: CredentialClient = {
@@ -636,6 +636,21 @@ describe('App', () => {
     render(
       <App
         authClient={authenticatedAuth}
+        automaticStartsClient={{
+          limits: async () => ({ instanceLimit: 3, projectLimit: 2 }),
+          saveInstanceLimit: async () => ({
+            instanceLimit: 3,
+            projectLimit: null,
+          }),
+          saveProjectLimit: async () => ({ instanceLimit: 3, projectLimit: 2 }),
+          setPaused: async () => undefined,
+          status: async () => ({
+            limit: 2,
+            paused: false,
+            running: 0,
+            waiting: [],
+          }),
+        }}
         credentialClient={credentialClient}
         mediaQuery={new FakeMediaQuery(false)}
         queueClient={emptyQueue}
@@ -656,6 +671,14 @@ describe('App', () => {
       await screen.findByText('No credentials saved for this project'),
     ).toBeTruthy();
     expect(projects).toEqual(['project-9']);
+
+    await user.click(screen.getByRole('link', { name: 'Limits' }));
+
+    expect(
+      await screen.findByRole('heading', { level: 1, name: 'Limits' }),
+    ).toBeTruthy();
+    expect(window.location.hash).toBe('#/settings/limits');
+    expect(await screen.findByText('Cerebra-wide limit is 3.')).toBeTruthy();
 
     await user.click(screen.getByRole('link', { name: 'Agent types' }));
     await user.click(

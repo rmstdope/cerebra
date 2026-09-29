@@ -100,6 +100,10 @@ describe('database migrations', { concurrent: false }, () => {
           migrationName: '20261002000000_add_filing_provenance',
           status: 'Success',
         }),
+        expect.objectContaining({
+          migrationName: '20261003000000_add_dispatcher',
+          status: 'Success',
+        }),
       ]);
       expect(
         await database.introspection.getTables({
@@ -114,6 +118,8 @@ describe('database migrations', { concurrent: false }, () => {
           expect.objectContaining({ name: 'agent_type_overrides' }),
           expect.objectContaining({ name: 'agents' }),
           expect.objectContaining({ name: 'credentials' }),
+          expect.objectContaining({ name: 'dispatch_log' }),
+          expect.objectContaining({ name: 'instance_settings' }),
           expect.objectContaining({ name: 'lifecycle_events' }),
           expect.objectContaining({ name: 'projects' }),
           expect.objectContaining({ name: 'runs' }),
@@ -280,6 +286,59 @@ describe('database migrations', { concurrent: false }, () => {
           INSERT INTO work_items (id, project_id, state, priority)
           VALUES (${crypto.randomUUID()}, ${projectId}, 'not_a_state', 'P1')
         `.execute(database),
+      ).rejects.toThrow();
+    } finally {
+      await database.destroy();
+      await dropSchema(schema);
+    }
+  });
+
+  test('keeps every project limit within the Cerebra-wide limit it adds', async () => {
+    const schema = await createSchema();
+    const database = createDatabase(databaseUrl, schema);
+    const busy = crypto.randomUUID();
+    const quiet = crypto.randomUUID();
+
+    try {
+      await migrateTo(database, '20261002000000_add_filing_provenance', schema);
+      await sql`
+        INSERT INTO projects (id, name, max_concurrent_runs)
+        VALUES (${busy}, 'Busy', 10), (${quiet}, 'Quiet', 2)
+      `.execute(database);
+
+      await migrateToLatest(database, schema);
+
+      expect(
+        await database
+          .selectFrom('instance_settings')
+          .select('max_concurrent_runs')
+          .execute(),
+      ).toEqual([{ max_concurrent_runs: 3 }]);
+      expect(
+        await database
+          .selectFrom('projects')
+          .select(['name', 'max_concurrent_runs', 'automatic_starts_paused'])
+          .orderBy('name')
+          .execute(),
+      ).toEqual([
+        {
+          automatic_starts_paused: false,
+          max_concurrent_runs: 3,
+          name: 'Busy',
+        },
+        {
+          automatic_starts_paused: false,
+          max_concurrent_runs: 2,
+          name: 'Quiet',
+        },
+      ]);
+      await expect(
+        sql`UPDATE projects SET max_concurrent_runs = 0`.execute(database),
+      ).rejects.toThrow();
+      await expect(
+        sql`INSERT INTO instance_settings (id) VALUES (false)`.execute(
+          database,
+        ),
       ).rejects.toThrow();
     } finally {
       await database.destroy();

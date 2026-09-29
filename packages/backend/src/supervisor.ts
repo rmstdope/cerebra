@@ -46,6 +46,13 @@ export type RunUpdate =
 
 export interface Supervisor extends RunControl {
   start(agentId: string): Promise<{ readonly runId: string }>;
+  /** Starts a run the dispatcher inserted and claimed an item for (architecture §6). */
+  launchDispatched(run: {
+    readonly agentId: string;
+    readonly firstMessage: string;
+    readonly runId: string;
+    readonly token: string;
+  }): Promise<void>;
   read(runId: string): Promise<Conversation | null>;
   send(runId: string, text: string): Promise<void>;
   answer(runId: string, questionId: string, answers: Answers): Promise<void>;
@@ -84,6 +91,8 @@ export interface SupervisorOptions {
   readonly endAttempts?: number;
   readonly endRetryMs?: number;
   readonly log?: (message: string) => void;
+  /** Told of every run that ends, so queued work can take its place. */
+  readonly onRunEnded?: (runId: string) => void;
 }
 
 export class RunNotFoundError extends Error {
@@ -205,7 +214,7 @@ export function directoryPreparer(
 }
 
 /** Producers and bugfixers both run as builders. */
-function runRoleOf(role: AgentRole): RunRecord['role'] {
+export function runRoleOf(role: AgentRole): RunRecord['role'] {
   return role === 'producer' || role === 'bugfixer' ? 'builder' : role;
 }
 
@@ -213,7 +222,7 @@ function failureText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function isUniqueViolation(error: unknown): boolean {
+export function isUniqueViolation(error: unknown): boolean {
   return (
     typeof error === 'object' &&
     error !== null &&
@@ -241,6 +250,7 @@ export function createSupervisor({
   endAttempts = 5,
   endRetryMs = 1_000,
   log = () => {},
+  onRunEnded = () => {},
 }: SupervisorOptions): Supervisor {
   const live = new Map<string, LiveRun>();
   const listeners = new Map<string, Set<(update: RunUpdate) => void>>();
@@ -318,6 +328,13 @@ export function createSupervisor({
           state: ending.state,
           type: 'state',
         });
+        try {
+          onRunEnded(runId);
+        } catch (error) {
+          log(
+            `Run ${runId}: its ending could not be reported: ${failureText(error)}`,
+          );
+        }
       }
     } finally {
       const run = await runs.get(runId).catch(() => null);
@@ -432,6 +449,82 @@ export function createSupervisor({
     if (live.has(run.id)) await engine.start(container.id);
     // Stopped while the container was being made: the ending may not have seen it.
     if (!live.has(run.id)) await removeContainer(run.id, container.id);
+  }
+
+  /** Launches a run already recorded, ending it as failed to start if it cannot be. */
+  async function begin(
+    run: RunRecord,
+    agentId: string,
+    agent: Awaited<ReturnType<typeof agentToStart>>,
+    token: string,
+    opening: { readonly firstMessage: string; readonly interactive: boolean },
+  ): Promise<void> {
+    const definition = (
+      typeof agent.definition === 'string'
+        ? JSON.parse(agent.definition)
+        : agent.definition
+    ) as TypeDefinition;
+    const entry: LiveRun = {
+      connection: null,
+      connectTimer: null,
+      fileRequests: new Map(),
+      pending: [],
+      start: {
+        backend: 'claude',
+        effort:
+          typeof definition.effort === 'string' ? definition.effort : 'high',
+        firstMessage: opening.firstMessage,
+        instructions: agent.instructions,
+        interactive: opening.interactive,
+        mcpServers: {
+          cerebra: {
+            headers: { Authorization: `Bearer ${token}` },
+            type: 'http',
+            url: mcpUrl,
+          },
+        },
+        model: agent.fields?.model ?? agent.model,
+        resumeSessionId: null,
+        skills: [],
+        type: 'start',
+      },
+      stopTimer: null,
+      work: Promise.resolve(),
+    };
+    live.set(run.id, entry);
+    try {
+      await launch(
+        run,
+        agentId,
+        agent.type_name,
+        agent.project_id,
+        token,
+        definition,
+      );
+    } catch (error) {
+      const failure = failureText(error);
+      log(`Run ${run.id} could not start: ${failure}`);
+      await end(run.id, {
+        failure,
+        reason: `The run failed to start: ${failure}`,
+        startFailed: true,
+        state: 'failed',
+      });
+      throw new RunStartError(run.id, `${agent.name} couldn’t start.`);
+    }
+    if (live.has(run.id) && entry.connection === null) {
+      entry.connectTimer = setTimeout(() => {
+        enqueue(run.id, entry, async () => {
+          if (!live.has(run.id) || entry.connection !== null) return;
+          const failure = 'The runner did not connect in time.';
+          await end(run.id, {
+            failure,
+            reason: `The run failed: ${failure}`,
+            state: 'failed',
+          });
+        });
+      }, connectTimeoutMs);
+    }
   }
 
   async function liveRun(runId: string): Promise<LiveRun> {
@@ -583,73 +676,41 @@ export function createSupervisor({
         }
         throw error;
       }
-      const definition = (
-        typeof agent.definition === 'string'
-          ? JSON.parse(agent.definition)
-          : agent.definition
-      ) as TypeDefinition;
-      const entry: LiveRun = {
-        connection: null,
-        connectTimer: null,
-        fileRequests: new Map(),
-        pending: [],
-        start: {
-          backend: 'claude',
-          effort:
-            typeof definition.effort === 'string' ? definition.effort : 'high',
-          firstMessage: '',
-          instructions: agent.instructions,
-          interactive: true,
-          mcpServers: {
-            cerebra: {
-              headers: { Authorization: `Bearer ${token}` },
-              type: 'http',
-              url: mcpUrl,
-            },
-          },
-          model: agent.fields?.model ?? agent.model,
-          resumeSessionId: null,
-          skills: [],
-          type: 'start',
-        },
-        stopTimer: null,
-        work: Promise.resolve(),
+      await begin(run, agentId, agent, token, {
+        firstMessage: '',
+        interactive: true,
+      });
+      return { runId: run.id };
+    },
+
+    async launchDispatched({ agentId, firstMessage, runId, token }) {
+      let prepared: {
+        agent: Awaited<ReturnType<typeof agentToStart>>;
+        run: NonNullable<Awaited<ReturnType<typeof runs.get>>>;
       };
-      live.set(run.id, entry);
       try {
-        await launch(
-          run,
-          agentId,
-          agent.type_name,
-          agent.project_id,
-          token,
-          definition,
-        );
+        const agent = await agentToStart(agentId);
+        const run = await runs.get(runId);
+        if (run === null) throw new RunNotFoundError(runId);
+        if (run.endedAt !== null) throw new RunEndedError();
+        prepared = { agent, run };
       } catch (error) {
+        // The run is already inserted and holds its item; it must not stay live.
         const failure = failureText(error);
-        log(`Run ${run.id} could not start: ${failure}`);
-        await end(run.id, {
+        log(`Run ${runId} could not start: ${failure}`);
+        await end(runId, {
           failure,
           reason: `The run failed to start: ${failure}`,
           startFailed: true,
           state: 'failed',
         });
-        throw new RunStartError(run.id, `${agent.name} couldn’t start.`);
+        throw error;
       }
-      if (live.has(run.id) && entry.connection === null) {
-        entry.connectTimer = setTimeout(() => {
-          enqueue(run.id, entry, async () => {
-            if (!live.has(run.id) || entry.connection !== null) return;
-            const failure = 'The runner did not connect in time.';
-            await end(run.id, {
-              failure,
-              reason: `The run failed: ${failure}`,
-              state: 'failed',
-            });
-          });
-        }, connectTimeoutMs);
-      }
-      return { runId: run.id };
+      const { agent, run } = prepared;
+      await begin(run, agentId, agent, token, {
+        firstMessage,
+        interactive: agent.interactive,
+      });
     },
 
     async stop(agentId) {

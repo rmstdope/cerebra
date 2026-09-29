@@ -28,6 +28,8 @@ import {
   type RegisteredProject,
 } from './projects';
 import type { BoardClient } from './board';
+import type { AutomaticStartsClient } from './automatic-starts';
+import { LimitsPage } from './limits-page';
 import { NavigatorQueue, type WorkTab } from './navigator-queue';
 import { ProjectBoard } from './project-board';
 import type { FleetClient } from './fleet';
@@ -60,6 +62,7 @@ interface AppProps {
   instanceClient?: InstanceClient;
   authClient?: AuthClient;
   boardClient?: BoardClient;
+  automaticStartsClient?: AutomaticStartsClient;
   fleetClient?: FleetClient;
   queueClient?: QueueClient;
   credentialClient?: CredentialClient;
@@ -71,6 +74,7 @@ interface AppProps {
 type SettingsRoute =
   | { readonly page: 'credentials' }
   | { readonly page: 'agents' }
+  | { readonly page: 'limits' }
   | { readonly page: 'agent'; readonly agentType: string };
 
 function conversationRoute(hash: string): string | null {
@@ -83,6 +87,9 @@ function settingsRoute(hash: string): SettingsRoute | null {
   }
   if (hash === '#/settings/agents') {
     return { page: 'agents' };
+  }
+  if (hash === '#/settings/limits') {
+    return { page: 'limits' };
   }
   const agent = /^#\/settings\/agents\/([a-z][a-z0-9-]*)$/.exec(hash);
   return agent === null ? null : { agentType: agent[1], page: 'agent' };
@@ -125,6 +132,7 @@ export function App({
   instanceClient = browserInstanceClient,
   authClient = browserAuthClient,
   boardClient,
+  automaticStartsClient,
   fleetClient,
   queueClient,
   credentialClient,
@@ -749,12 +757,13 @@ export function App({
               [
                 ['credentials', 'Credentials', '#/settings/credentials'],
                 ['agents', 'Agent types', '#/settings/agents'],
+                ['limits', 'Limits', '#/settings/limits'],
               ] as const
             ).map(([page, label, href]) => {
               const current =
-                page === 'credentials'
-                  ? settings.page === 'credentials'
-                  : settings.page !== 'credentials';
+                page === 'agents'
+                  ? settings.page === 'agents' || settings.page === 'agent'
+                  : settings.page === page;
               return (
                 <a
                   aria-current={current ? 'page' : undefined}
@@ -780,6 +789,12 @@ export function App({
             />
           ) : settings.page === 'agents' ? (
             <AgentTypesList />
+          ) : settings.page === 'limits' ? (
+            <LimitsPage
+              client={automaticStartsClient}
+              key={projectId ?? 'instance'}
+              projectId={projectId}
+            />
           ) : projectId === null ? (
             <p className="card">
               Add a project first, then give its agents credentials.
@@ -886,6 +901,7 @@ export function App({
                 </div>
               ) : (
                 <ProjectBoard
+                  automaticStartsClient={automaticStartsClient}
                   boardClient={boardClient}
                   key={projectId}
                   onClose={
