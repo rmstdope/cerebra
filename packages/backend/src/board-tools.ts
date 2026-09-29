@@ -1,4 +1,13 @@
-import type { Kysely } from 'kysely';
+import {
+  outcomeSectionsOf,
+  parseOutcomeQuestion,
+  routeChoices,
+  routeOfAnswer,
+  sameOutcome,
+  type AgentEvent,
+  type OutcomeRoute,
+} from '@cerebra/shared';
+import { sql, type Kysely } from 'kysely';
 
 import {
   WorkItemNotFoundError,
@@ -119,12 +128,20 @@ interface Tool {
 
 const priorities: readonly Priority[] = ['P0', 'P1', 'P2', 'P3'];
 
+const routeStates: Readonly<Record<OutcomeRoute, WorkItemState>> = {
+  build: 'build_ready',
+  design: 'design_ready',
+};
+
 export function createBoardTools({
   board,
   database,
+  onReleased,
 }: {
   readonly board: Board;
   readonly database: Kysely<Database>;
+  /** Told when a call leaves the calling run holding nothing, so it can finish (architecture §5.3). */
+  readonly onReleased?: (runId: string) => void;
 }): BoardTools {
   async function itemInProject(
     caller: ToolCaller,
@@ -170,7 +187,7 @@ export function createBoardTools({
   async function moveHeld(
     caller: ToolCaller,
     build: (state: WorkItemState) => Parameters<typeof board.transition>[1],
-  ): Promise<unknown> {
+  ): Promise<{ readonly id: string; readonly state: WorkItemState }> {
     const itemId = await requireHeld(caller);
     const nothingHeld = {
       ok: false as const,
@@ -186,7 +203,88 @@ export function createBoardTools({
         result.reason,
       );
     }
+    if (result.item.holderRunId !== caller.runId) {
+      onReleased?.(caller.runId);
+    }
     return { id: itemId, state: result.item.state };
+  }
+
+  /**
+   * A groomer leaves grooming only on the outcome and route the navigator
+   * confirmed in the run's newest outcome question (spec §6.3).
+   */
+  async function requireConfirmed(
+    caller: ToolCaller,
+    to: WorkItemState,
+    record: Arguments | undefined,
+  ): Promise<void> {
+    const markdown =
+      record?.kind === 'outcome' && typeof record.markdown === 'string'
+        ? record.markdown
+        : null;
+    const recorded = markdown === null ? null : outcomeSectionsOf(markdown);
+    if (recorded === null) {
+      // The lifecycle refuses a missing or malformed outcome record itself.
+      return;
+    }
+    const rows = await database
+      .selectFrom('run_events')
+      .select('event')
+      .where('run_id', '=', caller.runId)
+      .where(sql<string>`event->>'kind'`, 'in', ['question', 'answer'])
+      .orderBy('position', 'asc')
+      .execute();
+    const events = rows.map((row) => row.event as AgentEvent);
+    let asked: { questionId: string; text: string } | null = null;
+    let confirmed: ReturnType<typeof parseOutcomeQuestion> = null;
+    for (const event of events) {
+      if (event.kind !== 'question') continue;
+      for (const question of event.questions) {
+        const parsed = parseOutcomeQuestion(question);
+        if (parsed !== null) {
+          asked = { questionId: event.questionId, text: question.question };
+          confirmed = parsed;
+        }
+      }
+    }
+    const nothingMoved = 'Nothing was moved.';
+    if (asked === null || confirmed === null) {
+      throw new Refusal(
+        'refused',
+        `Ask the navigator to confirm the outcome and its route with the outcome question before recording it. ${nothingMoved}`,
+      );
+    }
+    const questionId = asked.questionId;
+    const answer = events.find(
+      (event) => event.kind === 'answer' && event.questionId === questionId,
+    );
+    const chosen =
+      answer?.kind === 'answer' ? answer.answers[asked.text] : undefined;
+    if (chosen === undefined) {
+      throw new Refusal(
+        'refused',
+        `The navigator has not answered the outcome question yet. ${nothingMoved}`,
+      );
+    }
+    const route = routeOfAnswer(chosen);
+    if (route === null) {
+      throw new Refusal(
+        'refused',
+        `The navigator answered the outcome question with a change, not a route: apply it, say "Updated. Here it is again." and ask the whole question again. ${nothingMoved}`,
+      );
+    }
+    if (routeStates[route] !== to) {
+      throw new Refusal(
+        'refused',
+        `The navigator chose ${routeChoices[route].label}, so the item moves to ${routeStates[route]}. ${nothingMoved}`,
+      );
+    }
+    if (!sameOutcome(confirmed.sections, recorded)) {
+      throw new Refusal(
+        'refused',
+        `The outcome record differs from the outcome the navigator confirmed; record the confirmed sections word for word. ${nothingMoved}`,
+      );
+    }
   }
 
   const tools: Record<string, Tool> = {
@@ -194,15 +292,18 @@ export function createBoardTools({
       descriptor: {
         name: 'get_item',
         description:
-          'Read one work item of this project: its fields, comments, records, history and who filed it.',
+          'Read one work item of this project: its fields, comments, records, history and who filed it. Without item_id, reads the item this run holds.',
         inputSchema: {
           type: 'object',
           properties: { item_id: { type: 'string' } },
-          required: ['item_id'],
         },
       },
       async run(caller, args) {
-        const itemId = await itemInProject(caller, text(args, 'item_id'));
+        const named = optionalText(args, 'item_id');
+        const itemId =
+          named === undefined
+            ? await requireHeld(caller)
+            : await itemInProject(caller, named);
         const [item, comments, records, history, provenance] =
           await Promise.all([
             board.getWorkItem(itemId),
@@ -328,12 +429,28 @@ export function createBoardTools({
         ) {
           throw invalid('record must be an object.');
         }
-        return moveHeld(caller, () => ({
+        const leavesGrooming =
+          caller.role === 'groomer' &&
+          (to === 'design_ready' || to === 'build_ready');
+        if (leavesGrooming) {
+          await requireHeld(caller);
+          await requireConfirmed(caller, to, record as Arguments | undefined);
+        }
+        const moved = await moveHeld(caller, () => ({
           actor: { role: caller.role, runId: caller.runId },
           reason,
           record: record as Arguments | undefined,
           to,
         }));
+        if (!leavesGrooming) {
+          return moved;
+        }
+        const { title } = await board.getWorkItem(moved.id);
+        const waitsFor = to === 'design_ready' ? 'design' : 'build';
+        return {
+          ...moved,
+          message: `Recorded. ${title} now waits for ${waitsFor}.`,
+        };
       },
     },
     wait_for_navigator: {

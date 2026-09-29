@@ -37,12 +37,35 @@ const outcome = {
   ].join('\n'),
 };
 
+const outcomeQuestion = (body = outcome.markdown) => ({
+  header: 'Outcome',
+  multiSelect: false,
+  options: [
+    {
+      description: 'agree what people will see first',
+      label: 'Design next',
+    },
+    {
+      description: 'nothing new to see; go straight to building',
+      label: 'Build next (Recommended)',
+    },
+  ],
+  question: `Confirm the outcome and where it goes next\n\n${body.split('\n## Route')[0] ?? ''}`,
+});
+
 interface Fixture {
   readonly board: Board;
+  /** Runs whose tool call gave up their held item, in order. */
+  readonly released: string[];
   readonly database: Kysely<Database>;
   readonly projectId: string;
   readonly tools: ReturnType<typeof createBoardTools>;
   caller(name: string, role: RunRole, projectId?: string): Promise<ToolCaller>;
+  /** Records the outcome question in the run's events, and the navigator's answer if given. */
+  ask(
+    caller: ToolCaller,
+    options?: { readonly answer?: string; readonly markdown?: string },
+  ): Promise<void>;
   item(options?: {
     readonly heldBy?: ToolCaller;
     readonly projectId?: string;
@@ -56,11 +79,33 @@ async function withBoard(run: (fixture: Fixture) => Promise<void>) {
     const board = createBoard(database);
     const projectId = await registerTestProject(database);
     const runs = createRunStore(database);
+    const released: string[] = [];
     await run({
       board,
       database,
       projectId,
-      tools: createBoardTools({ board, database }),
+      released,
+      tools: createBoardTools({
+        board,
+        database,
+        onReleased: (runId) => released.push(runId),
+      }),
+      async ask(caller, { answer, markdown } = {}) {
+        const question = outcomeQuestion(markdown);
+        const questionId = crypto.randomUUID();
+        await runs.append(caller.runId, {
+          kind: 'question',
+          questionId,
+          questions: [question],
+        });
+        if (answer !== undefined) {
+          await runs.append(caller.runId, {
+            answers: { [question.question]: answer },
+            kind: 'answer',
+            questionId,
+          });
+        }
+      },
       async caller(name, role, inProject = projectId) {
         const token = crypto.randomUUID();
         await runs.create({
@@ -254,9 +299,10 @@ describe('board tools', { concurrent: false }, () => {
   });
 
   test('moves the held item through the lifecycle with its record', async () => {
-    await withBoard(async ({ board, caller, item, tools }) => {
+    await withBoard(async ({ ask, board, caller, item, tools }) => {
       const jubilee = await caller('Jubilee', 'groomer');
       const heldId = await item({ heldBy: jubilee });
+      await ask(jubilee, { answer: 'Build next (Recommended)' });
 
       const moved = await tools.call(jubilee, 'transition', {
         record: outcome,
@@ -265,7 +311,11 @@ describe('board tools', { concurrent: false }, () => {
 
       expect(moved).toEqual({
         ok: true,
-        value: { id: heldId, state: 'build_ready' },
+        value: {
+          id: heldId,
+          message: 'Recorded. Export as XLSX now waits for build.',
+          state: 'build_ready',
+        },
       });
       expect(await board.listRecords(heldId)).toMatchObject([
         { kind: 'claim' },
@@ -303,6 +353,178 @@ describe('board tools', { concurrent: false }, () => {
         return_state: 'grooming_ready',
         waiting_kind: 'question',
         waiting_reason: 'Is XLSX enough, or ODS too?',
+      });
+    });
+  });
+
+  test('reads the held item when get_item names none', async () => {
+    await withBoard(async ({ caller, item, tools }) => {
+      const jubilee = await caller('Jubilee', 'groomer');
+      const heldId = await item({ heldBy: jubilee, title: 'Export invoices' });
+      const idle = await caller('Cerebro', 'assistant');
+
+      expect(await tools.call(jubilee, 'get_item', {})).toMatchObject({
+        ok: true,
+        value: { item: { id: heldId, title: 'Export invoices' } },
+      });
+      expect(await tools.call(idle, 'get_item', {})).toMatchObject({
+        code: 'nothing_held',
+        ok: false,
+      });
+    });
+  });
+
+  test('reports a run whose call gave up its item, and no other', async () => {
+    await withBoard(async ({ ask, caller, item, released, tools }) => {
+      const jubilee = await caller('Jubilee', 'groomer');
+      await item({ heldBy: jubilee });
+      await tools.call(jubilee, 'comment', { body: 'Reading.' });
+      await tools.call(jubilee, 'transition', { to: 'done' });
+      expect(released).toEqual([]);
+
+      await ask(jubilee, { answer: 'Build next' });
+      await tools.call(jubilee, 'transition', {
+        record: outcome,
+        to: 'build_ready',
+      });
+      await item({ heldBy: jubilee });
+      await tools.call(jubilee, 'wait_for_navigator', { question: 'Which?' });
+
+      expect(released).toEqual([jubilee.runId, jubilee.runId]);
+    });
+  });
+
+  describe('leaving grooming on the confirmed route', () => {
+    test('refuses before the navigator was asked, or before they answered', async () => {
+      await withBoard(async ({ ask, board, caller, item, tools }) => {
+        const jubilee = await caller('Jubilee', 'groomer');
+        const heldId = await item({ heldBy: jubilee });
+        const move = () =>
+          tools.call(jubilee, 'transition', {
+            record: outcome,
+            to: 'build_ready',
+          });
+
+        expect(await move()).toMatchObject({
+          code: 'refused',
+          message: expect.stringContaining('Ask the navigator') as unknown,
+          ok: false,
+        });
+        await ask(jubilee);
+        expect(await move()).toMatchObject({
+          code: 'refused',
+          message: expect.stringContaining('not answered') as unknown,
+          ok: false,
+        });
+        expect(await board.getWorkItem(heldId)).toMatchObject({
+          state: 'grooming',
+        });
+        expect(await board.listRecords(heldId)).toMatchObject([
+          { kind: 'claim' },
+        ]);
+      });
+    });
+
+    test('refuses a route other than the one the navigator chose', async () => {
+      await withBoard(async ({ ask, board, caller, item, tools }) => {
+        const jubilee = await caller('Jubilee', 'groomer');
+        const heldId = await item({ heldBy: jubilee });
+        await ask(jubilee, { answer: 'Design next' });
+
+        expect(
+          await tools.call(jubilee, 'transition', {
+            record: outcome,
+            to: 'build_ready',
+          }),
+        ).toMatchObject({
+          code: 'refused',
+          message: expect.stringContaining('design_ready') as unknown,
+          ok: false,
+        });
+        expect(await board.getWorkItem(heldId)).toMatchObject({
+          state: 'grooming',
+        });
+      });
+    });
+
+    test('refuses when the navigator answered with a change instead of a route', async () => {
+      await withBoard(async ({ ask, caller, item, tools }) => {
+        const jubilee = await caller('Jubilee', 'groomer');
+        await item({ heldBy: jubilee });
+        await ask(jubilee, { answer: 'Make it ODS as well.' });
+
+        expect(
+          await tools.call(jubilee, 'transition', {
+            record: outcome,
+            to: 'build_ready',
+          }),
+        ).toMatchObject({
+          code: 'refused',
+          message: expect.stringContaining(
+            'Updated. Here it is again.',
+          ) as unknown,
+          ok: false,
+        });
+      });
+    });
+
+    test('refuses an outcome other than the one the navigator confirmed', async () => {
+      await withBoard(async ({ ask, caller, item, tools }) => {
+        const jubilee = await caller('Jubilee', 'groomer');
+        await item({ heldBy: jubilee });
+        await ask(jubilee, { answer: 'Build next' });
+
+        expect(
+          await tools.call(jubilee, 'transition', {
+            record: {
+              ...outcome,
+              markdown: outcome.markdown.replace('XLSX', 'ODS'),
+            },
+            to: 'build_ready',
+          }),
+        ).toMatchObject({
+          code: 'refused',
+          message: expect.stringContaining('confirmed') as unknown,
+          ok: false,
+        });
+      });
+    });
+
+    test('moves on the newest confirmation, to design as well as to build', async () => {
+      await withBoard(async ({ ask, board, caller, item, tools }) => {
+        const jubilee = await caller('Jubilee', 'groomer');
+        const heldId = await item({
+          heldBy: jubilee,
+          title: 'Export invoices as CSV',
+        });
+        await ask(jubilee, {
+          answer: 'Also credit notes.',
+          markdown: outcome.markdown.replace('XLSX', 'ODS'),
+        });
+        await ask(jubilee, { answer: 'Design next' });
+
+        expect(
+          await tools.call(jubilee, 'transition', {
+            record: {
+              ...outcome,
+              markdown: outcome.markdown.replace(
+                '## Route\nbuild',
+                '## Route\ndesign',
+              ),
+            },
+            to: 'design_ready',
+          }),
+        ).toEqual({
+          ok: true,
+          value: {
+            id: heldId,
+            message: 'Recorded. Export invoices as CSV now waits for design.',
+            state: 'design_ready',
+          },
+        });
+        expect(await board.getWorkItem(heldId)).toMatchObject({
+          state: 'design_ready',
+        });
       });
     });
   });
@@ -447,7 +669,7 @@ describe('board tools', { concurrent: false }, () => {
           ['create_item', { title: '  ' }],
           ['create_item', {}],
           ['comment', { body: 7 }],
-          ['get_item', {}],
+          ['get_item', { item_id: 7 }],
           ['list_items', { state: 'shipped' }],
           ['transition', { to: 'somewhere' }],
           ['transition', { record: 'outcome', to: 'build_ready' }],
