@@ -412,7 +412,11 @@ function eventBody(fields: Fields): AgentEvent {
 function parseEvent(value: unknown): AgentEvent {
   const fields = object(value, 'event.event');
   const event = eventBody(fields);
-  const parent = optionalText(fields, 'parentToolCallId', fields.kind as string);
+  const parent = optionalText(
+    fields,
+    'parentToolCallId',
+    fields.kind as string,
+  );
   return parent === undefined ? event : { ...event, parentToolCallId: parent };
 }
 

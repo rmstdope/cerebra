@@ -23,7 +23,7 @@ export type ClaudeQuery = (params: {
   prompt: AsyncIterable<SDKUserMessage>;
   options: Options;
 }) => AsyncIterable<SDKMessage> & {
-  interrupt(): Promise<void>;
+  interrupt(): Promise<unknown>;
   close(): void;
 };
 

@@ -129,7 +129,7 @@ The function is tested exhaustively over every `(state, transition, actor)` trip
 ### 5.1 The runner
 
 Each agent image contains the **runner**, a small TypeScript program, and the CLIs of both
-backends. The runner reads its configuration from the gateway, drives the backend's SDK, and
+backends (in the MVP, Claude's only; §12). The runner reads its configuration from the gateway, drives the backend's SDK, and
 translates everything the SDK reports into Cerebra's event schema (D16):
 
 | Backend | SDK | Questions to the navigator | Messages mid-run | Resume |
@@ -151,22 +151,27 @@ boundary. The permission callbacks are used only to turn the agent's questions i
 
 ### 5.2 The runner protocol
 
-The runner connects to the gateway over a WebSocket on `cerebro-internal`, authenticated by the
-run token it was started with; the token identifies the run, and through it the project, the agent
-and the type. Messages:
+The runner connects to the gateway's `/runner` endpoint over a WebSocket on `cerebro-internal`,
+speaking the subprotocol `cerebra-runner.v1` and authenticated by the run token it was started with
+(`Authorization: Bearer`); the token identifies the run, and through it the project, the agent and
+the type. The gateway refuses an unknown token, another subprotocol, and a second runner for a run
+already connected, and closes a runner that sends a message it cannot read. The messages and their
+fields are typed once, in `packages/shared/src/runner-protocol.ts`, and both sides parse them there:
 
-- **Down:** `start` (backend, model, effort, instructions, first message, session to resume, MCP
-  servers, skills), `user_message`, `answer`, `fetch_files`, `interrupt`, `stop`.
-- **Up:** `event` (one normalised agent event with a sequence number), `question`, `status`
-  (active, awaiting input), `files`, `result` (cost, tokens, end reason).
+- **Down:** `start` (backend, model, effort, instructions, interactive, first message, session to
+  resume, MCP servers, skills), `user_message`, `answer`, `fetch_files`, `interrupt`, `stop`.
+- **Up:** `event` (one normalised agent event with a sequence number), and `files`. A question,
+  a status change (active, awaiting input) and a turn's or run's `result` (usage, end reason) are
+  events too, so the chat and the supervisor read one ordered stream.
 
 `fetch_files` asks the runner for named files of its checkout, and `files` returns them, each with
 its path, content type and bytes, within a size limit per call. It is how anything leaves an
 agent's checkout for the backend (mockups, §11), since the backend never reads the checkout itself
-(§7). The runner refuses a path outside `/work`.
+(§7). The runner refuses a path outside `/work`. Both arrive with the mockups (roadmap step 8).
 
-**Usage.** The runner reports usage in every `result` it sends: tokens by kind and model, the
-cost in dollars when the backend gives one (the Claude Agent SDK's `total_cost_usd`), and premium
+**Usage.** The runner reports usage in every `result` it sends: what that turn spent, as tokens
+by kind and model, the cost in dollars when the backend gives one (the Claude Agent SDK's
+`total_cost_usd`, which the runner turns from a running total into each turn's share), and premium
 requests when it gives those (Copilot; the exact field is to be confirmed against the SDK). The
 backend adds them to the run's row as they arrive, so a run that dies midway has still recorded
 what it spent. The cost views of `spec.md` §10 are queries over runs joined to the item each held;
@@ -174,7 +179,7 @@ nothing is aggregated ahead of time.
 
 The runner spools events to its home volume until the gateway acknowledges them, so a restart of
 the main container loses nothing the agent produced; on reconnect it resends from the last
-acknowledged sequence number.
+acknowledged sequence number (v1: in the MVP a runner that loses the gateway fails its run).
 
 ### 5.3 Run lifecycle and recovery
 
@@ -317,10 +322,11 @@ the ones the lifecycle depends on are the implementer's.
 
 The event schema the runner normalises both backends into, and the chat view renders. Its exact
 fields are pinned by the first increment that needs them (`roadmap.md`); the kinds are:
-`message` (assistant text, streamed as deltas), `thinking`, `tool_call` and `tool_result` (with
+`message` (assistant text; whole blocks in the MVP, streamed deltas later), `thinking`, `tool_call` and `tool_result` (with
 diffs for file edits), `subagent_start` and `subagent_end` (nesting everything between), `question`
-and `answer`, `user_message`, `status` (active, awaiting input, idle), `usage`, `error`, and
-`result` (the end of a turn or a run).
+and `answer`, `user_message`, `status` (active, awaiting input, idle), `error`, and `result` (the
+end of a turn or a run, with what it spent). The runner's fields are pinned in
+`packages/shared/src/runner-protocol.ts`.
 
 ## 11. The web UI
 
@@ -355,7 +361,9 @@ authentication.
 ## 12. Images
 
 - `cerebro-main`: the backend and the built UI.
-- `cerebro-agent`: the runner, Node, git, `gh`, the Claude CLI and the Copilot CLI.
+- `cerebro-agent`: the runner, Node, git, `gh`, the Claude CLI and the Copilot CLI. The MVP
+  image carries no Copilot CLI (`spec.md` §14); the Claude CLI is the native binary the Claude
+  Agent SDK installs for the platform.
 - A project image built `FROM cerebro-agent` from the project's `.cerebro/agent.Containerfile`,
   rebuilt rootless by the backend when that file changes on the default branch (D19). A failed
   build keeps the previous image.
