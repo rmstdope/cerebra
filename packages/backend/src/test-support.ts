@@ -10,7 +10,8 @@ import { createFleet } from './fleet.js';
 import { migrateToLatest } from './migrations/index.js';
 import { createProjectStore } from './project-registration.js';
 
-const masterKey = Buffer.alloc(32, 7).toString('base64');
+/** The master key every test project's GitHub token is encrypted with. */
+export const testMasterKey = Buffer.alloc(32, 7).toString('base64');
 
 /** A migrated, seeded schema of its own for one test, dropped afterwards. */
 export async function withTestDatabase(
@@ -43,7 +44,7 @@ export async function registerTestProject(
   name = 'website',
 ): Promise<string> {
   const id = crypto.randomUUID();
-  await createProjectStore({ database, masterKey }).create({
+  await createProjectStore({ database, masterKey: testMasterKey }).create({
     credential: 'token',
     project: {
       defaultBranch: 'main',
