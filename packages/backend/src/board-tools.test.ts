@@ -671,6 +671,18 @@ describe('board tools', { concurrent: false }, () => {
         { url: 'https://github.com/other/website/pull/482' },
         'The pull request must be in acme/website',
       ],
+      [
+        { url: 'http://github.com/acme/website/pull/482' },
+        'The pull_request record has no valid url.',
+      ],
+      [
+        { url: 'https://github.com/acme/website/pull/482/files' },
+        'The pull_request record has no valid url.',
+      ],
+      [
+        { url: 'https://gitlab.com/acme/website/-/merge_requests/482' },
+        'The pull_request record has no valid url.',
+      ],
     ])('refuses a pull request record with %o', async (change, message) => {
       await withBoard(async ({ board, caller, item, tools }) => {
         const wolverine = await caller('Storm', 'builder');
@@ -686,6 +698,35 @@ describe('board tools', { concurrent: false }, () => {
         ).toMatchObject({
           code: 'refused',
           message: expect.stringContaining(message),
+          ok: false,
+        });
+        expect(await board.getWorkItem(heldId)).toMatchObject({
+          state: 'building',
+        });
+      });
+    });
+
+    test('refuses a pull request when the project names no GitHub repository', async () => {
+      await withBoard(async ({ board, caller, database, item, tools }) => {
+        const wolverine = await caller('Storm', 'builder');
+        const heldId = await building(board, item, wolverine);
+        await tools.call(wolverine, 'submit_plan', { markdown: plan });
+        await tools.call(wolverine, 'report_checks', { passed: true });
+        await database
+          .updateTable('projects')
+          .set({ remote: 'https://example.com/acme/website.git' })
+          .execute();
+
+        expect(
+          await tools.call(wolverine, 'transition', {
+            record: pullRequest(),
+            to: 'review_ready',
+          }),
+        ).toMatchObject({
+          code: 'refused',
+          message: expect.stringContaining(
+            "This project's repository is not on GitHub",
+          ),
           ok: false,
         });
         expect(await board.getWorkItem(heldId)).toMatchObject({

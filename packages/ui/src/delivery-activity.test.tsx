@@ -335,3 +335,43 @@ test('remembers the followed link so Back returns focus to it', async () => {
   const restored = await screen.findByRole('link', { name: /^#482/ });
   await waitFor(() => expect(document.activeElement).toBe(restored));
 });
+
+test('replaces a shown trail when a later read fails', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  let fail = false;
+  show(
+    client(async () => {
+      if (fail) throw new Error('offline');
+      return activity([plan]);
+    }),
+    'building',
+    1_000,
+  );
+  expect(await screen.findByText('Plan recorded')).toBeTruthy();
+
+  fail = true;
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1_000);
+  });
+
+  expect(
+    await screen.findByText('Delivery activity couldn’t be loaded.'),
+  ).toBeTruthy();
+  expect(screen.queryByText('Plan recorded')).toBeNull();
+});
+
+test('names the reviewer generically when none is known', async () => {
+  show(
+    client(async () =>
+      activity([plan], {
+        current: { kind: 'waiting_for_review', reviewer: null },
+      }),
+    ),
+  );
+
+  expect(
+    await screen.findByText(
+      'The reviewer will review the pull request next. Nothing is needed from you.',
+    ),
+  ).toBeTruthy();
+});

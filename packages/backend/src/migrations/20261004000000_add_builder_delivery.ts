@@ -32,7 +32,7 @@ export async function up(database: Kysely<Database>): Promise<void> {
     begin
       update projects set item_sequence = item_sequence + 1
         where id = new.project_id
-        returning coalesce(nullif(key_prefix, ''), 'item'), item_sequence
+        returning coalesce(nullif(key_prefix, ''), 'ITEM'), item_sequence
         into prefix, number;
       new.key := prefix || '-' || number;
       return new;
@@ -47,7 +47,7 @@ export async function up(database: Kysely<Database>): Promise<void> {
       from work_items
     )
     update work_items
-    set key = coalesce(nullif(projects.key_prefix, ''), 'item') || '-' || numbered.number
+    set key = coalesce(nullif(projects.key_prefix, ''), 'ITEM') || '-' || numbered.number
     from numbered, projects
     where work_items.id = numbered.id and projects.id = work_items.project_id
   `.execute(database);

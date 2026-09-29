@@ -442,7 +442,7 @@ describe('database migrations', { concurrent: false }, () => {
         new Map([
           [second, ['web-1', 'feature']],
           [third, ['web-2', 'feature']],
-          [first, ['item-1', 'feature']],
+          [first, ['ITEM-1', 'feature']],
         ]),
       );
 

@@ -337,11 +337,17 @@ export function createBoardTools({
       );
     }
     const repository = repositoryOf(row.remote);
+    if (repository === null) {
+      throw new Refusal(
+        'refused',
+        `This project's repository is not on GitHub, so its pull request cannot be linked. ${nothingMoved}`,
+      );
+    }
     const url = typeof record.url === 'string' ? record.url : '';
+    // A URL this does not match is refused by the lifecycle's own pull_request check.
     const pulled =
       /^https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/pull\/\d+$/.exec(url)?.[1];
     if (
-      repository !== null &&
       pulled !== undefined &&
       pulled.toLowerCase() !== repository.toLowerCase()
     ) {

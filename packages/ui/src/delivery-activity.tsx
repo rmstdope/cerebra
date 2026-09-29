@@ -207,9 +207,8 @@ export function DeliveryActivity({
               },
         );
       } catch {
-        setRead((current) =>
-          current.kind === 'shown' ? current : { kind: 'failed' },
-        );
+        // Old activity must never look current, so a failed poll shows the failure too.
+        setRead({ kind: 'failed' });
       }
     },
     [client, itemId],
@@ -508,7 +507,7 @@ function CurrentText({
     <>
       <h4 className="font-bold">Waiting for review</h4>
       <p className="text-sm text-[var(--muted)]">
-        {current.reviewer ?? 'A reviewer'} will review the pull request next.
+        {current.reviewer ?? 'The reviewer'} will review the pull request next.
         Nothing is needed from you.
       </p>
     </>
