@@ -550,7 +550,8 @@ them (D42). A mockup is a self-contained HTML page — or an image — the desig
 checkout. `show_mockups` publishes one or more of them to the backend and puts a question in the
 chat whose options are the mockups themselves: each is rendered beside the question, can be opened
 full size, and is chosen, or answered with what to change. Rounds of mockups stay in the chat's
-history, so the navigator can go back to an earlier one.
+history, so the navigator can go back to an earlier one. A set is shown whole or not at all: if any mockup
+of it cannot be published, the navigator sees none of it and the designer is told what to fix.
 
 When the experience is agreed, the chosen mockup is kept with the item as part of the design
 record, next to the written experience, and is what the builder, reviewer and verifier see. A
