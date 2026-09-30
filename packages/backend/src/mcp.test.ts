@@ -11,17 +11,24 @@ interface FakeCaller {
 
 const token = 'run-token';
 let server: FastifyInstance | undefined;
-const calls: { args: unknown; caller: FakeCaller; name: string }[] = [];
+const calls: {
+  args: unknown;
+  caller: FakeCaller;
+  name: string;
+  signal?: AbortSignal;
+}[] = [];
 
 async function serve(
   outcome: (name: string) => Promise<ToolOutcome> = async () => ({
     ok: true,
     value: { id: 'item-1', state: 'build_ready' },
   }),
+  keepAlive?: { readonly afterMs: number; readonly everyMs: number },
 ): Promise<FastifyInstance> {
   calls.length = 0;
   server = Fastify();
   createMcpEndpoint<FakeCaller>({
+    ...(keepAlive === undefined ? {} : { keepAlive }),
     authenticate: async (tokenHash) =>
       tokenHash === hashRunToken(token) ? { runId: 'run-1' } : null,
     tools: {
@@ -32,8 +39,8 @@ async function serve(
           name: 'get_item',
         },
       ],
-      async call(caller, name, args) {
-        calls.push({ args, caller, name });
+      async call(caller, name, args, signal) {
+        calls.push({ args, caller, name, signal });
         return outcome(name);
       },
     },
@@ -138,6 +145,7 @@ describe('the MCP endpoint', () => {
         args: { to: 'build_ready' },
         caller: { runId: 'run-1' },
         name: 'transition',
+        signal: expect.any(AbortSignal),
       },
     ]);
     expect(response.json()).toEqual({
@@ -282,6 +290,93 @@ describe('the MCP endpoint', () => {
       error: { code: -32603, message: 'Internal error' },
       id: 10,
       jsonrpc: '2.0',
+    });
+  });
+
+  describe('a tool call that waits a long time, like a plan waiting for approval', () => {
+    const slow = (ms: number) => async (): Promise<ToolOutcome> => {
+      await new Promise((resolve) => setTimeout(resolve, ms));
+      return { ok: true, value: { approved: true } };
+    };
+
+    test('keeps the connection alive with an event stream, then answers in it', async () => {
+      const app = await serve(slow(120), { afterMs: 20, everyMs: 30 });
+
+      const response = await rpc(app, {
+        id: 11,
+        jsonrpc: '2.0',
+        method: 'tools/call',
+        params: { name: 'submit_plan' },
+      });
+
+      expect(response.headers['content-type']).toBe('text/event-stream');
+      const [comments, message] = [
+        response.body.split('\n\n').filter((part) => part.startsWith(':')),
+        response.body.split('\n\n').find((part) => part.startsWith('event:')),
+      ];
+      expect(comments.length).toBeGreaterThanOrEqual(2);
+      expect(message?.split('\n')[0]).toBe('event: message');
+      expect(
+        JSON.parse(message?.split('\n')[1]?.slice('data: '.length) ?? ''),
+      ).toEqual({
+        id: 11,
+        jsonrpc: '2.0',
+        result: {
+          content: [{ text: JSON.stringify({ approved: true }), type: 'text' }],
+          isError: false,
+        },
+      });
+    });
+
+    test('answers with JSON when the call is quick or the client takes only JSON', async () => {
+      for (const [ms, accept] of [
+        [0, 'application/json, text/event-stream'],
+        [60, 'application/json'],
+      ] as const) {
+        const app = await serve(slow(ms), { afterMs: 20, everyMs: 30 });
+
+        const response = await rpc(
+          app,
+          {
+            id: 12,
+            jsonrpc: '2.0',
+            method: 'tools/call',
+            params: { name: 'x' },
+          },
+          { accept },
+        );
+
+        expect(response.headers['content-type']).toContain('application/json');
+        expect(response.json()).toMatchObject({ id: 12 });
+        await server?.close();
+      }
+    });
+
+    test('abandons the call when the client goes away', async () => {
+      const app = await serve(slow(10_000), { afterMs: 20, everyMs: 30 });
+      const address = await app.listen({ host: '127.0.0.1', port: 0 });
+      const aborted = new AbortController();
+
+      const request = fetch(`${address}/mcp`, {
+        body: JSON.stringify({
+          id: 13,
+          jsonrpc: '2.0',
+          method: 'tools/call',
+          params: { name: 'submit_plan' },
+        }),
+        headers: {
+          accept: 'application/json, text/event-stream',
+          authorization: `Bearer ${token}`,
+          'content-type': 'application/json',
+        },
+        method: 'POST',
+        signal: aborted.signal,
+      }).then((response) => response.text());
+      await expect.poll(() => calls.length).toBe(1);
+      aborted.abort();
+      await request.catch(() => undefined);
+
+      await expect.poll(() => calls[0]?.signal?.aborted).toBe(true);
     });
   });
 });

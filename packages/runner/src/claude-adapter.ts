@@ -62,6 +62,9 @@ export function claudeEnvironment(
   );
 }
 
+/** How long one call to the board may wait, as for the navigator's answer to a plan. */
+export const boardCallTimeoutMs = 86_400_000;
+
 export function claudeQueryOptions(
   start: StartMessage,
   context: {
@@ -89,7 +92,14 @@ export function claudeQueryOptions(
     mcpServers: Object.fromEntries(
       Object.entries(start.mcpServers).map(([name, server]) => [
         name,
-        { type: 'http', url: server.url, headers: { ...server.headers } },
+        {
+          type: 'http',
+          url: server.url,
+          headers: { ...server.headers },
+          // A plan waits for the navigator's approval inside submit_plan (spec §4.9); Claude's
+          // own limit would otherwise end the call after minutes.
+          timeout: boardCallTimeoutMs,
+        },
       ]),
     ),
     // The SDK replaces the child's environment with this one rather than adding to it.
