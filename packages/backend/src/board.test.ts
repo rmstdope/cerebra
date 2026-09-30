@@ -724,6 +724,78 @@ describe('provenance and records', { concurrent: false }, () => {
     });
   });
 
+  test('answers an item’s agreed records by stage, each with its versions', async () => {
+    await withTestDatabase(async (database) => {
+      const board = createBoard(database);
+      const projectId = await registerTestProject(database);
+      const itemId = crypto.randomUUID();
+      await board.createWorkItem({ id: itemId, projectId, title: 'Export' });
+
+      expect(await board.stageRecords(itemId)).toEqual({ records: [] });
+
+      await board.triage(itemId, 'P2', 'build_ready');
+      const claimed = await board.claim(itemId, 'builder');
+      if (!claimed.ok) throw new Error(claimed.reason);
+      const runId = claimed.item.holderRunId ?? '';
+      await database
+        .updateTable('runs')
+        .set({ agent_name: 'Kitty' })
+        .where('id', '=', runId)
+        .execute();
+      const mockupId = crypto.randomUUID();
+      const add = (payload: Record<string, unknown>, run: string | null) =>
+        database
+          .insertInto('work_item_records')
+          .values({
+            kind: payload.kind as string,
+            payload: JSON.stringify(payload),
+            run_id: run,
+            work_item_id: itemId,
+          })
+          .execute();
+      await add({ kind: 'design', markdown: '## The mockup\nA' }, null);
+      await add({ kind: 'outcome', markdown: '## Outcome\nOne' }, runId);
+      await add({ kind: 'plan', markdown: '## Context\nPlan' }, runId);
+      await add(
+        { kind: 'design', markdown: '## The mockup\nB', mockupId },
+        runId,
+      );
+
+      const { records } = await board.stageRecords(itemId);
+      expect(records.map((record) => record.kind)).toEqual([
+        'outcome',
+        'design',
+      ]);
+      expect(records[0]?.versions).toEqual([
+        {
+          agentName: 'Kitty',
+          at: expect.any(Date) as unknown,
+          id: expect.any(String) as unknown,
+          markdown: '## Outcome\nOne',
+          mockupId: null,
+          version: 1,
+        },
+      ]);
+      expect(records[1]?.versions).toMatchObject([
+        {
+          agentName: null,
+          markdown: '## The mockup\nA',
+          mockupId: null,
+          version: 1,
+        },
+        {
+          agentName: 'Kitty',
+          markdown: '## The mockup\nB',
+          mockupId,
+          version: 2,
+        },
+      ]);
+      await expect(
+        board.stageRecords(crypto.randomUUID()),
+      ).rejects.toBeInstanceOf(WorkItemNotFoundError);
+    });
+  });
+
   test('tells an item’s delivery story in order, fifty events at a time', async () => {
     await withTestDatabase(async (database) => {
       const board = createBoard(database);
