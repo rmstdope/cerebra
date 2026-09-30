@@ -16,12 +16,16 @@ services:
       CEREBRA_GATEWAY_URL: ws://main:4317/runner
       CEREBRA_INTERNAL_NETWORK: cerebro-internal
       CEREBRA_MCP_URL: http://main:4317/mcp
+      # Drawings are served from a port of their own, so they have an origin of their own.
+      CEREBRA_MOCKUP_ADDRESS: http://localhost:4318
+      CEREBRA_MOCKUP_PORT: 4318
       CEREBRA_PODMAN_SOCKET: /run/podman/podman.sock
       CEREBRA_PROJECT_TOKEN_KEY_FILE: /run/secrets/cerebra-project-token-key
       DATABASE_URL: postgresql://cerebra:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/cerebra
       TZ: ${CEREBRA_TIMEZONE:-UTC}
     ports:
       - '127.0.0.1:4317:4317'
+      - '127.0.0.1:4318:4318'
     volumes:
       - cerebra-data:/data
       - ${CEREBRA_BACKUP_DIR:?Start Cerebra with ./cerebra, which prepares the backup folder}:/backups
