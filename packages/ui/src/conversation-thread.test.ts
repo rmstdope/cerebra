@@ -399,13 +399,13 @@ const drawingsRound = (drawingsId: string, question: string): RunEvent => ({
       cost: 'One click; the toolbar gets busier',
       label: 'A · Button in the toolbar',
       recommended: true,
-      url: '/drawings/a.html',
+      mockupId: 'mockup-a',
     },
     {
       cost: 'Tidy toolbar; one extra click',
       label: 'B · Inside the ⋯ menu',
       recommended: false,
-      url: null,
+      mockupId: null,
     },
   ],
   drawingsId,
@@ -459,7 +459,7 @@ test('a round of drawings is open until answered, and a newer round supersedes i
   ]);
   expect(items[0]).toMatchObject({
     choice: null,
-    drawings: [{ label: 'A · Button in the toolbar' }, { url: null }],
+    drawings: [{ label: 'A · Button in the toolbar' }, { mockupId: null }],
     drawingsId: 'd-1',
     question: 'Where should the export live?',
   });
@@ -563,7 +563,7 @@ test('a design’s drawing section finds the newest round that showed it', () =>
   );
 
   expect(drawingNamed(items, ' A · Button in the toolbar ')).toMatchObject({
-    url: '/drawings/a.html',
+    mockupId: 'mockup-a',
   });
   expect(
     drawingNamed(items, 'A · Button in the toolbar\nWith a smaller icon.'),

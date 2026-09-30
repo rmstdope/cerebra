@@ -1,3 +1,4 @@
+import { mockupEscapeMessage } from '@cerebra/shared';
 import type { Kysely } from 'kysely';
 import { describe, expect, test } from 'vitest';
 
@@ -7,7 +8,6 @@ import {
   MockupError,
   mockupContentSecurityPolicy,
   mockupDocument,
-  mockupEscapeMessage,
 } from './mockups.js';
 import { registerTestProject, withTestDatabase } from './test-support.js';
 

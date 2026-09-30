@@ -1,38 +1,60 @@
 import {
+  act,
   cleanup,
-  render,
+  fireEvent,
+  render as renderPlain,
   screen,
   waitFor,
   within,
 } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import type { ReactElement } from 'react';
 import { afterEach, expect, test, vi } from 'vitest';
 
-import type { Drawing } from '@cerebra/shared';
+import { mockupEscapeMessage, type Drawing } from '@cerebra/shared';
 
 import { DrawingCards, DrawingsRoundView } from './drawing-cards';
 import type { DrawingsItem } from './conversation-thread';
+import { MockupLocatorContext, type LocateMockup } from './mockups';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
+
+const served = (id: string) => `http://localhost:4318/mockups/${id}`;
+
+function render(
+  ui: ReactElement,
+  locate: LocateMockup = async (id) => served(id),
+) {
+  return renderPlain(
+    <MockupLocatorContext.Provider value={locate}>
+      {ui}
+    </MockupLocatorContext.Provider>,
+  );
+}
+
+const card = (index: number) => screen.getAllByRole('listitem')[index]!;
 
 const drawings: readonly Drawing[] = [
   {
     cost: 'Always visible; takes toolbar room.',
     label: 'A · Button in the toolbar',
     recommended: true,
-    url: '/drawings/a.html',
+    mockupId: 'mockup-a',
   },
   {
     cost: 'Tidier; one extra click.',
     label: 'B · Inside the ⋯ menu',
     recommended: false,
-    url: null,
+    mockupId: null,
   },
   {
     cost: 'Hard to miss.',
     label: 'C · Floating button',
     recommended: false,
-    url: '/drawings/c.html',
+    mockupId: 'mockup-c',
   },
 ];
 
@@ -53,12 +75,6 @@ test('each drawing is a card with its preview, label, cost and recommendation', 
   const cards = screen.getAllByRole('listitem');
   expect(cards).toHaveLength(3);
   const first = within(cards[0]!);
-  expect(
-    first.getByTitle('A · Button in the toolbar').getAttribute('src'),
-  ).toBe('/drawings/a.html');
-  expect(
-    first.getByTitle('A · Button in the toolbar').getAttribute('sandbox'),
-  ).toBe('allow-scripts');
   expect(first.getByText('A · Button in the toolbar')).toBeTruthy();
   expect(
     first.getByText(
@@ -237,4 +253,198 @@ test('an answered, superseded or withdrawn round shows its drawings without choo
   }
   render(<DrawingsRoundView live={false} name="Iris" round={round()} />);
   expect(screen.queryByRole('button', { name: /^Choose/ })).toBeNull();
+});
+
+test('a card previews its drawing as a still picture Tab never enters', async () => {
+  const { container } = render(
+    <DrawingCards drawings={drawings} name="Iris" onChoose={vi.fn()} />,
+  );
+
+  const frame = await waitFor(() => {
+    const found = card(0).querySelector('iframe');
+    expect(found).not.toBeNull();
+    return found!;
+  });
+  expect(frame.getAttribute('src')).toBe(served('mockup-a'));
+  expect(frame.getAttribute('sandbox')).toBe('');
+  expect(frame.hasAttribute('inert')).toBe(true);
+  expect(frame.getAttribute('tabindex')).toBe('-1');
+  expect(frame.getAttribute('aria-hidden')).toBe('true');
+  expect(container.querySelectorAll('[aria-busy="true"]')).toHaveLength(2);
+
+  fireEvent.load(frame);
+  expect(card(0).querySelector('[aria-busy="true"]')).toBeNull();
+  expect(within(card(0)).getByText('A · Button in the toolbar')).toBeTruthy();
+});
+
+test('clicking a card preview opens that drawing full size', async () => {
+  const user = userEvent.setup();
+  render(<DrawingCards drawings={drawings} name="Iris" onChoose={vi.fn()} />);
+  const preview = await waitFor(() => {
+    const found = card(2).querySelector<HTMLElement>('.cursor-zoom-in');
+    expect(found).not.toBeNull();
+    return found!;
+  });
+
+  await user.click(preview);
+  expect(
+    screen.getByRole('dialog', { name: 'C · Floating button' }),
+  ).toBeTruthy();
+});
+
+test('a card whose drawing is not found says so and tries again on request', async () => {
+  const user = userEvent.setup();
+  const locate = vi
+    .fn<LocateMockup>()
+    .mockRejectedValueOnce(new Error('Request failed with status 404.'))
+    .mockImplementation(async (id) => served(id));
+  render(
+    <DrawingCards drawings={[drawings[0]!]} name="Iris" onChoose={vi.fn()} />,
+    locate,
+  );
+
+  const retry = await within(card(0)).findByRole('button', {
+    name: 'Try again',
+  });
+  expect(
+    within(card(0)).getByText('This drawing couldn’t be shown.'),
+  ).toBeTruthy();
+  expect(card(0).querySelector('iframe')).toBeNull();
+  expect(
+    within(card(0)).getByRole('button', { name: 'Open full size' }),
+  ).toBeTruthy();
+
+  await user.click(retry);
+  const frame = await waitFor(() => {
+    const found = card(0).querySelector('iframe');
+    expect(found).not.toBeNull();
+    return found!;
+  });
+  expect(card(0).querySelector('[aria-busy="true"]')).not.toBeNull();
+  expect(locate).toHaveBeenCalledTimes(2);
+  fireEvent.load(frame);
+  expect(
+    within(card(0)).queryByText('This drawing couldn’t be shown.'),
+  ).toBeNull();
+});
+
+test('a drawing with nothing stored fails without asking where it is', async () => {
+  const locate = vi.fn<LocateMockup>();
+  render(<DrawingCards drawings={[drawings[1]!]} name="Iris" />, locate);
+
+  expect(
+    await within(card(0)).findByRole('button', { name: 'Try again' }),
+  ).toBeTruthy();
+  expect(locate).not.toHaveBeenCalled();
+});
+
+test('a drawing that never finishes loading fails after twenty seconds', async () => {
+  vi.useFakeTimers();
+  render(<DrawingCards drawings={[drawings[0]!]} name="Iris" />);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(19_000);
+  });
+  expect(card(0).querySelector('iframe')).not.toBeNull();
+  expect(
+    within(card(0)).queryByText('This drawing couldn’t be shown.'),
+  ).toBeNull();
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1_000);
+  });
+  expect(
+    within(card(0)).getByText('This drawing couldn’t be shown.'),
+  ).toBeTruthy();
+  expect(card(0).querySelector('iframe')).toBeNull();
+});
+
+test('full size runs the drawing live and closes when Escape is pressed inside it', async () => {
+  const user = userEvent.setup();
+  render(<DrawingCards drawings={drawings} name="Iris" onChoose={vi.fn()} />);
+  const opener = within(card(0)).getByRole('button', {
+    name: 'Open full size',
+  });
+  await user.click(opener);
+  const dialog = screen.getByRole('dialog');
+  const frame = await waitFor(() => {
+    const found = dialog.querySelector('iframe');
+    expect(found).not.toBeNull();
+    return found!;
+  });
+  expect(frame.getAttribute('sandbox')).toBe('allow-scripts');
+  expect(frame.getAttribute('title')).toBe('A · Button in the toolbar');
+  expect(frame.hasAttribute('inert')).toBe(false);
+
+  fireEvent(
+    window,
+    new MessageEvent('message', { data: mockupEscapeMessage, source: window }),
+  );
+  expect(screen.queryByRole('dialog')).not.toBeNull();
+  fireEvent(
+    window,
+    new MessageEvent('message', {
+      data: 'something else',
+      source: frame.contentWindow,
+    }),
+  );
+  expect(screen.queryByRole('dialog')).not.toBeNull();
+
+  fireEvent(
+    window,
+    new MessageEvent('message', {
+      data: mockupEscapeMessage,
+      source: frame.contentWindow,
+    }),
+  );
+  expect(screen.queryByRole('dialog')).toBeNull();
+  await waitFor(() => expect(document.activeElement).toBe(opener));
+});
+
+test('tabbing out of the live drawing lands on the dialog controls', async () => {
+  const user = userEvent.setup();
+  render(<DrawingCards drawings={drawings} name="Iris" onChoose={vi.fn()} />);
+  await user.click(
+    within(card(0)).getByRole('button', { name: 'Open full size' }),
+  );
+  const dialog = screen.getByRole('dialog');
+  const sentinel = dialog.querySelector<HTMLElement>('[data-focus-return]');
+  expect(sentinel).not.toBeNull();
+
+  act(() => sentinel!.focus());
+  expect(document.activeElement).toBe(
+    within(dialog).getByRole('button', { name: '‹ Previous' }),
+  );
+});
+
+test('full size fails with its controls still usable, and tries again', async () => {
+  const user = userEvent.setup();
+  const locate = vi
+    .fn<LocateMockup>()
+    .mockImplementationOnce(async (id) => served(id))
+    .mockRejectedValueOnce(new Error('Request failed with status 404.'))
+    .mockImplementation(async (id) => served(id));
+  render(
+    <DrawingCards drawings={[drawings[0]!]} name="Iris" onChoose={vi.fn()} />,
+    locate,
+  );
+  await user.click(
+    within(card(0)).getByRole('button', { name: 'Open full size' }),
+  );
+  const dialog = screen.getByRole('dialog');
+
+  const retry = await within(dialog).findByRole('button', {
+    name: 'Try again',
+  });
+  expect(
+    within(dialog).getByText('This drawing couldn’t be shown.'),
+  ).toBeTruthy();
+  for (const name of ['‹ Previous', 'Next ›', 'Choose A', 'Close']) {
+    expect(within(dialog).getByRole('button', { name })).toBeTruthy();
+  }
+
+  await user.click(retry);
+  await waitFor(() => expect(dialog.querySelector('iframe')).not.toBeNull());
+  expect(
+    within(dialog).queryByText('This drawing couldn’t be shown.'),
+  ).toBeNull();
 });

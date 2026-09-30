@@ -1,4 +1,5 @@
 import {
+  useContext,
   useEffect,
   useId,
   useRef,
@@ -7,11 +8,12 @@ import {
   type ReactNode,
 } from 'react';
 
-import type { Drawing } from '@cerebra/shared';
+import { mockupEscapeMessage, type Drawing } from '@cerebra/shared';
 
 import { timeOf } from './conversation-activity';
 import type { DrawingsItem } from './conversation-thread';
 import { trapFocus } from './focus-trap';
+import { MockupLocatorContext } from './mockups';
 import type { DrawingsReply } from './runs';
 
 /** The short name a drawing is chosen by: "A" of "A · Button in the toolbar". */
@@ -20,35 +22,128 @@ export function letterOf(drawing: Drawing, index: number): string {
   return match?.[1] ?? String.fromCharCode(65 + (index % 26));
 }
 
-/** A drawing as the designer made it, in a frame of its own; or why it cannot be shown. */
+/** How long a drawing may take to appear before it counts as not shown. */
+export const drawingLoadLimitMs = 20_000;
+
+type Showing =
+  | { readonly state: 'loading'; readonly url: string | null }
+  | { readonly state: 'shown'; readonly url: string }
+  | { readonly state: 'failed' };
+
+/**
+ * A drawing as the designer made it, served from an origin of its own (architecture §11): in a
+ * card, a still picture a quarter of its size that opens full size when clicked; full size, live.
+ * While it loads a shimmer stands in for it; if it cannot be shown, it says so and offers to try
+ * again.
+ */
 export function DrawingPreview({
   drawing,
   large = false,
+  onOpen,
 }: {
   readonly drawing: Drawing;
   readonly large?: boolean;
+  readonly onOpen?: () => void;
 }): ReactNode {
-  const box = `w-full rounded-lg border border-[var(--border)] bg-white ${
+  const locate = useContext(MockupLocatorContext);
+  const [attempt, setAttempt] = useState(0);
+  const [showing, setShowing] = useState<Showing>({
+    state: 'loading',
+    url: null,
+  });
+  const { mockupId } = drawing;
+
+  useEffect(() => {
+    if (mockupId === null) {
+      setShowing({ state: 'failed' });
+      return;
+    }
+    let current = true;
+    setShowing({ state: 'loading', url: null });
+    const limit = setTimeout(() => {
+      if (current) setShowing({ state: 'failed' });
+    }, drawingLoadLimitMs);
+    locate(mockupId).then(
+      (url) => {
+        if (current) {
+          setShowing((was) =>
+            was.state === 'loading' ? { state: 'loading', url } : was,
+          );
+        }
+      },
+      () => {
+        if (current) setShowing({ state: 'failed' });
+      },
+    );
+    return () => {
+      current = false;
+      clearTimeout(limit);
+    };
+  }, [attempt, locate, mockupId]);
+
+  const box = `relative w-full overflow-hidden rounded-lg border border-[var(--border)] bg-white dark:bg-[var(--background)] ${
     large ? 'min-h-0 flex-1' : 'h-32'
   }`;
-  if (drawing.url === null) {
+
+  if (showing.state === 'failed') {
     return (
       <div
-        className={`${box} grid place-items-center p-2 text-center text-sm text-[var(--muted)] dark:bg-[var(--background)]`}
+        className={`${box} flex flex-col items-center justify-center gap-2 p-2 text-center text-sm text-[var(--muted)]`}
       >
         This drawing couldn’t be shown.
+        <button
+          className="secondary-button text-sm"
+          onClick={() => setAttempt((count) => count + 1)}
+          type="button"
+        >
+          Try again
+        </button>
       </div>
     );
   }
+
+  const loading = showing.state === 'loading';
+  const url = showing.url;
   return (
-    // The drawing runs its own scripts in a sandbox, away from the application's origin.
-    <iframe
-      className={`${box} ${large ? '' : 'pointer-events-none'}`}
-      sandbox="allow-scripts"
-      src={drawing.url}
-      tabIndex={-1}
-      title={drawing.label}
-    />
+    <div aria-busy={loading ? true : undefined} className={box}>
+      {url === null ? null : large ? (
+        // Live, in a sandbox without the application's origin; it forwards Escape by message.
+        <iframe
+          className={`h-full w-full border-0 ${loading ? 'invisible' : ''}`}
+          key={attempt}
+          onLoad={() => setShowing({ state: 'shown', url })}
+          sandbox="allow-scripts"
+          src={url}
+          title={drawing.label}
+        />
+      ) : (
+        // A still picture: no scripts, no focus, no pointer; drawn at four times the card's size.
+        <iframe
+          aria-hidden="true"
+          className={`pointer-events-none absolute left-0 top-0 h-[400%] w-[400%] origin-top-left scale-25 border-0 ${
+            loading ? 'invisible' : ''
+          }`}
+          inert
+          key={attempt}
+          onLoad={() => setShowing({ state: 'shown', url })}
+          sandbox=""
+          src={url}
+          tabIndex={-1}
+          title={drawing.label}
+        />
+      )}
+      {loading ? (
+        <div className="absolute inset-0 animate-pulse bg-[var(--border)] motion-reduce:animate-none" />
+      ) : null}
+      {onOpen === undefined ? null : (
+        // A pointer shortcut to "Open full size", which keyboards already reach.
+        <div
+          aria-hidden="true"
+          className="absolute inset-0 cursor-zoom-in"
+          onClick={onOpen}
+        />
+      )}
+    </div>
   );
 }
 
@@ -70,12 +165,31 @@ function DrawingDialog({
 }): ReactNode {
   const id = useId();
   const close = useRef<HTMLButtonElement>(null);
+  const first = useRef<HTMLButtonElement>(null);
+  const area = useRef<HTMLDivElement>(null);
   const drawing = drawings[index]!;
   const count = drawings.length;
 
   useEffect(() => {
     close.current?.focus();
   }, []);
+
+  // Keys pressed inside the live drawing stay in its frame; it posts Escape here instead.
+  useEffect(() => {
+    const onMessage = (event: MessageEvent) => {
+      const frame = area.current?.querySelector('iframe');
+      if (
+        frame !== null &&
+        frame !== undefined &&
+        event.source === frame.contentWindow &&
+        event.data === mockupEscapeMessage
+      ) {
+        onClose();
+      }
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [onClose]);
 
   return (
     <div
@@ -95,6 +209,7 @@ function DrawingDialog({
           <button
             className="secondary-button text-sm"
             onClick={() => onIndex((index - 1 + count) % count)}
+            ref={first}
             type="button"
           >
             ‹ Previous
@@ -126,9 +241,15 @@ function DrawingDialog({
           </button>
         </div>
         <p className="sr-only">{`${name} drew this for you to choose from.`}</p>
-        <div className="mt-3 flex min-h-0 flex-1 flex-col">
-          <DrawingPreview drawing={drawing} large />
+        <div className="mt-3 flex min-h-0 flex-1 flex-col" ref={area}>
+          <DrawingPreview drawing={drawing} key={index} large />
         </div>
+        {/* Tab out of the live drawing comes back to the dialog's first control. */}
+        <div
+          data-focus-return=""
+          onFocus={() => first.current?.focus()}
+          tabIndex={0}
+        />
       </section>
     </div>
   );
@@ -166,7 +287,10 @@ export function DrawingCards({
             className="flex min-w-0 flex-col rounded-xl border border-[var(--border)] bg-[var(--surface)] p-2"
             key={drawing.label}
           >
-            <DrawingPreview drawing={drawing} />
+            <DrawingPreview
+              drawing={drawing}
+              onOpen={() => setShown({ at: index, from: index })}
+            />
             <b className="mt-2 break-words px-0.5">{drawing.label}</b>
             <span className="mb-2 break-words px-0.5 text-sm text-[var(--muted)]">
               {drawing.recommended

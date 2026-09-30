@@ -1203,13 +1203,13 @@ function drawingsRound(drawingsId: string, question: string): RunEvent {
         cost: 'Always visible; takes toolbar room.',
         label: 'A · Button in the toolbar',
         recommended: true,
-        url: '/drawings/a.html',
+        mockupId: 'mockup-a',
       },
       {
         cost: 'Tidier; one extra click.',
         label: 'B · Inside the ⋯ menu',
         recommended: false,
-        url: '/drawings/b.html',
+        mockupId: 'mockup-b',
       },
     ],
     drawingsId,
@@ -1426,7 +1426,7 @@ test('the designer confirms the agreed experience as one focused form', async ()
   expect(
     within(form).getByText('"Export CSV"; "Nothing to export"'),
   ).toBeTruthy();
-  expect(within(form).getByTitle('A · Button in the toolbar')).toBeTruthy();
+  expect(within(form).getByText('A · Button in the toolbar')).toBeTruthy();
   expect(
     within(form).queryByRole('button', { name: /Change something/ }),
   ).toBeNull();

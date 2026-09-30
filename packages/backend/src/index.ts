@@ -283,7 +283,6 @@ export {
   mockupContentSecurityPolicy,
   mockupContentTypes,
   mockupDocument,
-  mockupEscapeMessage,
   mockupOrigin,
   type Mockup,
   type MockupContentType,

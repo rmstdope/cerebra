@@ -16,13 +16,13 @@ const round = {
       label: 'A · Button in the toolbar',
       cost: 'One click; the toolbar gets busier',
       recommended: true,
-      url: '/drawings/a.html',
+      mockupId: 'mockup-a',
     },
     {
       label: 'B · Inside the ⋯ menu',
       cost: 'Tidy toolbar; one extra click',
       recommended: false,
-      url: null,
+      mockupId: null,
     },
   ],
 };

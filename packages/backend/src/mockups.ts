@@ -1,3 +1,4 @@
+import { mockupEscapeMessage } from '@cerebra/shared';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { Kysely } from 'kysely';
 
@@ -107,9 +108,6 @@ export const mockupContentSecurityPolicy = [
   "form-action 'none'",
   "base-uri 'none'",
 ].join('; ');
-
-/** What a drawing tells the page that shows it when Escape is pressed inside it. */
-export const mockupEscapeMessage = 'cerebra-mockup:escape';
 
 // Keys pressed inside the frame never reach the page, so the dialog hears Escape by message.
 const escapeForward = `<script>addEventListener('keydown',function(e){if(e.key==='Escape')parent.postMessage(${JSON.stringify(mockupEscapeMessage)},'*')},true)</script>`;

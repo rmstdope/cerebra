@@ -95,14 +95,17 @@ interface Nested {
 /** What the navigator answered a plan with (spec §4.9). */
 export type PlanVerdict = 'approved' | 'changes';
 
+/** What a served drawing posts to the page showing it when Escape is pressed inside it. */
+export const mockupEscapeMessage = 'cerebra-mockup:escape';
+
 /** One drawing of a designer's round (spec §6.3). */
 export interface Drawing {
   readonly label: string;
   /** What choosing it costs, in a line. */
   readonly cost: string;
   readonly recommended: boolean;
-  /** Where the drawing is served; null when it cannot be shown. */
-  readonly url: string | null;
+  /** The stored drawing (architecture §11); null when it cannot be shown. */
+  readonly mockupId: string | null;
 }
 
 export type AgentEvent = Nested &
