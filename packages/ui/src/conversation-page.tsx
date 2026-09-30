@@ -36,6 +36,7 @@ import {
   browserConversationClient,
   type Conversation,
   type ConversationClient,
+  type PlanVerdict,
   type Question,
   type RecordedEvent,
   type RunState,
@@ -70,6 +71,15 @@ function openQuestionOf(events: readonly RecordedEvent[]): OpenQuestion | null {
   return null;
 }
 
+function hasOpenPlan(events: readonly RecordedEvent[]): boolean {
+  let open = false;
+  for (const { event } of events) {
+    if (event.kind === 'plan_approval') open = true;
+    if (event.kind === 'plan_answer') open = false;
+  }
+  return open;
+}
+
 function activityOf(events: readonly RecordedEvent[]): string[] {
   return events
     .filter(isTopLevel)
@@ -86,12 +96,12 @@ function activityOf(events: readonly RecordedEvent[]): string[] {
 
 function shownState(
   state: RunState,
-  question: OpenQuestion | null,
+  waitingForYou: boolean,
   hasMessages: boolean,
 ): Shown {
   if (state === 'finished') return 'finished';
   if (state === 'failed') return 'failed';
-  if (question !== null) return 'waiting';
+  if (waitingForYou) return 'waiting';
   if (state === 'active') return 'working';
   return hasMessages && state === 'starting' ? 'working' : 'ready';
 }
@@ -461,7 +471,8 @@ export function ConversationPage({
     conversation !== null &&
     conversation.run.state !== 'finished' &&
     conversation.run.state !== 'failed' &&
-    openQuestionOf(conversation.events) !== null;
+    (openQuestionOf(conversation.events) !== null ||
+      hasOpenPlan(conversation.events));
 
   useEffect(() => {
     if (loaded && !formShown.current) composer.current?.focus();
@@ -509,7 +520,12 @@ export function ConversationPage({
   const items = buildThread(events);
   const hasMessages = items.length > 0 || pending.length > 0;
   const question = openQuestionOf(events);
-  const shown = shownState(run.state, question, hasMessages);
+  const planOpen = hasOpenPlan(events);
+  const shown = shownState(
+    run.state,
+    question !== null || planOpen,
+    hasMessages,
+  );
   const live = shown !== 'finished' && shown !== 'failed';
   const activity = activityOf(events);
   const newestAssistant = [...items]
@@ -527,7 +543,16 @@ export function ConversationPage({
       onOpenItem === undefined || projectId === null
         ? undefined
         : (itemId: string) => onOpenItem(projectId, itemId),
+    onAnswerPlan: async (
+      planId: number,
+      verdict: PlanVerdict,
+      text: string,
+    ) => {
+      following.current = true;
+      await client.answerPlan(runId, planId, verdict, text);
+    },
     onRetryOutcome: () => void sendText('Try again.', false),
+    planTitle: run.item?.title ?? '',
     retryKey,
   };
 

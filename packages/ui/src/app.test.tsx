@@ -101,6 +101,7 @@ afterEach(() => {
 
 const emptyQueue: QueueClient = {
   answer: async () => undefined,
+  answerPlan: async () => undefined,
   decide: async () => undefined,
   list: async () => ({ entries: [], notices: [], total: 0 }),
 };
@@ -916,6 +917,7 @@ describe('App', () => {
       const read: string[] = [];
       const conversationClient: ConversationClient = {
         answer: async () => undefined,
+        answerPlan: async () => undefined,
         read: async (id) => {
           read.push(id);
           return {
@@ -984,6 +986,7 @@ describe('App', () => {
     const runId = '7c3c4a8e-8f0e-4c7a-9d57-1f2a3b4c5d6e';
     const conversationClient: ConversationClient = {
       answer: async () => undefined,
+      answerPlan: async () => undefined,
       read: async (id) => ({
         events: [
           {
@@ -1097,6 +1100,7 @@ describe('App', () => {
     };
     const conversationClient: ConversationClient = {
       answer: async () => undefined,
+      answerPlan: async () => undefined,
       read: async (id) => ({
         events: [
           {

@@ -43,7 +43,77 @@ export type ThreadItem =
       /** A groomer's move out of grooming that the backend refused. */
       readonly kind: 'outcome_failed';
       readonly key: string;
-    };
+    }
+  | PlanItem;
+
+/** One section of a plan card, under the card's own heading. */
+export interface PlanSection {
+  readonly title: string;
+  readonly text: string;
+}
+
+/**
+ * A builder's plan at the plan checkpoint (spec §4.9). `open` waits for an answer; `superseded`
+ * was replaced by a newer plan before it was answered.
+ */
+export interface PlanItem {
+  readonly kind: 'plan';
+  readonly key: string;
+  readonly at: string;
+  readonly planId: number;
+  readonly revised: boolean;
+  readonly sections: readonly PlanSection[];
+  status: 'open' | 'superseded' | 'approved' | 'changes';
+  request: string | null;
+}
+
+/** Where each card section comes from in the plan record (spec §3). */
+const planSources: readonly {
+  readonly title: string;
+  readonly heading: string;
+  readonly sub?: string;
+}[] = [
+  { heading: 'Files to change, and what to reuse', title: 'Files to change' },
+  { heading: 'Context', title: 'What’s new' },
+  { heading: 'Increments', title: 'Increments' },
+  {
+    heading: 'User-facing decisions',
+    sub: 'Decided by me',
+    title: 'Decisions I made that the design left open',
+  },
+];
+
+function headed(text: string, marker: string): Map<string, string> {
+  const found = new Map<string, string>();
+  let current: string | null = null;
+  let lines: string[] = [];
+  const close = () => {
+    if (current !== null) found.set(current, lines.join('\n').trim());
+  };
+  for (const line of text.split(/\r?\n/)) {
+    if (line.startsWith(`${marker} `)) {
+      close();
+      current = line.slice(marker.length + 1).trim();
+      lines = [];
+    } else {
+      lines.push(line);
+    }
+  }
+  close();
+  return found;
+}
+
+/** The plan card's sections, in the card's order; an empty section is left out. */
+export function planSectionsOf(markdown: string): PlanSection[] {
+  const sections = headed(markdown, '##');
+  return planSources.flatMap(({ heading, sub, title }) => {
+    const body = sections.get(heading) ?? '';
+    const subs = sub === undefined ? null : headed(body, '###');
+    const text =
+      subs === null || subs.size === 0 ? body : (subs.get(sub!) ?? '');
+    return text === '' ? [] : [{ text, title }];
+  });
+}
 
 const createItem = 'mcp__cerebra__create_item';
 const transition = 'mcp__cerebra__transition';
@@ -94,6 +164,8 @@ export function buildThread(events: readonly RecordedEvent[]): ThreadItem[] {
   const helpers = new Map<string, HelperItem>();
   const steps = new Map<string, { step: StepItem; in: ThreadItem[] }>();
   const questions = new Map<string, readonly Question[]>();
+  const plans = new Map<number, PlanItem>();
+  let lastPlan: PlanItem | null = null;
 
   for (const record of events) {
     const { event } = record;
@@ -149,6 +221,37 @@ export function buildThread(events: readonly RecordedEvent[]): ThreadItem[] {
       case 'subagent_end': {
         const helper = helpers.get(event.toolCallId);
         if (helper !== undefined) helper.end = { isError: event.isError };
+        break;
+      }
+      case 'plan_approval': {
+        if (lastPlan?.status === 'open') lastPlan.status = 'superseded';
+        const plan: PlanItem = {
+          at,
+          key: `plan-${event.planId}`,
+          kind: 'plan',
+          planId: event.planId,
+          request: null,
+          revised: lastPlan !== null,
+          sections: planSectionsOf(event.markdown),
+          status: 'open',
+        };
+        plans.set(event.planId, plan);
+        lastPlan = plan;
+        root.push(plan);
+        break;
+      }
+      case 'plan_answer': {
+        const plan = plans.get(event.planId);
+        if (plan !== undefined) {
+          plan.status = event.verdict;
+          plan.request = event.verdict === 'changes' ? event.text : null;
+        }
+        root.push({
+          at,
+          key,
+          kind: 'navigator',
+          text: event.verdict === 'approved' ? 'Plan approved.' : event.text,
+        });
         break;
       }
       case 'question':

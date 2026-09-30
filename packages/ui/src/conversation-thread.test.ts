@@ -6,6 +6,7 @@ import {
   exitCodeOf,
   fileChangeOf,
   lineDiff,
+  planSectionsOf,
   stepCountOf,
   type ThreadItem,
 } from './conversation-thread';
@@ -336,4 +337,57 @@ test('a filed item is a line naming it, and a refused outcome move is a failure'
       title: 'Bulk export for credit notes',
     }),
   ).toBe('Filed “Bulk export for credit notes”');
+});
+
+test('a plan without a Decided by me heading shows its whole decisions section; empty sections are left out', () => {
+  expect(
+    planSectionsOf(
+      [
+        '## Context',
+        '',
+        '## Increments',
+        '1. One',
+        '## User-facing decisions',
+        'Named after the date.',
+      ].join('\n'),
+    ),
+  ).toEqual([
+    { text: '1. One', title: 'Increments' },
+    {
+      text: 'Named after the date.',
+      title: 'Decisions I made that the design left open',
+    },
+  ]);
+});
+
+test('a plan answered with changes, then revised, keeps each card in its own state', () => {
+  const plan = (planId: number): RunEvent => ({
+    kind: 'plan_approval',
+    markdown: '## Increments\n1. One',
+    planId,
+  });
+  const items = buildThread(
+    [
+      plan(1),
+      { kind: 'plan_answer', planId: 1, text: 'More.', verdict: 'changes' },
+      plan(2),
+      plan(3),
+    ].map((event, index) => ({
+      createdAt: '2026-10-01T09:30:00.000Z',
+      event,
+      position: index + 1,
+    })),
+  );
+  expect(
+    items.map((item) =>
+      item.kind === 'plan'
+        ? [item.status, item.revised, item.request]
+        : [item.kind],
+    ),
+  ).toEqual([
+    ['changes', false, 'More.'],
+    ['navigator'],
+    ['superseded', true, null],
+    ['open', true, null],
+  ]);
 });

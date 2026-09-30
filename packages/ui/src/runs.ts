@@ -13,6 +13,9 @@ export interface Question {
   readonly options: readonly QuestionOption[];
 }
 
+/** The navigator's answer to a builder's plan. */
+export type PlanVerdict = 'approved' | 'changes';
+
 /** The runner's events as the backend records them; kinds the page does not show pass through. */
 export type RunEvent = { readonly parentToolCallId?: string } & (
   | { readonly kind: 'message'; readonly text: string }
@@ -49,6 +52,17 @@ export type RunEvent = { readonly parentToolCallId?: string } & (
       readonly kind: 'answer';
       readonly questionId: string;
       readonly answers: Readonly<Record<string, string>>;
+    }
+  | {
+      readonly kind: 'plan_approval';
+      readonly planId: number;
+      readonly markdown: string;
+    }
+  | {
+      readonly kind: 'plan_answer';
+      readonly planId: number;
+      readonly verdict: PlanVerdict;
+      readonly text: string;
     }
   | { readonly kind: 'status'; readonly status: 'active' | 'awaiting_input' }
   | { readonly kind: 'thinking' | 'error' | 'result' }
@@ -93,6 +107,13 @@ export interface ConversationClient {
     runId: string,
     questionId: string,
     answers: Readonly<Record<string, string>>,
+  ): Promise<void>;
+  /** Approves a waiting plan, or asks for the changes in `text`. */
+  answerPlan(
+    runId: string,
+    planId: number,
+    verdict: PlanVerdict,
+    text: string,
   ): Promise<void>;
   stop(runId: string): Promise<void>;
   /** Streams what happens after `after`; answers a function that stops listening. */
@@ -148,6 +169,9 @@ export const browserConversationClient: ConversationClient = {
   },
   answer: async (runId, questionId, answers) => {
     await post(`/api/runs/${runId}/answers`, { answers, questionId });
+  },
+  answerPlan: async (runId, planId, verdict, text) => {
+    await post(`/api/runs/${runId}/plan-answers`, { planId, text, verdict });
   },
   stop: async (runId) => {
     await post(`/api/runs/${runId}/stop`);

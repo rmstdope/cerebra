@@ -76,9 +76,7 @@ test('saves Approve plans', async () => {
   await userEvent.click(screen.getByRole('button', { name: 'Save' }));
 
   expect(await screen.findByText('Saved.')).toBeTruthy();
-  expect(client.saved).toEqual([
-    { involvement: 'plan', reviewAccount: null },
-  ]);
+  expect(client.saved).toEqual([{ involvement: 'plan', reviewAccount: null }]);
 });
 
 test('asks for the account when code review is chosen, focusing the empty field', async () => {
@@ -90,7 +88,9 @@ test('asks for the account when code review is chosen, focusing the empty field'
   );
   const account = screen.getByLabelText('Your GitHub account for reviews');
   expect(document.activeElement).toBe(account);
-  expect(screen.getByText('Only a review from this account counts.')).toBeTruthy();
+  expect(
+    screen.getByText('Only a review from this account counts.'),
+  ).toBeTruthy();
 
   await userEvent.click(screen.getByRole('button', { name: 'Save' }));
   expect(
@@ -154,9 +154,9 @@ test('says when a save failed and when the server refused the account', async ()
 
   refuse = false;
   await userEvent.click(screen.getByRole('button', { name: 'Save' }));
-  expect(
-    (await screen.findByRole('alert')).textContent,
-  ).toBe("Settings weren't saved. Try again.");
+  expect((await screen.findByRole('alert')).textContent).toBe(
+    "Settings weren't saved. Try again.",
+  );
 });
 
 test('never shows a failed read as the default', async () => {

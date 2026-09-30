@@ -45,6 +45,7 @@ function record(position: number, event: RunEvent): RecordedEvent {
 interface FakeClient extends ConversationClient {
   readonly sent: string[];
   readonly answers: { questionId: string; answers: Record<string, string> }[];
+  readonly planAnswers: { planId: number; verdict: string; text: string }[];
   readonly stopped: string[];
   readonly subscriptions: { after: number }[];
   push(update: RunUpdate): void;
@@ -60,6 +61,10 @@ function fakeClient(
       client.answers.push({ answers: { ...answers }, questionId });
     },
     answers: [],
+    answerPlan: async (_runId, planId, verdict, text) => {
+      client.planAnswers.push({ planId, text, verdict });
+    },
+    planAnswers: [],
     push: (update) => {
       act(() => {
         for (const listener of listeners) listener(update);
@@ -982,4 +987,181 @@ test('an item the groomer filed is a link that opens it on its board', async () 
   expect(
     screen.getAllByText('Filed “Bulk export for credit notes”').length,
   ).toBeGreaterThan(0);
+});
+
+const planMarkdown = [
+  '## Context',
+  'An “Export” entry in the board menu.',
+  '## Files to change, and what to reuse',
+  '- The export menu and its button',
+  '## Increments',
+  '1. Export what is shown, as CSV',
+  '## The test plan',
+  'Unit tests.',
+  '## User-facing decisions',
+  '### Agreed with the navigator',
+  'See the design record.',
+  '### Decided by me',
+  '- The file is named after the project and today’s date.',
+  '## Out of scope',
+  'Nothing.',
+].join('\n');
+
+const builder = {
+  agentName: 'Rogue',
+  agentRole: 'builder',
+  item: { id: 'item-1', title: 'Add export button' },
+  state: 'awaiting_input' as const,
+};
+
+const planEvent: RunEvent = {
+  kind: 'plan_approval',
+  markdown: planMarkdown,
+  planId: 11,
+};
+
+test('a waiting plan shows its sections and is approved from the card', async () => {
+  const client = fakeClient(conversation([planEvent], builder));
+  renderPage(client);
+
+  const card = await screen.findByRole('region', {
+    name: 'Plan for your approval Add export button',
+  });
+  expect(document.activeElement).toBe(card);
+  expect(screen.getByRole('status').textContent).toBe(
+    'Waiting for your answer',
+  );
+  const headings = within(card)
+    .getAllByRole('heading', { level: 3 })
+    .map((heading) => heading.textContent);
+  expect(headings).toEqual([
+    'Files to change',
+    'What’s new',
+    'Increments',
+    'Decisions I made that the design left open',
+  ]);
+  expect(
+    within(card).getByText(
+      '- The file is named after the project and today’s date.',
+    ),
+  ).toBeTruthy();
+  expect(within(card).queryByText('See the design record.')).toBeNull();
+  expect(within(card).queryByText('Unit tests.')).toBeNull();
+
+  await userEvent.click(
+    within(card).getByRole('button', { name: 'Approve plan' }),
+  );
+  expect(client.planAnswers).toEqual([
+    { planId: 11, text: '', verdict: 'approved' },
+  ]);
+  expect(document.activeElement).toBe(card);
+
+  client.push({
+    type: 'event',
+    ...record(2, {
+      kind: 'plan_answer',
+      planId: 11,
+      text: '',
+      verdict: 'approved',
+    }),
+  });
+  expect(within(card).getByText('Plan · approved')).toBeTruthy();
+  expect(within(card).queryByRole('button')).toBeNull();
+  expect(screen.getByText('Plan approved.')).toBeTruthy();
+  expect(document.activeElement).toBe(card);
+});
+
+test('asking for changes needs words, and Cancel returns to the button', async () => {
+  const client = fakeClient(conversation([planEvent], builder));
+  renderPage(client);
+  const card = await screen.findByRole('region', {
+    name: 'Plan for your approval Add export button',
+  });
+
+  const ask = within(card).getByRole('button', { name: 'Ask for changes…' });
+  await userEvent.click(ask);
+  const box = within(card).getByRole('textbox', {
+    name: 'What should change?',
+  });
+  expect(document.activeElement).toBe(box);
+
+  await userEvent.click(within(card).getByRole('button', { name: 'Cancel' }));
+  expect(within(card).queryByRole('textbox')).toBeNull();
+  expect(document.activeElement).toBe(ask);
+
+  await userEvent.click(ask);
+  await userEvent.click(within(card).getByRole('button', { name: 'Send' }));
+  expect(within(card).getByRole('alert').textContent).toBe(
+    'Say what should change so the builder can revise the plan.',
+  );
+  expect(client.planAnswers).toEqual([]);
+
+  await userEvent.type(
+    within(card).getByRole('textbox', { name: 'What should change?' }),
+    'Also handle the empty board.',
+  );
+  await userEvent.click(within(card).getByRole('button', { name: 'Send' }));
+  expect(client.planAnswers).toEqual([
+    { planId: 11, text: 'Also handle the empty board.', verdict: 'changes' },
+  ]);
+  expect(document.activeElement).toBe(card);
+
+  client.push({
+    type: 'event',
+    ...record(2, {
+      kind: 'plan_answer',
+      planId: 11,
+      text: 'Also handle the empty board.',
+      verdict: 'changes',
+    }),
+  });
+  client.push({
+    type: 'event',
+    ...record(3, { kind: 'plan_approval', markdown: planMarkdown, planId: 12 }),
+  });
+  expect(within(card).getByText('Plan · you asked for changes')).toBeTruthy();
+  expect(within(card).getByText('“Also handle the empty board.”')).toBeTruthy();
+  expect(
+    screen.getByRole('region', {
+      name: 'Plan · revised · for your approval Add export button',
+    }),
+  ).toBeTruthy();
+});
+
+test('an answer that fails to send says so and keeps the card', async () => {
+  const client = fakeClient(conversation([planEvent], builder), {
+    answerPlan: async () => {
+      throw new Error('offline');
+    },
+  });
+  renderPage(client);
+  const card = await screen.findByRole('region', {
+    name: 'Plan for your approval Add export button',
+  });
+
+  await userEvent.click(
+    within(card).getByRole('button', { name: 'Approve plan' }),
+  );
+  expect(within(card).getByRole('alert').textContent).toBe(
+    'Your answer wasn’t sent. Try again.',
+  );
+  expect(
+    within(card).getByRole('button', { name: 'Approve plan' }),
+  ).toBeTruthy();
+});
+
+test('a plan the builder stopped before answering is no longer waiting', async () => {
+  renderPage(
+    fakeClient(conversation([planEvent], { ...builder, state: 'failed' })),
+  );
+
+  const card = await screen.findByRole('region', {
+    name: 'Plan · no longer waiting Add export button',
+  });
+  expect(
+    within(card).getByText(
+      'The builder stopped before you answered. The next builder writes a new plan.',
+    ),
+  ).toBeTruthy();
+  expect(within(card).queryByRole('button')).toBeNull();
 });
