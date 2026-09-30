@@ -84,16 +84,27 @@ export function createPlanApprovals({
   return {
     async await(runId, plan, signal) {
       signal?.throwIfAborted();
+      const noted = note(
+        runId,
+        { kind: 'plan_approval', markdown: plan.markdown, planId: plan.id },
+        'awaiting_input',
+      );
+      let aborted = () => {};
       const answered = new Promise<PlanAnswer>((resolve, reject) => {
-        const aborted = () => {
+        aborted = () => {
           waiting.delete(plan.id);
           reject(signal?.reason ?? new Error('The call was abandoned.'));
           // Nobody is waiting for an answer any more, so the plan can no longer be answered.
-          note(
-            runId,
-            { kind: 'plan_withdrawn', planId: plan.id },
-            'active',
-          ).catch(() => undefined);
+          // The withdrawal follows the approval note, so it can never land before it.
+          noted
+            .then(() =>
+              note(
+                runId,
+                { kind: 'plan_withdrawn', planId: plan.id },
+                'active',
+              ),
+            )
+            .catch(() => undefined);
         };
         waiting.set(plan.id, (answer) => {
           signal?.removeEventListener('abort', aborted);
@@ -102,13 +113,12 @@ export function createPlanApprovals({
         });
         signal?.addEventListener('abort', aborted, { once: true });
       });
+      // An abort can reject the answer before anything awaits it; the caller still sees it below.
+      answered.catch(() => undefined);
       try {
-        await note(
-          runId,
-          { kind: 'plan_approval', markdown: plan.markdown, planId: plan.id },
-          'awaiting_input',
-        );
+        await noted;
       } catch (error) {
+        signal?.removeEventListener('abort', aborted);
         waiting.delete(plan.id);
         throw error;
       }
