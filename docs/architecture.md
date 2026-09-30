@@ -251,8 +251,12 @@ against the run's recorded events: the newest outcome question it asked (the sha
 UI in `@cerebra/shared`) must have an answer naming the route of `to`, and the record's five sections
 must equal the ones the navigator confirmed, whitespace aside. A designer's `transition` from
 `designing` to `build_ready` is checked the same way against the newest design confirmation it
-asked: it must be answered "Looks right — hand it to building", and the `design` record's four
-sections and `## The mockup` must equal the confirmed experience and drawing. A refusal says what
+asked: it must be answered "Confirm and send to build", and the `design` record's four
+sections and `## The mockup` must equal the confirmed experience and drawing. The drawing must be
+one the run showed with `show_mockups`; the backend writes that mockup's id into the record as
+`mockupId`, whatever the agent passed. `get_mockup` lets a builder, bug fixer or reviewer read a
+kept mockup of its own project by that id. The item's Records tab reads every outcome and design
+record, grouped by kind and numbered by version, through `GET /api/work-items/:id/records`. A refusal says what
 to do next and that nothing was moved.
 
 A designer's round of drawings waits in `drawings.ts`, one round per run and in memory: the round

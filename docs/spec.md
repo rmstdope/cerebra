@@ -534,13 +534,14 @@ against the lifecycle and the calling run's type:
 | Tool | Does |
 |---|---|
 | `get_item`, `list_items` | Read items, their records and comments. `get_item` without an id reads the held item. |
-| `transition` | Move the held item along a transition its role may make (§4.4), with the record that transition requires. A groomer's move to `design_ready` or `build_ready` is also checked against the outcome question the navigator answered in its conversation: the route must be the one they chose and the record's five sections the ones they confirmed, or nothing moves. A designer's move to `build_ready` is checked the same way against the confirmation of the agreed experience it asked: the navigator must have confirmed it, and the record's sections must be the ones they confirmed. |
+| `transition` | Move the held item along a transition its role may make (§4.4), with the record that transition requires. A groomer's move to `design_ready` or `build_ready` is also checked against the outcome question the navigator answered in its conversation: the route must be the one they chose and the record's five sections the ones they confirmed, or nothing moves. A designer's move to `build_ready` is checked the same way against the confirmation of the agreed experience it asked: the navigator must have confirmed it, the record's sections must be the ones they confirmed, and the drawing it names must be one shown in that conversation, which is kept with the record. |
 | `wait_for_navigator` | Move the held item to `waiting` with a reason. |
 | `comment` | Comment on an item. |
 | `create_item` | File a new item into `new` (§4.10). A groomer files the children of its split through `transition` instead. |
 | `submit_plan` | Record the builder's plan (§4.11). Under the `plan` checkpoint it also shows the plan to the navigator and returns only with their answer: approved, or what to amend. Builders only. |
 | `report_checks` | Record whether the builder's latest run of the project's checks passed (§4.11). Builders only. |
 | `record_release` | Record a release the run has made (§9). Assistant only. |
+| `get_mockup` | Read a kept mockup of the project by its id — the design record names the chosen one — as text for HTML and SVG, base64 otherwise. Builders, bug fixers and reviewers. |
 | `show_mockups` | Publish mockups from the run's checkout and ask the navigator to choose between them (§6.4); the round is recorded in the conversation and returns only with the navigator's choice or written change. Designer only. |
 
 ### 6.4 Mockups
@@ -554,7 +555,9 @@ history, so the navigator can go back to an earlier one. A set is shown whole or
 of it cannot be published, the navigator sees none of it and the designer is told what to fix.
 
 When the experience is agreed, the chosen mockup is kept with the item as part of the design
-record, next to the written experience, and is what the builder, reviewer and verifier see. A
+record, next to the written experience, and is what the builder, reviewer and verifier see. The
+navigator confirms the design in a question titled "Confirm the agreed design", answered "Confirm
+and send to build" or "Change something"; only confirming records it. A
 mockup is shown isolated from Cerebra's own page: it can run its own scripts, but cannot reach the
 UI's session, the API or the network.
 
@@ -679,7 +682,8 @@ The navigator works on several projects at once from one instance and one browse
 - **Board**: a project's items by state, with filters; triage (rank and route) on `new` items.
 - **Item**: fields, records, comments, history, and the runs that touched it. From `build_ready`
   on, its Overview shows the delivery activity — plan, checks and pull request, oldest first, then
-  what happens now — beside an at-a-glance summary.
+  what happens now — beside an at-a-glance summary. Its Records tab shows the agreed outcome and
+  design, each with every version it has had and the chosen drawing, the newest shown by default.
 - **Fleet**: a project's agents, each with its current run; start and stop.
 - **Run**: the chat view (§6.2), plus the run's branch, diff and cost.
 - **Costs**: the views of §10, per project and across projects; an item's own cost is also on its page.
