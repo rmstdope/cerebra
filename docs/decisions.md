@@ -432,8 +432,9 @@ Confirmed during project definition on 2026-09-28:
   gates: they build the agent image and start real containers, which a producer's machine may not
   afford (a 2 GB Podman machine cannot install the image's dependencies), so the gates stay
   `pnpm run check`, exactly CI's `check` job. A producer runs `pnpm run test:e2e` when a change
-  touches the runner, the supervisor, the engine or `images/`. The job installs Podman 5 over
-  ubuntu-latest's 4.9, whose API ignores the volume subpaths every agent mount is.
+  touches the runner, the supervisor, the engine or `images/`. The job installs Podman 6.1, the
+  navigator's version, over ubuntu-latest's 4.9, whose API ignores the volume subpaths every agent
+  mount is.
 
 No application workspace or executable gate exists at project definition time; the declaration is
 the contract foundations must implement, not a passing check. Automatic worktree installation is

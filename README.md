@@ -54,8 +54,9 @@ runs it as the `e2e` job.
 pnpm run test:e2e
 ```
 
-It needs Podman 5 or later: the engine mounts subpaths of the data volume, which Podman 4 ignores
-(CI installs Podman 5 over ubuntu-latest's 4.9). It builds the workspace, builds `cerebro-agent`
+It needs a Podman that mounts subpaths of a volume, which the engine's mounts are: Podman 4 ignores
+them, and 5.8 left bind-backed ones empty. CI installs Podman 6.1, the version the navigator runs,
+over ubuntu-latest's 4.9. It builds the workspace, builds `cerebro-agent`
 and `cerebra-stub-agent` from `images/`, then runs the suites with
 `CEREBRA_REQUIRE_PODMAN=1`, so a missing socket fails instead of skipping. The Podman API socket is
 `CEREBRA_TEST_PODMAN_SOCKET` when set, the Podman machine's on macOS, and otherwise the one
