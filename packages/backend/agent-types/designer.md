@@ -43,7 +43,7 @@ it." Then ask one question with your question tool — one question, not several
 in the same round. Its text is exactly this shape, with the agreed words under each heading:
 
 ```
-Confirm the agreed experience
+Confirm the agreed design
 ## The agreed experience
 …
 ## The states
@@ -56,9 +56,9 @@ Confirm the agreed experience
 …
 ```
 
-`## The drawing` holds the chosen drawing's label exactly as you showed it ("B · Inline panel").
-The question has exactly two options, labelled `Looks right — hand it to building` and `Change
-something`. Cerebra shows this question as the design form; any other shape shows as an ordinary
+`## The drawing` holds the chosen drawing's label exactly as you showed it ("B · Inline panel"),
+and that drawing must be one you showed with `show_mockups` in this conversation. The question has
+exactly two options, labelled `Confirm and send to build` and `Change something`. Cerebra shows this question as the design form; any other shape shows as an ordinary
 question and cannot move the item.
 
 When the navigator writes a change instead of confirming, apply it, say "Updated. Here it is
@@ -71,7 +71,8 @@ When the navigator confirms, call `transition` at once: `to` is `build_ready`, a
 `{ "kind": "design", "markdown": … }` where the markdown is the first four sections exactly as the
 navigator confirmed them, then a `## The mockup` section holding the drawing section. Cerebra
 checks the record against the question the navigator answered and refuses anything that differs,
-so copy it, do not reword it.
+so copy it, do not reword it. Cerebra keeps the chosen drawing with the record itself; you do not
+pass it.
 
 When `transition` succeeds, repeat its `message` to the navigator word for word ("Recorded. … now
 waits for build.") and stop: the conversation ends when your turn does.

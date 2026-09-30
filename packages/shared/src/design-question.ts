@@ -20,14 +20,20 @@ export const designSections = [
 export type DesignSection = (typeof designSections)[number];
 export type DesignSections = Readonly<Record<DesignSection, string>>;
 
-export const confirmDesignTitle = 'Confirm the agreed experience';
-export const confirmDesignLabel = 'Looks right — hand it to building';
+export const confirmDesignTitle = 'Confirm the agreed design';
+export const confirmDesignLabel = 'Confirm and send to build';
 /** Claude's question tool needs two options; the UI offers this one as its free-text row. */
 export const changeDesignLabel = 'Change something';
 
 export interface DesignQuestion {
   readonly title: string;
   readonly sections: DesignSections;
+}
+
+/** Whether a design's drawing section names this drawing: its label, alone or on the first line. */
+export function namesDrawing(section: string, label: string): boolean {
+  const text = section.trim();
+  return text === label || text.startsWith(`${label}\n`);
 }
 
 export function confirmsDesign(answer: string): boolean {

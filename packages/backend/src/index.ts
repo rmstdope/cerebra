@@ -60,6 +60,8 @@ export {
   type BoardProvenance,
   type BoardQuery,
   type BoardRecord,
+  type StageRecords,
+  type StageRecordVersion,
   type DeliveryActivity,
   type DeliveryCurrent,
   type DeliveryEvent,

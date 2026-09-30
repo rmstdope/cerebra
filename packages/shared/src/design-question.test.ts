@@ -4,7 +4,9 @@ import {
   changeDesignLabel,
   confirmDesignLabel,
   confirmsDesign,
+  confirmDesignTitle,
   designRecordSectionsOf,
+  namesDrawing,
   parseDesignQuestion,
   sameDesign,
 } from './index.js';
@@ -21,7 +23,7 @@ const sections = [
 ];
 
 const text = [
-  'Confirm the agreed experience',
+  'Confirm the agreed design',
   '',
   ...sections,
   '## The drawing',
@@ -53,7 +55,7 @@ const expected = {
 describe('the design confirmation', () => {
   it('recognises the design confirmation and its sections', () => {
     expect(parseDesignQuestion(question())).toEqual({
-      title: 'Confirm the agreed experience',
+      title: 'Confirm the agreed design',
       sections: expected,
     });
     expect(
@@ -86,6 +88,21 @@ describe('the design confirmation', () => {
     expect(
       parseDesignQuestion({ ...question(), multiSelect: true }),
     ).toBeNull();
+  });
+
+  it('words the confirmation as the agreed design, sent to build', () => {
+    expect(confirmDesignTitle).toBe('Confirm the agreed design');
+    expect(confirmDesignLabel).toBe('Confirm and send to build');
+    expect(changeDesignLabel).toBe('Change something');
+  });
+
+  it('matches a drawing section to the drawing it names', () => {
+    const label = 'A · Button in the toolbar';
+    expect(namesDrawing(' A · Button in the toolbar ', label)).toBe(true);
+    expect(namesDrawing(`${label}\nWith a smaller icon.`, label)).toBe(true);
+    expect(namesDrawing(`${label} and more`, label)).toBe(false);
+    expect(namesDrawing('B · Inside the menu', label)).toBe(false);
+    expect(namesDrawing('', label)).toBe(false);
   });
 
   it('reads a confirmation from an answer', () => {

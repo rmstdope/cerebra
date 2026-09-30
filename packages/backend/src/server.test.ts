@@ -606,6 +606,66 @@ test('counts matching arrivals after a snapshot', async () => {
   expect(response.json()).toEqual({ count: 2 });
 });
 
+test('reads an item’s agreed records, and only when signed in', async () => {
+  const read: string[] = [];
+  const board = fakeBoard({
+    stageRecords: async (itemId) => {
+      read.push(itemId);
+      return {
+        records: [
+          {
+            kind: 'design',
+            versions: [
+              {
+                agentName: 'Iris',
+                at: new Date('2026-09-29T10:00:00.000Z'),
+                id: '7',
+                markdown: '## The mockup\nA',
+                mockupId: 'mockup-1',
+                version: 1,
+              },
+            ],
+          },
+        ],
+      };
+    },
+  });
+  const server = await createServer({ auth: authenticatedAuth, board });
+  const signedOut = await createServer({
+    auth: {
+      ...authenticatedAuth,
+      status: async () => ({ reason: 'signed-out', state: 'unauthenticated' }),
+    },
+    board,
+  });
+  servers.push(server, signedOut);
+
+  const response = await server.inject('/api/work-items/item-1/records');
+
+  expect(response.statusCode).toBe(200);
+  expect(response.json()).toEqual({
+    records: [
+      {
+        kind: 'design',
+        versions: [
+          {
+            agentName: 'Iris',
+            at: '2026-09-29T10:00:00.000Z',
+            id: '7',
+            markdown: '## The mockup\nA',
+            mockupId: 'mockup-1',
+            version: 1,
+          },
+        ],
+      },
+    ],
+  });
+  expect(
+    (await signedOut.inject('/api/work-items/item-1/records')).statusCode,
+  ).toBe(401);
+  expect(read).toEqual(['item-1']);
+});
+
 test('reads an item’s delivery activity, earlier pages by cursor', async () => {
   const pages: unknown[] = [];
   const server = await createServer({
@@ -793,6 +853,7 @@ test('answers an unknown work item with 404, never an empty body', async () => {
       getHistory: missing,
       getWorkItem: missing,
       listComments: missing,
+      stageRecords: missing,
     }),
   });
   servers.push(server);
@@ -802,6 +863,7 @@ test('answers an unknown work item with 404, never an empty body', async () => {
     '/api/work-items/item-9/history',
     '/api/work-items/item-9/comments',
     '/api/work-items/item-9/delivery-activity',
+    '/api/work-items/item-9/records',
   ]) {
     const response = await server.inject(url);
     expect(response.statusCode).toBe(404);

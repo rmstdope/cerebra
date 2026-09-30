@@ -76,6 +76,30 @@ export interface BoardRecord {
   readonly record: unknown;
 }
 
+/** The stages whose agreed record the item's Records tab shows, in lifecycle order (spec §4.11). */
+export const stageRecordKinds = ['outcome', 'design'] as const;
+
+export type StageRecordKind = (typeof stageRecordKinds)[number];
+
+/** One version of an agreed record: its position among the item's records of its kind. */
+export interface StageRecordVersion {
+  readonly agentName: string | null;
+  readonly at: Date;
+  readonly id: string;
+  readonly markdown: string;
+  /** The stored drawing a design record keeps (spec §6.4); null for any other or older record. */
+  readonly mockupId: string | null;
+  readonly version: number;
+}
+
+/** An item's agreed records, one per stage that wrote one, each with its versions oldest first. */
+export interface StageRecords {
+  readonly records: readonly {
+    readonly kind: StageRecordKind;
+    readonly versions: readonly StageRecordVersion[];
+  }[];
+}
+
 /** One step of an item's delivery story (spec §4.11): a plan, a checks report, a pull request. */
 export type DeliveryEvent = {
   readonly agentName: string | null;
@@ -343,6 +367,7 @@ export interface Board {
   getHistory(itemId: string): Promise<readonly BoardHistoryEntry[]>;
   getProvenance(itemId: string): Promise<BoardProvenance>;
   listRecords(itemId: string): Promise<readonly BoardRecord[]>;
+  stageRecords(itemId: string): Promise<StageRecords>;
   getWorkItem(itemId: string): Promise<BoardWorkItem>;
   listComments(itemId: string): Promise<readonly BoardComment[]>;
   listWorkItems(projectId: string, query?: BoardQuery): Promise<BoardPage>;
@@ -564,6 +589,49 @@ export function createBoard(database: Kysely<Database>): Board {
         kind: row.kind,
         record: row.payload,
       }));
+    },
+
+    async stageRecords(itemId) {
+      await assertWorkItemExists(database, itemId);
+      const rows = await database
+        .selectFrom('work_item_records')
+        .leftJoin('runs', 'runs.id', 'work_item_records.run_id')
+        .select([
+          'work_item_records.id',
+          'work_item_records.created_at',
+          'work_item_records.kind',
+          'work_item_records.payload',
+          'runs.agent_name',
+        ])
+        .where('work_item_records.work_item_id', '=', itemId)
+        .where('work_item_records.kind', 'in', [...stageRecordKinds])
+        .orderBy('work_item_records.id', 'asc')
+        .execute();
+      return {
+        records: stageRecordKinds.flatMap((kind) => {
+          const versions = rows
+            .filter((row) => row.kind === kind)
+            .map((row, index) => {
+              const payload = row.payload as {
+                markdown?: unknown;
+                mockupId?: unknown;
+              };
+              return {
+                agentName: row.agent_name,
+                at: row.created_at,
+                id: String(row.id),
+                markdown:
+                  typeof payload.markdown === 'string' ? payload.markdown : '',
+                mockupId:
+                  typeof payload.mockupId === 'string'
+                    ? payload.mockupId
+                    : null,
+                version: index + 1,
+              };
+            });
+          return versions.length === 0 ? [] : [{ kind, versions }];
+        }),
+      };
     },
 
     async listWorkItems(projectId, query = {}) {

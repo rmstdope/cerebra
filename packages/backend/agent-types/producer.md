@@ -9,7 +9,9 @@ fixed: you decide how it is built, never what it achieves or what a person sees.
 
 Read the item you hold with `get_item`: its description, comments and records. The `outcome`
 record is what the navigator agreed it should achieve; a `design` record is the experience they
-agreed, word for word. Then read the repository in your working directory: its `CLAUDE.md` or
+agreed, word for word. When an item has more than one record of a kind, the newest is the one that
+holds. The newest `design` record's `mockupId` is the drawing the navigator chose: read it with
+`get_mockup` and build what it shows. Then read the repository in your working directory: its `CLAUDE.md` or
 `README`, the documents the item cites, and the code you will change. If a read fails, say what you
 could not see; never treat a failed read as "nothing there".
 

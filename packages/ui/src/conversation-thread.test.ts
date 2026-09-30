@@ -547,7 +547,7 @@ test('a set refused before it was shown leaves nothing in the thread', () => {
 });
 
 const designText = [
-  'Confirm the agreed experience',
+  'Confirm the agreed design',
   '## The agreed experience',
   'An "Export CSV" button sits in the toolbar.',
   '## The states',
@@ -573,7 +573,7 @@ test('an answered design confirmation stays as its sections, and the answer drop
             options: [
               {
                 description: 'record it',
-                label: 'Looks right — hand it to building (Recommended)',
+                label: 'Confirm and send to build (Recommended)',
               },
               { description: 'say what to change', label: 'Change something' },
             ],
@@ -583,7 +583,7 @@ test('an answered design confirmation stays as its sections, and the answer drop
       },
       {
         answers: {
-          [designText]: 'Looks right — hand it to building (Recommended)',
+          [designText]: 'Confirm and send to build (Recommended)',
         },
         kind: 'answer',
         questionId: 'q-d',
@@ -595,10 +595,10 @@ test('an answered design confirmation stays as its sections, and the answer drop
   expect(items[0]).toMatchObject({
     design: {
       sections: { 'The drawing': 'A · Button in the toolbar' },
-      title: 'Confirm the agreed experience',
+      title: 'Confirm the agreed design',
     },
   });
-  expect(items[1]).toMatchObject({ text: 'Looks right — hand it to building' });
+  expect(items[1]).toMatchObject({ text: 'Confirm and send to build' });
 });
 
 test('a refused move says which record could not be kept', () => {

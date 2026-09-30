@@ -649,6 +649,13 @@ export const createServer = async ({
   );
 
   server.get(
+    '/api/work-items/:itemId/records',
+    boardRoute<{ itemId: string }>(async (board, { itemId }) =>
+      board.stageRecords(itemId),
+    ),
+  );
+
+  server.get(
     '/api/work-items/:itemId/comments',
     boardRoute<{ itemId: string }>(async (board, { itemId }) =>
       board.listComments(itemId),

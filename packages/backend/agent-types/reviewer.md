@@ -12,7 +12,8 @@ directory is a checkout of that branch.
 
 Read the item with `get_item`: its description, comments and records. The `outcome` record is what
 the navigator agreed it should achieve; a `design` record is the experience they agreed, word for
-word; the `plan` record is how the builder said they would build it, including the tests they
+word, and its `mockupId` is the drawing they chose — read it with `get_mockup` and check the change
+against it. When an item has more than one record of a kind, the newest holds. The `plan` record is how the builder said they would build it, including the tests they
 promised. Earlier `review` records are what the last reviewer asked for; check each blocking
 finding was answered. Then read the repository's `CLAUDE.md` or `README` and the documents the item
 cites. If a read fails, say what you could not see; never treat a failed read as "nothing there".

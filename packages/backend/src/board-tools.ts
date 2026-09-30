@@ -1,6 +1,7 @@
 import {
   confirmsDesign,
   designRecordSectionsOf,
+  namesDrawing,
   outcomeSectionsOf,
   parseDesignQuestion,
   parseOutcomeQuestion,
@@ -349,13 +350,40 @@ export function createBoardTools({
   }
 
   /**
+   * The stored drawing a confirmed drawing section names: from the newest round of this run that
+   * showed a drawing of that label and could store it; null when none did.
+   */
+  async function chosenMockup(
+    caller: ToolCaller,
+    section: string,
+  ): Promise<string | null> {
+    const rows = await database
+      .selectFrom('run_events')
+      .select('event')
+      .where('run_id', '=', caller.runId)
+      .where(sql<string>`event->>'kind'`, '=', 'drawings')
+      .orderBy('position', 'desc')
+      .execute();
+    for (const row of rows) {
+      const event = row.event as AgentEvent;
+      if (event.kind !== 'drawings') continue;
+      const drawing = event.drawings.find(
+        (shown) =>
+          shown.mockupId !== null && namesDrawing(section, shown.label),
+      );
+      if (drawing?.mockupId != null) return drawing.mockupId;
+    }
+    return null;
+  }
+
+  /**
    * A designer leaves design only on the experience the navigator confirmed in the run's newest
-   * design confirmation (spec §6.3).
+   * design confirmation (spec §6.3). Answers the stored drawing the record keeps (spec §6.4).
    */
   async function requireDesignConfirmed(
     caller: ToolCaller,
     record: Arguments | undefined,
-  ): Promise<void> {
+  ): Promise<string | null> {
     const markdown =
       record?.kind === 'design' && typeof record.markdown === 'string'
         ? record.markdown
@@ -364,7 +392,7 @@ export function createBoardTools({
       markdown === null ? null : designRecordSectionsOf(markdown);
     if (recorded === null) {
       // The lifecycle refuses a missing or malformed design record itself.
-      return;
+      return null;
     }
     const asked = await newestAsked(caller, parseDesignQuestion);
     if (asked === null) {
@@ -391,6 +419,14 @@ export function createBoardTools({
         `The design record differs from the experience the navigator confirmed; record the confirmed sections word for word, the drawing under ## The mockup. ${nothingMoved}`,
       );
     }
+    const mockupId = await chosenMockup(caller, recorded['The drawing']);
+    if (mockupId === null) {
+      throw new Refusal(
+        'refused',
+        `The drawing section names no drawing shown in this conversation: show it with show_mockups, then ask the design confirmation again. ${nothingMoved}`,
+      );
+    }
+    return mockupId;
   }
 
   /** Appends a builder's record to the item it holds while building (spec §4.11). */
@@ -503,6 +539,55 @@ export function createBoardTools({
             board.getProvenance(itemId),
           ]);
         return { comments, history, item, provenance, records };
+      },
+    },
+    get_mockup: {
+      descriptor: {
+        name: 'get_mockup',
+        description:
+          'Read a drawing kept with a work item of this project: the design record’s mockupId names the drawing the navigator chose. A web page comes back as UTF-8 text, an image as base64.',
+        inputSchema: {
+          type: 'object',
+          properties: { mockup_id: { type: 'string', minLength: 1 } },
+          required: ['mockup_id'],
+        },
+      },
+      async run(caller, args) {
+        const mockupId = text(args, 'mockup_id');
+        const row = isUuid(mockupId)
+          ? await database
+              .selectFrom('mockups')
+              .innerJoin('work_items', 'work_items.id', 'mockups.work_item_id')
+              .select([
+                'mockups.content',
+                'mockups.content_type',
+                'mockups.path',
+                'mockups.work_item_id',
+                'work_items.project_id',
+              ])
+              .where('mockups.id', '=', mockupId)
+              .executeTakeFirst()
+          : undefined;
+        if (row === undefined) {
+          throw new Refusal('not_found', `Drawing ${mockupId} does not exist.`);
+        }
+        if (row.project_id !== caller.projectId) {
+          throw new Refusal(
+            'other_project',
+            `Drawing ${mockupId} belongs to another project.`,
+          );
+        }
+        const asText =
+          row.content_type === 'text/html' ||
+          row.content_type === 'image/svg+xml';
+        return {
+          content: row.content.toString(asText ? 'utf8' : 'base64'),
+          contentType: row.content_type,
+          encoding: asText ? 'utf8' : 'base64',
+          id: mockupId,
+          itemId: row.work_item_id,
+          path: row.path,
+        };
       },
     },
     list_items: {
@@ -630,9 +715,12 @@ export function createBoardTools({
           await requireHeld(caller);
           await requireConfirmed(caller, to, record as Arguments | undefined);
         }
+        let kept = record as Arguments | undefined;
         if (leavesDesign) {
           await requireHeld(caller);
-          await requireDesignConfirmed(caller, record as Arguments | undefined);
+          const mockupId = await requireDesignConfirmed(caller, kept);
+          // The backend names the drawing; whatever the agent passed is not trusted.
+          if (mockupId !== null) kept = { ...kept, mockupId };
         }
         if (caller.role === 'builder' && to === 'review_ready') {
           await requireLinkedPullRequest(
@@ -643,7 +731,7 @@ export function createBoardTools({
         const moved = await moveHeld(caller, () => ({
           actor: { role: caller.role, runId: caller.runId },
           reason,
-          record: record as Arguments | undefined,
+          record: kept,
           to,
         }));
         if (!leavesGrooming && !leavesDesign) {
