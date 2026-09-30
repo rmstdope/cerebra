@@ -9,7 +9,7 @@ const port = Number(process.env.CEREBRA_PORT ?? 4317);
 // Drawings have a port, and so an origin, of their own (architecture §11).
 const mockupPort = Number(process.env.CEREBRA_MOCKUP_PORT ?? 4318);
 const mockupAddress =
-  process.env.CEREBRA_MOCKUP_ADDRESS ?? `http://localhost:${mockupPort}`;
+  process.env.CEREBRA_MOCKUP_ADDRESS ?? `http://127.0.0.1:${mockupPort}`;
 const databaseUrl = process.env.DATABASE_URL ?? '';
 const database = createDatabase(databaseUrl);
 const podmanSocket = process.env.CEREBRA_PODMAN_SOCKET;

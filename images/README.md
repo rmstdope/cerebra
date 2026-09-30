@@ -67,7 +67,7 @@ Cerebra can't run agents yet. The other settings, with the values compose gives 
 | `CEREBRA_GATEWAY_URL`      | `ws://main:4317/runner` | Where a runner reaches the backend.                              |
 | `CEREBRA_MCP_URL`          | `http://main:4317/mcp`  | Where an agent reaches its board tools.                          |
 | `CEREBRA_MOCKUP_PORT`      | `4318`                  | Where designers' drawings are served, on an origin of their own. |
-| `CEREBRA_MOCKUP_ADDRESS`   | `http://localhost:4318` | The drawings origin as the browser reaches it.                   |
+| `CEREBRA_MOCKUP_ADDRESS`   | `http://127.0.0.1:4318` | The drawings origin as the browser reaches it.                   |
 
 Postgres sits on a separate `database` network, so agents cannot reach it. The data volume is
 named `cerebra-data` exactly, because the engine mounts it by that name; an instance created before

@@ -106,7 +106,7 @@ export PODMAN_COMPOSE_PROVIDER=podman-compose
 ```
 
 The application is published only at `http://localhost:4317`, with designers' drawings served
-sandboxed from `http://localhost:4318`; Postgres has no host port. The named
+sandboxed from `http://127.0.0.1:4318`; Postgres has no host port. The named
 `cerebra-data` and `cerebra-postgres` volumes retain application data and database records across
 container restarts. Startup waits for Postgres to accept connections before starting the backend.
 The main container has outbound access to GitHub, with Git and CA certificates installed; Postgres

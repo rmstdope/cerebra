@@ -17,7 +17,7 @@ services:
       CEREBRA_INTERNAL_NETWORK: cerebro-internal
       CEREBRA_MCP_URL: http://main:4317/mcp
       # Drawings are served from a port of their own, so they have an origin of their own.
-      CEREBRA_MOCKUP_ADDRESS: http://localhost:4318
+      CEREBRA_MOCKUP_ADDRESS: http://127.0.0.1:4318
       CEREBRA_MOCKUP_PORT: 4318
       CEREBRA_PODMAN_SOCKET: /run/podman/podman.sock
       CEREBRA_PROJECT_TOKEN_KEY_FILE: /run/secrets/cerebra-project-token-key

@@ -492,7 +492,8 @@ accessibility target of `spec.md` §12.
 **Mockups.** `show_mockups` has the gateway fetch the named files from the run's checkout with
 `fetch_files` (§5.2) and stores each in the `mockups` table, beside the item's records, under an
 unguessable id; HTML and PNG, JPEG, GIF, WebP and SVG images are accepted. A second listener
-(`CEREBRA_MOCKUP_PORT`, 4318, published as `CEREBRA_MOCKUP_ADDRESS`) serves `GET /mockups/:id`, so
+(`CEREBRA_MOCKUP_PORT`, 4318, reached at `CEREBRA_MOCKUP_ADDRESS`, `http://127.0.0.1:4318`, the
+interface compose publishes it on) serves `GET /mockups/:id`, so
 drawings have an origin of their own and never see the session cookie; it reads no cookie, and
 the id is the capability. Every response carries `Content-Security-Policy: sandbox allow-scripts`
 with no network access (`default-src 'none'`, `connect-src 'none'`, only inline scripts and styles
