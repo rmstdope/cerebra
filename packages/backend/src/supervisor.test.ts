@@ -11,7 +11,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 
 import { createBoard } from './board.js';
 import { CheckoutError, type RunCheckouts } from './checkouts.js';
@@ -458,7 +458,9 @@ describe('the run supervisor', { concurrent: false }, () => {
       expect(updates.map((update) => update.type)).toEqual(['event', 'state']);
 
       runner.listener.message(up({ end: 'completed', kind: 'result', usage }));
-      await settle();
+      await vi.waitFor(async () =>
+        expect((await runs.get(runId))?.state).toBe('finished'),
+      );
       await expect(
         supervisor.note(
           runId,

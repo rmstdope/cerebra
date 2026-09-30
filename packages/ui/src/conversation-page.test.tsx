@@ -138,8 +138,10 @@ test('a new conversation invites the first message with the composer focused', a
   expect(screen.getByRole('heading', { level: 1, name: 'Astra' })).toBeTruthy();
   expect(screen.getByText('Assistant')).toBeTruthy();
   expect(screen.getByRole('status').textContent).toBe('Ready');
-  expect(document.activeElement).toBe(
-    screen.getByRole('textbox', { name: 'Message Astra' }),
+  await waitFor(() =>
+    expect(document.activeElement).toBe(
+      screen.getByRole('textbox', { name: 'Message Astra' }),
+    ),
   );
   expect(screen.getByText('No work item attached')).toBeTruthy();
   expect(screen.queryByRole('heading', { name: 'Activity' })).toBeNull();

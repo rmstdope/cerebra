@@ -180,7 +180,7 @@ test('says failed checks plainly', async () => {
     name: 'Delivery activity',
   });
   expect(
-    within(trail).getByRole('heading', { name: 'Checks failed.' }),
+    await within(trail).findByRole('heading', { name: 'Checks failed.' }),
   ).toBeTruthy();
   expect(
     within(trail).getByText(
