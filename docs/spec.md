@@ -534,14 +534,14 @@ against the lifecycle and the calling run's type:
 | Tool | Does |
 |---|---|
 | `get_item`, `list_items` | Read items, their records and comments. `get_item` without an id reads the held item. |
-| `transition` | Move the held item along a transition its role may make (§4.4), with the record that transition requires. A groomer's move to `design_ready` or `build_ready` is also checked against the outcome question the navigator answered in its conversation: the route must be the one they chose and the record's five sections the ones they confirmed, or nothing moves. |
+| `transition` | Move the held item along a transition its role may make (§4.4), with the record that transition requires. A groomer's move to `design_ready` or `build_ready` is also checked against the outcome question the navigator answered in its conversation: the route must be the one they chose and the record's five sections the ones they confirmed, or nothing moves. A designer's move to `build_ready` is checked the same way against the confirmation of the agreed experience it asked: the navigator must have confirmed it, and the record's sections must be the ones they confirmed. |
 | `wait_for_navigator` | Move the held item to `waiting` with a reason. |
 | `comment` | Comment on an item. |
 | `create_item` | File a new item into `new` (§4.10). A groomer files the children of its split through `transition` instead. |
 | `submit_plan` | Record the builder's plan (§4.11). Under the `plan` checkpoint it also shows the plan to the navigator and returns only with their answer: approved, or what to amend. Builders only. |
 | `report_checks` | Record whether the builder's latest run of the project's checks passed (§4.11). Builders only. |
 | `record_release` | Record a release the run has made (§9). Assistant only. |
-| `show_mockups` | Publish mockups from the run's checkout and ask the navigator to choose between them (§6.4). Designer only. |
+| `show_mockups` | Publish mockups from the run's checkout and ask the navigator to choose between them (§6.4); the round is recorded in the conversation and returns only with the navigator's choice or written change. Designer only. |
 
 ### 6.4 Mockups
 
