@@ -25,9 +25,10 @@ describe('involvement settings', () => {
           reviewAccount: ' @Navigator ',
         }),
       ).toEqual({ involvement: 'full', reviewAccount: 'Navigator' });
-      expect(await createInvolvementSettings(database).get(projectId)).toEqual(
-        { involvement: 'full', reviewAccount: 'Navigator' },
-      );
+      expect(await createInvolvementSettings(database).get(projectId)).toEqual({
+        involvement: 'full',
+        reviewAccount: 'Navigator',
+      });
       expect(await settings.get(other)).toEqual({
         involvement: 'autonomous',
         reviewAccount: null,

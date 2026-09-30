@@ -5,6 +5,7 @@ import {
   livePullRequest,
   type BlockedDetail,
   type LivePullRequest,
+  type NavigatorReviewComment,
   type ReviewFinding,
 } from './board.js';
 import type { Database } from './database.js';
@@ -29,7 +30,14 @@ export type FirstMessageEvent =
       readonly verdict: 'approved' | 'changes_requested';
     }
   | { readonly kind: 'returned_to_design'; readonly reason: string }
-  | { readonly kind: 'sent_back' };
+  | { readonly kind: 'sent_back' }
+  | {
+      readonly body: string;
+      readonly comments: readonly NavigatorReviewComment[];
+      readonly kind: 'navigator_review';
+      readonly url: string;
+      readonly verdict: 'approved' | 'changes_requested';
+    };
 
 /**
  * What a run is told first (spec §4.4): its item, and, when the item has been round the loop,
@@ -67,6 +75,22 @@ export function firstMessage(input: FirstMessageInput): string {
         ].join('\n'),
       );
     }
+    if (
+      latest?.kind === 'navigator_review' &&
+      latest.verdict === 'changes_requested'
+    ) {
+      parts.push(
+        [
+          latest.body.trim() === ''
+            ? `The navigator requested changes on GitHub (${latest.url}).`
+            : `The navigator requested changes on GitHub: “${latest.body.trim()}” (${latest.url})`,
+          ...latest.comments.map(
+            (comment) =>
+              `- ${comment.file}${comment.line === undefined ? '' : `:${comment.line}`} — ${comment.body}`,
+          ),
+        ].join('\n'),
+      );
+    }
     const blocked = input.history.at(-2);
     if (latest?.kind === 'sent_back') {
       parts.push(
@@ -84,6 +108,7 @@ const historyKinds = [
   'blocked',
   'sent_back',
   'returned_to_design',
+  'navigator_review',
 ] as const;
 
 /** Reads what `firstMessage` needs for the item a run has just claimed. */

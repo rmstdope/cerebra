@@ -20,6 +20,22 @@ export type ForgeChecks =
   | { readonly status: 'success' }
   | { readonly check: string; readonly status: 'failure' };
 
+/** A submitted review on a pull request; pending drafts are never included. */
+export interface ForgeReview {
+  readonly body: string;
+  readonly id: number;
+  readonly login: string;
+  readonly state: 'approved' | 'changes_requested' | 'commented' | 'dismissed';
+  readonly submittedAt: Date;
+  readonly url: string;
+}
+
+export interface ForgeReviewComment {
+  readonly body: string;
+  readonly file: string;
+  readonly line?: number;
+}
+
 export type ForgeMerge =
   | { readonly merged: true }
   | { readonly merged: false; readonly reason: 'head_moved' }
@@ -40,6 +56,12 @@ export interface Forge {
   /** Merges only if the head is still `sha`. */
   merge(number: number, sha: string): Promise<ForgeMerge>;
   pullRequest(number: number): Promise<ForgePullRequest>;
+  reviewComments(
+    number: number,
+    reviewId: number,
+  ): Promise<ForgeReviewComment[]>;
+  /** Every submitted review, oldest first. */
+  reviews(number: number): Promise<ForgeReview[]>;
 }
 
 /** The forge a project's pull requests live on. */
@@ -108,6 +130,22 @@ export function createGitHubForge(options: {
       const total =
         typeof body.total_count === 'number' ? body.total_count : all.length;
       if (items.length < 100 || all.length >= total) return all;
+    }
+  };
+  // Every page of an endpoint that answers with a bare array.
+  const readList = async <T>(path: string): Promise<T[]> => {
+    const all: T[] = [];
+    for (let page = 1; ; page += 1) {
+      const response = await call('GET', `${path}?per_page=100&page=${page}`);
+      if (!response.ok) {
+        throw new ForgeError(`GitHub answered ${response.status} for ${path}.`);
+      }
+      const items = (await response.json()) as T[];
+      if (!Array.isArray(items)) {
+        throw new ForgeError(`GitHub answered ${path} without a list.`);
+      }
+      all.push(...items);
+      if (items.length < 100) return all;
     }
   };
   const write = async (method: string, path: string, body?: unknown) => {
@@ -202,6 +240,66 @@ export function createGitHubForge(options: {
         );
       }
       return { merged: true };
+    },
+
+    async reviewComments(number, reviewId) {
+      const comments = await readList<{
+        body?: unknown;
+        line?: unknown;
+        original_line?: unknown;
+        path?: unknown;
+      }>(`/pulls/${number}/reviews/${reviewId}/comments`);
+      return comments.map((comment) => {
+        const line =
+          typeof comment.line === 'number'
+            ? comment.line
+            : typeof comment.original_line === 'number'
+              ? comment.original_line
+              : undefined;
+        return {
+          body: typeof comment.body === 'string' ? comment.body : '',
+          file: typeof comment.path === 'string' ? comment.path : '',
+          ...(line === undefined ? {} : { line }),
+        };
+      });
+    },
+
+    async reviews(number) {
+      const reviews = await readList<{
+        body?: unknown;
+        html_url?: unknown;
+        id?: unknown;
+        state?: unknown;
+        submitted_at?: unknown;
+        user?: { login?: unknown } | null;
+      }>(`/pulls/${number}/reviews`);
+      const states: Record<string, ForgeReview['state']> = {
+        APPROVED: 'approved',
+        CHANGES_REQUESTED: 'changes_requested',
+        COMMENTED: 'commented',
+        DISMISSED: 'dismissed',
+      };
+      return reviews.flatMap((review): ForgeReview[] => {
+        const state = states[String(review.state)];
+        if (
+          state === undefined ||
+          typeof review.id !== 'number' ||
+          typeof review.submitted_at !== 'string' ||
+          typeof review.user?.login !== 'string'
+        ) {
+          return [];
+        }
+        return [
+          {
+            body: typeof review.body === 'string' ? review.body : '',
+            id: review.id,
+            login: review.user.login,
+            state,
+            submittedAt: new Date(review.submitted_at),
+            url: typeof review.html_url === 'string' ? review.html_url : '',
+          },
+        ];
+      });
     },
 
     async pullRequest(number) {

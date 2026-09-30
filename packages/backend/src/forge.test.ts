@@ -225,6 +225,102 @@ describe('the GitHub forge', () => {
     ]);
   });
 
+  test('reads every submitted review of a pull request, oldest first, across pages', async () => {
+    const page = (from: number, count: number) =>
+      Array.from({ length: count }, (_, index) => ({
+        body: '',
+        commit_id: sha,
+        html_url: `https://github.com/acme/website/pull/482#pullrequestreview-${from + index}`,
+        id: from + index,
+        state: 'COMMENTED',
+        submitted_at: '2026-10-01T09:00:00Z',
+        user: { login: 'someone' },
+      }));
+    const { calls, fetch } = stubFetch((call) =>
+      call.url.endsWith('page=1')
+        ? { body: page(1, 100), status: 200 }
+        : {
+            body: [
+              {
+                body: 'Rename it.',
+                commit_id: sha,
+                html_url:
+                  'https://github.com/acme/website/pull/482#pullrequestreview-101',
+                id: 101,
+                state: 'CHANGES_REQUESTED',
+                submitted_at: '2026-10-01T10:00:00Z',
+                user: { login: 'Octocat' },
+              },
+              {
+                id: 102,
+                state: 'PENDING',
+                user: { login: 'octocat' },
+              },
+              {
+                body: null,
+                commit_id: sha,
+                html_url:
+                  'https://github.com/acme/website/pull/482#pullrequestreview-103',
+                id: 103,
+                state: 'APPROVED',
+                submitted_at: '2026-10-01T11:00:00Z',
+                user: { login: 'hubot' },
+              },
+            ],
+            status: 200,
+          },
+    );
+    const forge = createGitHubForge({ ...repository, fetch });
+
+    const reviews = await forge.reviews(482);
+
+    expect(calls.map((call) => call.url)).toEqual([
+      'https://api.github.com/repos/acme/website/pulls/482/reviews?per_page=100&page=1',
+      'https://api.github.com/repos/acme/website/pulls/482/reviews?per_page=100&page=2',
+    ]);
+    expect(reviews).toHaveLength(102);
+    expect(reviews.slice(-2)).toEqual([
+      {
+        body: 'Rename it.',
+        id: 101,
+        login: 'Octocat',
+        state: 'changes_requested',
+        submittedAt: new Date('2026-10-01T10:00:00Z'),
+        url: 'https://github.com/acme/website/pull/482#pullrequestreview-101',
+      },
+      {
+        body: '',
+        id: 103,
+        login: 'hubot',
+        state: 'approved',
+        submittedAt: new Date('2026-10-01T11:00:00Z'),
+        url: 'https://github.com/acme/website/pull/482#pullrequestreview-103',
+      },
+    ]);
+    expect(reviews[0]?.state).toBe('commented');
+  });
+
+  test('reads a review’s comments with their file and line', async () => {
+    const { calls, fetch } = stubFetch(() => ({
+      body: [
+        { body: 'Too long.', line: 12, path: 'src/export.ts' },
+        { body: 'Why?', line: null, original_line: 4, path: 'README.md' },
+        { body: 'Outdated.', line: null, path: 'old.ts' },
+      ],
+      status: 200,
+    }));
+    const forge = createGitHubForge({ ...repository, fetch });
+
+    expect(await forge.reviewComments(482, 101)).toEqual([
+      { body: 'Too long.', file: 'src/export.ts', line: 12 },
+      { body: 'Why?', file: 'README.md', line: 4 },
+      { body: 'Outdated.', file: 'old.ts' },
+    ]);
+    expect(calls[0]?.url).toBe(
+      'https://api.github.com/repos/acme/website/pulls/482/reviews/101/comments?per_page=100&page=1',
+    );
+  });
+
   test('a failed read is an error, never an empty answer', async () => {
     const { fetch } = stubFetch(() => ({ body: {}, status: 502 }));
     const forge = createGitHubForge({ ...repository, fetch });

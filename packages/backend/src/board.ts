@@ -107,7 +107,26 @@ export type DeliveryEvent = {
   | { readonly kind: 'sent_back' }
   | { readonly kind: 'returned_to_design'; readonly reason: string }
   | { readonly kind: 'merged'; readonly base: string; readonly sha: string }
+  | {
+      readonly kind: 'navigator_review';
+      readonly body: string;
+      readonly comments: readonly NavigatorReviewComment[];
+      readonly url: string | null;
+      readonly verdict: 'approved' | 'changes_requested';
+    }
+  | {
+      readonly kind: 'review_not_counted';
+      readonly account: string;
+      readonly login: string;
+    }
 );
+
+/** A comment on the navigator's own GitHub review (spec §4.9). */
+export interface NavigatorReviewComment {
+  readonly body: string;
+  readonly file: string;
+  readonly line?: number;
+}
 
 export interface ReviewFinding {
   readonly file: string;
@@ -167,6 +186,14 @@ export type DeliveryCurrent =
       readonly reviewer: string | null;
     }
   | { readonly kind: 'waiting_for_checks' }
+  | {
+      /** The GitHub account whose review counts, as it was when the wait began. */
+      readonly account: string;
+      readonly kind: 'code_review';
+      readonly pullRequestUrl: string | null;
+      /** The agent that approved it. */
+      readonly reviewer: string | null;
+    }
   | null;
 
 /** The block the item waits on the navigator for; null once it has moved on. */
@@ -1052,6 +1079,25 @@ function toDeliveryEvent(row: {
         kind: 'merged',
         sha: text(payload.sha),
       };
+    case 'navigator_review':
+      return {
+        ...common,
+        body: text(payload.body),
+        comments: Array.isArray(payload.comments)
+          ? (payload.comments as NavigatorReviewComment[])
+          : [],
+        kind: 'navigator_review',
+        url: typeof payload.url === 'string' ? payload.url : null,
+        verdict:
+          payload.verdict === 'approved' ? 'approved' : 'changes_requested',
+      };
+    case 'review_not_counted':
+      return {
+        ...common,
+        account: text(payload.account),
+        kind: 'review_not_counted',
+        login: text(payload.login),
+      };
   }
   if (row.kind === 'pull_request') {
     const url = typeof payload.url === 'string' ? payload.url : '';
@@ -1080,6 +1126,8 @@ const deliveryRecordKinds = [
   'sent_back',
   'returned_to_design',
   'merged',
+  'navigator_review',
+  'review_not_counted',
 ] as const;
 
 /**
@@ -1191,9 +1239,17 @@ async function deliveryCurrent(
   const item = await database
     .selectFrom('work_items')
     .leftJoin('runs', 'runs.id', 'work_items.holder_run_id')
-    .select(['work_items.project_id', 'work_items.state', 'runs.agent_name'])
+    .select([
+      'work_items.project_id',
+      'work_items.state',
+      'work_items.waiting_kind',
+      'runs.agent_name',
+    ])
     .where('work_items.id', '=', itemId)
     .executeTakeFirstOrThrow();
+  if (item.state === 'waiting' && item.waiting_kind === 'code_review') {
+    return codeReviewCurrent(database, itemId);
+  }
   if (item.state === 'merging') {
     return { kind: 'waiting_for_checks' };
   }
@@ -1214,6 +1270,41 @@ async function deliveryCurrent(
     .limit(1)
     .executeTakeFirst();
   return { kind: 'waiting_for_review', reviewer: reviewer?.name ?? null };
+}
+
+/** The navigator's GitHub review the item waits for (spec §4.9), from the records of its wait. */
+async function codeReviewCurrent(
+  database: Kysely<Database>,
+  itemId: string,
+): Promise<DeliveryCurrent> {
+  const [waiting, approval, pullRequest] = await Promise.all([
+    database
+      .selectFrom('work_item_records')
+      .select('payload')
+      .where('work_item_id', '=', itemId)
+      .where('kind', '=', 'awaiting_code_review')
+      .orderBy('id', 'desc')
+      .limit(1)
+      .executeTakeFirst(),
+    database
+      .selectFrom('work_item_records')
+      .leftJoin('runs', 'runs.id', 'work_item_records.run_id')
+      .select('runs.agent_name')
+      .where('work_item_records.work_item_id', '=', itemId)
+      .where('work_item_records.kind', '=', 'review')
+      .orderBy('work_item_records.id', 'desc')
+      .limit(1)
+      .executeTakeFirst(),
+    livePullRequest(database, itemId),
+  ]);
+  const account = (waiting?.payload as { account?: unknown } | undefined)
+    ?.account;
+  return {
+    account: typeof account === 'string' ? account : '',
+    kind: 'code_review',
+    pullRequestUrl: pullRequest?.url ?? null,
+    reviewer: approval?.agent_name ?? null,
+  };
 }
 
 /**

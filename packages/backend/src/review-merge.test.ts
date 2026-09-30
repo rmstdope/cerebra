@@ -9,7 +9,15 @@ import {
   type Board,
 } from './board.js';
 import type { Database } from './database.js';
-import type { Forge, ForgeChecks, ForgePullRequest } from './forge.js';
+import type {
+  Forge,
+  ForgeChecks,
+  ForgePullRequest,
+  ForgeReview,
+  ForgeReviewComment,
+} from './forge.js';
+import { loadFirstMessage } from './first-message.js';
+import { createNavigatorQueue } from './navigator-queue.js';
 import { createMergeWatcher } from './merge-watcher.js';
 import { registerTestProject, withTestDatabase } from './test-support.js';
 
@@ -316,6 +324,8 @@ function fakeForge(
     merge?: Awaited<ReturnType<Forge['merge']>>;
     pullRequest?: Partial<ForgePullRequest>;
     failing?: boolean;
+    reviews?: readonly ForgeReview[];
+    comments?: readonly ForgeReviewComment[];
   } = {},
 ) {
   const calls: string[] = [];
@@ -334,6 +344,15 @@ function fakeForge(
     async merge(number, sha) {
       calls.push(`merge ${number} ${sha}`);
       return answers.merge ?? { merged: true };
+    },
+    async reviewComments(number, reviewId) {
+      calls.push(`comments ${number} ${reviewId}`);
+      return [...(answers.comments ?? [])];
+    },
+    async reviews(number) {
+      calls.push(`reviews ${number}`);
+      if (answers.failing) throw new Error('GitHub is down');
+      return [...(answers.reviews ?? [])];
     },
     async pullRequest(number) {
       calls.push(`pull ${number}`);
@@ -572,3 +591,242 @@ describe('the backend merge', { concurrent: false }, () => {
     });
   });
 });
+
+describe(
+  'the navigator’s own review on GitHub (spec §4.9)',
+  { concurrent: false },
+  () => {
+    async function waitingForCode(
+      database: Kysely<Database>,
+      options: { readonly maxRounds?: number } = {},
+    ) {
+      const built = await builtItem(database, options);
+      await database
+        .updateTable('projects')
+        .set({ involvement: 'full', review_account: 'octocat' })
+        .where('id', '=', built.projectId)
+        .execute();
+      await review(database, built.board, built.itemId, 'approved');
+      return built;
+    }
+
+    async function row(database: Kysely<Database>, itemId: string) {
+      return database
+        .selectFrom('work_items')
+        .select([
+          'state',
+          'rounds',
+          'return_state',
+          'waiting_kind',
+          'waiting_reason',
+        ])
+        .where('id', '=', itemId)
+        .executeTakeFirstOrThrow();
+    }
+
+    function submitted(
+      login: string,
+      state: ForgeReview['state'],
+      id: number,
+      options: { readonly body?: string; readonly at?: Date } = {},
+    ): ForgeReview {
+      return {
+        body: options.body ?? '',
+        id,
+        login,
+        state,
+        submittedAt: options.at ?? new Date(Date.now() + 1_000),
+        url: `${pullRequestUrl}#pullrequestreview-${id}`,
+      };
+    }
+
+    test('the reviewer’s approval waits for the navigator’s review, shown on the item and in the queue', async () => {
+      await withTestDatabase(async (database) => {
+        const { board, itemId } = await waitingForCode(database);
+        const { calls, forge } = fakeForge();
+
+        await createMergeWatcher({ database, forge: async () => forge }).pass();
+
+        expect(calls).toEqual(['reviews 482']);
+        expect(await row(database, itemId)).toMatchObject({
+          return_state: 'merging',
+          state: 'waiting',
+          waiting_kind: 'code_review',
+          waiting_reason: 'Waiting for your review on GitHub',
+        });
+        const activity = await board.deliveryActivity(itemId);
+        expect(activity.current).toEqual({
+          account: 'octocat',
+          kind: 'code_review',
+          pullRequestUrl,
+          reviewer: 'Rogue',
+        });
+        expect(activity.blocked).toBeNull();
+        expect(
+          (await createNavigatorQueue(database).list()).entries,
+        ).toMatchObject([
+          { checkpoint: 'code_review', id: itemId, kind: 'review' },
+        ]);
+      });
+    });
+
+    test('an approval from the configured account moves it on to merge', async () => {
+      await withTestDatabase(async (database) => {
+        const { board, itemId } = await waitingForCode(database);
+        const { calls, forge } = fakeForge({
+          reviews: [
+            submitted('octocat', 'commented', 1),
+            submitted('OctoCat', 'approved', 2),
+          ],
+        });
+
+        await createMergeWatcher({ database, forge: async () => forge }).pass();
+
+        expect(await board.getWorkItem(itemId)).toMatchObject({
+          state: 'done',
+        });
+        expect(calls).toContain(`merge 482 ${head}`);
+        const kinds = (await board.deliveryActivity(itemId)).events.map(
+          (event) => event.kind,
+        );
+        expect(kinds.slice(-3)).toEqual([
+          'review',
+          'navigator_review',
+          'merged',
+        ]);
+        expect(
+          (await board.deliveryActivity(itemId)).events.find(
+            (event) => event.kind === 'navigator_review',
+          ),
+        ).toMatchObject({
+          comments: [],
+          url: `${pullRequestUrl}#pullrequestreview-2`,
+          verdict: 'approved',
+        });
+      });
+    });
+
+    test('requested changes send it back to the builder with the review’s comments, as a round', async () => {
+      await withTestDatabase(async (database) => {
+        const { board, itemId } = await waitingForCode(database);
+        const comments = [
+          {
+            body: 'Name the file after the month.',
+            file: 'src/export.ts',
+            line: 12,
+          },
+        ];
+        const { forge } = fakeForge({
+          comments,
+          reviews: [
+            submitted('octocat', 'changes_requested', 5, {
+              body: 'Nearly there.',
+            }),
+          ],
+        });
+
+        await createMergeWatcher({ database, forge: async () => forge }).pass();
+
+        expect(await row(database, itemId)).toMatchObject({
+          rounds: 1,
+          state: 'build_ready',
+        });
+        const claimed = await board.claim(itemId, 'builder');
+        if (!claimed.ok) throw new Error(claimed.reason);
+        await nameRun(database, claimed.item.holderRunId ?? '', 'Wolverine');
+        const events = (await board.deliveryActivity(itemId)).events;
+        expect(events.slice(-2)).toMatchObject([
+          {
+            body: 'Nearly there.',
+            comments,
+            kind: 'navigator_review',
+            url: `${pullRequestUrl}#pullrequestreview-5`,
+            verdict: 'changes_requested',
+          },
+          { kind: 'rework_started', maxRounds: 3, round: 2 },
+        ]);
+        const message = await loadFirstMessage(database, itemId, 'builder');
+        expect(message).toContain(
+          'The navigator requested changes on GitHub: “Nearly there.”',
+        );
+        expect(message).toContain(
+          '- src/export.ts:12 — Name the file after the month.',
+        );
+      });
+    });
+
+    test('requested changes that reach max_rounds block the item', async () => {
+      await withTestDatabase(async (database) => {
+        const { board, itemId } = await waitingForCode(database, {
+          maxRounds: 1,
+        });
+        const { forge } = fakeForge({
+          reviews: [submitted('octocat', 'changes_requested', 5)],
+        });
+
+        await createMergeWatcher({ database, forge: async () => forge }).pass();
+
+        expect(await row(database, itemId)).toMatchObject({
+          state: 'waiting',
+          waiting_kind: 'escalation',
+          waiting_reason: "Can't merge: too many rounds",
+        });
+      });
+    });
+
+    test('a review from any other account never counts, and is noted once', async () => {
+      await withTestDatabase(async (database) => {
+        const { board, itemId } = await waitingForCode(database);
+        const { forge } = fakeForge({
+          reviews: [
+            submitted('hubot', 'approved', 7),
+            submitted('hubot', 'changes_requested', 8),
+            submitted('octocat', 'approved', 9, { at: new Date(0) }),
+          ],
+        });
+        const watcher = createMergeWatcher({
+          database,
+          forge: async () => forge,
+        });
+
+        await watcher.pass();
+        await watcher.pass();
+
+        expect(await row(database, itemId)).toMatchObject({
+          state: 'waiting',
+          waiting_kind: 'code_review',
+        });
+        const noted = (await board.deliveryActivity(itemId)).events.filter(
+          (event) => event.kind === 'review_not_counted',
+        );
+        expect(noted).toEqual([
+          expect.objectContaining({
+            account: 'octocat',
+            kind: 'review_not_counted',
+            login: 'hubot',
+          }),
+        ]);
+      });
+    });
+
+    test('a later change of account leaves the waiting review as it was', async () => {
+      await withTestDatabase(async (database) => {
+        const { board, itemId, projectId } = await waitingForCode(database);
+        await database
+          .updateTable('projects')
+          .set({ involvement: 'autonomous', review_account: null })
+          .where('id', '=', projectId)
+          .execute();
+        const { forge } = fakeForge({
+          reviews: [submitted('octocat', 'approved', 3)],
+        });
+
+        await createMergeWatcher({ database, forge: async () => forge }).pass();
+
+        expect(await board.getWorkItem(itemId)).toMatchObject({
+          state: 'done',
+        });
+      });
+    });
+  },
+);
