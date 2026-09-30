@@ -75,6 +75,8 @@ jobs:
           sudo cp -r "$RUNNER_TEMP/podman-linux-amd64/usr" "$RUNNER_TEMP/podman-linux-amd64/etc" /
           hash -r
           test "$(command -v podman)" = /usr/local/bin/podman
+          # Ubuntu's AppArmor profile covers /usr/bin/podman only; let this one make user namespaces.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Start the rootless Podman API
         run: |
           podman version
