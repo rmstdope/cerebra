@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import { type AuthService, type AuthenticationResult } from './auth.js';
 import type { Backups } from './backups.js';
 import { PlanAnswerError, type PlanApprovals } from './plan-approvals.js';
+import { DrawingsAnswerError, type DrawingQuestions } from './drawings.js';
 import {
   InvolvementInputError,
   type InvolvementSettings,
@@ -107,6 +108,8 @@ export interface ServerOptions {
   readonly involvement?: InvolvementSettings;
   /** Takes the navigator's answers to plans waiting for approval (spec §4.9). */
   readonly plans?: Pick<PlanApprovals, 'answer'>;
+  /** Takes the navigator's answers to a designer's drawings (spec §6.3). */
+  readonly drawings?: Pick<DrawingQuestions, 'answer'>;
   /** Explains waiting work; absent when no container engine is configured. */
   readonly dispatcher?: Pick<Dispatcher, 'status'>;
   /** The scheduled database backups; absent when no backup folder is configured. */
@@ -352,6 +355,7 @@ export const createServer = async ({
   startSettings,
   involvement,
   plans,
+  drawings,
   dispatcher,
   onMutation,
   attention,
@@ -1101,6 +1105,27 @@ export const createServer = async ({
             : error.code === 'not_found'
               ? [404, 'not_found']
               : [409, 'not_waiting'];
+        return reply.status(status).send({ code, error: error.message });
+      }
+      throw error;
+    }
+  });
+
+  server.post('/api/runs/:runId/drawings-answers', async (request, reply) => {
+    if (drawings === undefined) {
+      return reply
+        .status(503)
+        .send({ error: 'Drawings can’t be answered right now.' });
+    }
+    const { runId } = request.params as { runId: string };
+    try {
+      return await drawings.answer(runId, request.body);
+    } catch (error) {
+      if (error instanceof DrawingsAnswerError) {
+        const [status, code] =
+          error.code === 'invalid'
+            ? [400, 'invalid_answer']
+            : [409, 'not_waiting'];
         return reply.status(status).send({ code, error: error.message });
       }
       throw error;

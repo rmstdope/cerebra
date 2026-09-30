@@ -11,8 +11,13 @@ import {
 } from 'react';
 
 import {
+  confirmDesignLabel,
+  confirmDesignTitle,
+  parseDesignQuestion,
   parseOutcomeQuestion,
   routeChoices,
+  type DesignQuestion,
+  type Drawing,
   type OutcomeQuestion,
   type OutcomeRoute,
 } from '@cerebra/shared';
@@ -20,6 +25,7 @@ import {
 import type { AgentRole } from './fleet';
 import { roleNames } from './fleet-page';
 import {
+  DesignSectionsView,
   OutcomeSectionsView,
   ThreadView,
   outcomeTitle,
@@ -28,14 +34,17 @@ import {
 import {
   buildThread,
   describeStep,
+  drawingNamed,
   outcomeMoveOf,
   type ThreadItem,
 } from './conversation-thread';
 import { trapFocus } from './focus-trap';
 import {
   browserConversationClient,
+  ConversationRequestError,
   type Conversation,
   type ConversationClient,
+  type DrawingsReply,
   type PlanVerdict,
   type Question,
   type RecordedEvent,
@@ -82,15 +91,32 @@ function hasOpenPlan(events: readonly RecordedEvent[]): boolean {
   return open;
 }
 
+/** Whether the designer's newest round of drawings still waits for the navigator. */
+function hasOpenDrawings(events: readonly RecordedEvent[]): boolean {
+  let open = false;
+  for (const { event } of events) {
+    if (event.kind === 'drawings') open = true;
+    if (
+      event.kind === 'drawings_answer' ||
+      event.kind === 'drawings_withdrawn'
+    ) {
+      open = false;
+    }
+  }
+  return open;
+}
+
 function activityOf(events: readonly RecordedEvent[]): string[] {
   return events
     .filter(isTopLevel)
     .flatMap(({ event }) =>
       event.kind === 'question'
         ? ['Asked a question']
-        : event.kind === 'tool_call'
-          ? [describeStep(event.name, event.input)]
-          : [],
+        : event.kind === 'drawings'
+          ? ['Showed drawings']
+          : event.kind === 'tool_call'
+            ? [describeStep(event.name, event.input)]
+            : [],
     )
     .slice(-5)
     .reverse();
@@ -141,10 +167,13 @@ function startedText(at: string, now: Date): string {
 }
 
 function QuestionForm({
+  drawingFor,
   name,
   onAnswer,
   question,
 }: {
+  /** The drawing a design's drawing section names, when the thread showed it. */
+  readonly drawingFor: (section: string) => Drawing | null;
   readonly name: string;
   readonly onAnswer: (answers: Record<string, string>) => Promise<void>;
   readonly question: OpenQuestion;
@@ -196,6 +225,25 @@ function QuestionForm({
           submit({ [question.questions[0]!.question]: answer })
         }
         outcome={outcome}
+        questionId={question.questionId}
+        sending={sending}
+      />
+    );
+  }
+
+  const design =
+    question.questions.length === 1 && question.questions[0] !== undefined
+      ? parseDesignQuestion(question.questions[0])
+      : null;
+  if (design !== null && question.questions[0] !== undefined) {
+    return (
+      <DesignForm
+        design={design}
+        drawing={drawingFor(design.sections['The drawing'])}
+        name={name}
+        onAnswer={(answer) =>
+          submit({ [question.questions[0]!.question]: answer })
+        }
         questionId={question.questionId}
         sending={sending}
       />
@@ -364,6 +412,83 @@ function OutcomeForm({
   );
 }
 
+/** The designer's write-up of the agreed experience, confirmed or changed (spec §6.3). */
+function DesignForm({
+  design,
+  drawing,
+  name,
+  onAnswer,
+  questionId,
+  sending,
+}: {
+  readonly design: DesignQuestion;
+  readonly drawing: Drawing | null;
+  readonly name: string;
+  readonly onAnswer: (answer: string) => Promise<void>;
+  readonly questionId: string;
+  readonly sending: boolean;
+}): ReactNode {
+  const form = useRef<HTMLFormElement>(null);
+  const id = useId();
+  const [own, setOwn] = useState('');
+
+  useEffect(() => {
+    form.current?.focus();
+  }, [questionId]);
+
+  return (
+    <form
+      aria-labelledby={`${id}-title`}
+      className="rounded-2xl border border-[var(--accent)] bg-[var(--surface)] p-4 shadow-sm outline-none focus-visible:ring-3 focus-visible:ring-[var(--focus)]"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (own.trim() === '' || sending) return;
+        void onAnswer(own.trim());
+      }}
+      ref={form}
+      tabIndex={-1}
+    >
+      <h2 className="font-bold" id={`${id}-title`}>
+        {confirmDesignTitle}
+      </h2>
+      <p className="mt-1 text-sm text-[var(--muted)]">
+        {`${name} needs one answer before it can continue.`}
+      </p>
+      <DesignSectionsView
+        drawing={drawing}
+        name={name}
+        sections={design.sections}
+      />
+      <button
+        className="secondary-button mt-3 w-full text-left text-sm"
+        disabled={sending}
+        onClick={() => void onAnswer(confirmDesignLabel)}
+        type="button"
+      >
+        <b>{confirmDesignLabel}</b>
+      </button>
+      <label className="auth-label" htmlFor={`${id}-own`}>
+        Or say what to change
+      </label>
+      <div className="flex gap-2">
+        <input
+          className="auth-input min-w-0 flex-1"
+          id={`${id}-own`}
+          onChange={(event) => setOwn(event.target.value)}
+          value={own}
+        />
+        <button
+          className="primary-button self-end"
+          disabled={own.trim() === '' || sending}
+          type="submit"
+        >
+          Send
+        </button>
+      </div>
+    </form>
+  );
+}
+
 /** The newest refused outcome, while nothing has moved since and the run can still act on Try again. */
 function retryKeyOf(
   items: readonly ThreadItem[],
@@ -474,7 +599,8 @@ export function ConversationPage({
     conversation.run.state !== 'finished' &&
     conversation.run.state !== 'failed' &&
     (openQuestionOf(conversation.events) !== null ||
-      hasOpenPlan(conversation.events));
+      hasOpenPlan(conversation.events) ||
+      hasOpenDrawings(conversation.events));
 
   useEffect(() => {
     if (loaded && !formShown.current) composer.current?.focus();
@@ -523,9 +649,10 @@ export function ConversationPage({
   const hasMessages = items.length > 0 || pending.length > 0;
   const question = openQuestionOf(events);
   const planOpen = hasOpenPlan(events);
+  const drawingsOpen = hasOpenDrawings(events);
   const shown = shownState(
     run.state,
-    question !== null || planOpen,
+    question !== null || planOpen || drawingsOpen,
     hasMessages,
   );
   const live = shown !== 'finished' && shown !== 'failed';
@@ -552,6 +679,19 @@ export function ConversationPage({
     ) => {
       following.current = true;
       await client.answerPlan(runId, planId, verdict, text);
+    },
+    onAnswerDrawings: async (drawingsId: string, reply: DrawingsReply) => {
+      setProblem(null);
+      following.current = true;
+      try {
+        await client.answerDrawings(runId, drawingsId, reply);
+      } catch (error) {
+        setProblem(
+          error instanceof ConversationRequestError && error.status === 409
+            ? error.message
+            : 'Cerebra couldn’t send that answer. Try again.',
+        );
+      }
     },
     onRetryOutcome: () => void sendText('Try again.', false),
     planTitle: run.item?.title ?? '',
@@ -695,7 +835,12 @@ export function ConversationPage({
               </article>
             ))}
             {question !== null && live ? (
-              <QuestionForm name={name} onAnswer={answer} question={question} />
+              <QuestionForm
+                drawingFor={(section) => drawingNamed(items, section)}
+                name={name}
+                onAnswer={answer}
+                question={question}
+              />
             ) : null}
             {shown === 'finished' ? (
               <section className="rounded-2xl border border-[var(--border)] p-4">

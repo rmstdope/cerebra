@@ -95,6 +95,16 @@ interface Nested {
 /** What the navigator answered a plan with (spec §4.9). */
 export type PlanVerdict = 'approved' | 'changes';
 
+/** One drawing of a designer's round (spec §6.3). */
+export interface Drawing {
+  readonly label: string;
+  /** What choosing it costs, in a line. */
+  readonly cost: string;
+  readonly recommended: boolean;
+  /** Where the drawing is served; null when it cannot be shown. */
+  readonly url: string | null;
+}
+
 export type AgentEvent = Nested &
   (
     | { readonly kind: 'message'; readonly text: string }
@@ -154,6 +164,25 @@ export type AgentEvent = Nested &
         readonly verdict: PlanVerdict;
         readonly text: string;
       }
+    /**
+     * A round of drawings the designer asks the navigator to choose from (spec §6.3). This and
+     * the two below are written by the backend, never accepted from a runner.
+     */
+    | {
+        readonly kind: 'drawings';
+        readonly drawingsId: string;
+        readonly question: string;
+        readonly drawings: readonly Drawing[];
+      }
+    /** The navigator's answer to a round: the chosen label, or else the written change. */
+    | {
+        readonly kind: 'drawings_answer';
+        readonly drawingsId: string;
+        readonly choice: string | null;
+        readonly text: string;
+      }
+    /** A round whose asking call stopped waiting, so it can no longer be answered. */
+    | { readonly kind: 'drawings_withdrawn'; readonly drawingsId: string }
     | { readonly kind: 'status'; readonly status: RunStatus }
     | { readonly kind: 'error'; readonly message: string }
     | {

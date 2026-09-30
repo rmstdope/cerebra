@@ -340,6 +340,65 @@ describe('navigator queue', { concurrent: false }, () => {
     ]);
   });
 
+  test('a waiting drawings round is a question in the queue until it is answered or withdrawn', async () => {
+    const round = (drawingsId: string, question: string, at: string) => ({
+      at,
+      event: {
+        drawings: [
+          { cost: '', label: 'A · Toolbar', recommended: true, url: null },
+        ],
+        drawingsId,
+        kind: 'drawings',
+        question,
+      },
+    });
+    const designer = await run(alpha, 'Iris', 'awaiting_input', [
+      round('d-1', 'Where should the export live?', '2026-10-01T09:00:00Z'),
+      {
+        at: '2026-10-01T09:01:00Z',
+        event: {
+          choice: null,
+          drawingsId: 'd-1',
+          kind: 'drawings_answer',
+          text: 'Smaller.',
+        },
+      },
+      round('d-2', 'Which of these, then?', '2026-10-01T09:02:00Z'),
+    ]);
+
+    expect((await queue.list()).entries).toEqual([
+      {
+        askedBy: 'Iris',
+        availableRoutes: [],
+        blocked: false,
+        checkpoint: null,
+        description: '',
+        id: `run:${designer}:d-2`,
+        kind: 'question',
+        priority: null,
+        projectId: alpha,
+        projectName: 'acme/alpha',
+        run: { id: designer },
+        since: new Date('2026-10-01T09:02:00Z'),
+        title: 'Which of these, then?',
+        waitingReason: 'Which of these, then?',
+      },
+    ]);
+
+    await database
+      .insertInto('run_events')
+      .values({
+        event: JSON.stringify({
+          drawingsId: 'd-2',
+          kind: 'drawings_withdrawn',
+        }),
+        position: 4,
+        run_id: designer,
+      })
+      .execute();
+    expect((await queue.list()).entries).toEqual([]);
+  });
+
   test('lists a builder’s plan waiting for approval until it is answered, withdrawn or the run ends', async () => {
     const id = await file(alpha, 'Add export button', 'build_ready');
     const claimed = await board.claim(id, 'builder');

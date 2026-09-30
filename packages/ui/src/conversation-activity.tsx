@@ -1,8 +1,16 @@
 import { useId, useState, type ReactNode } from 'react';
 
-import { outcomeSections, type OutcomeSections } from '@cerebra/shared';
+import {
+  confirmDesignTitle,
+  designSections,
+  outcomeSections,
+  type DesignSections,
+  type Drawing,
+  type OutcomeSections,
+} from '@cerebra/shared';
 
 import {
+  drawingNamed,
   describeStep,
   exitCodeOf,
   fileChangeOf,
@@ -12,8 +20,9 @@ import {
   type StepItem,
   type ThreadItem,
 } from './conversation-thread';
+import { DrawingCards, DrawingsRoundView } from './drawing-cards';
 import { PlanCard } from './plan-card';
-import type { PlanVerdict } from './runs';
+import type { DrawingsReply, PlanVerdict } from './runs';
 
 const outputLimit = 20;
 
@@ -33,6 +42,39 @@ export function OutcomeSectionsView({
           <p className="mt-1 whitespace-pre-wrap break-words text-sm">
             {sections[name]}
           </p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * The five sections of an agreed experience, each under its heading; the drawing is a card of the
+ * chosen drawing when the thread still shows it.
+ */
+export function DesignSectionsView({
+  drawing,
+  name,
+  sections,
+}: {
+  readonly drawing: Drawing | null;
+  readonly name: string;
+  readonly sections: DesignSections;
+}): ReactNode {
+  return (
+    <div className="mt-3 rounded-lg border border-[var(--border)] bg-[var(--background)] p-3">
+      {designSections.map((section) => (
+        <div className="mt-3 first:mt-0" key={section}>
+          <h3 className="text-sm font-bold">{section}</h3>
+          {section === 'The drawing' && drawing !== null ? (
+            <div className="max-w-xs">
+              <DrawingCards drawings={[drawing]} name={name} />
+            </div>
+          ) : (
+            <p className="mt-1 whitespace-pre-wrap break-words text-sm">
+              {sections[section]}
+            </p>
+          )}
         </div>
       ))}
     </div>
@@ -307,6 +349,11 @@ export interface ThreadActions {
   readonly planTitle?: string;
   /** Opens an item an agent filed; absent where there is nowhere to open it. */
   readonly onOpenItem?: (itemId: string) => void;
+  /** Answers a designer's waiting round of drawings; absent where it cannot be answered. */
+  readonly onAnswerDrawings?: (
+    drawingsId: string,
+    reply: DrawingsReply,
+  ) => Promise<void>;
   /** Asks the agent to try a refused outcome again. */
   readonly onRetryOutcome?: () => void;
   /** The one refused outcome that offers Try again, if any. */
@@ -352,6 +399,42 @@ export function ThreadView({
         />
       );
     }
+    if (item.kind === 'drawings') {
+      const { onAnswerDrawings } = actions;
+      return (
+        <DrawingsRoundView
+          key={item.key}
+          live={live}
+          name={name}
+          onAnswer={
+            onAnswerDrawings === undefined
+              ? undefined
+              : (reply) => onAnswerDrawings(item.drawingsId, reply)
+          }
+          round={item}
+        />
+      );
+    }
+    if (item.kind === 'design') {
+      const id = `${item.key}-title`;
+      return (
+        <section
+          aria-labelledby={id}
+          className="max-w-[85%] self-start rounded-2xl border border-[var(--border)] p-4"
+          key={item.key}
+        >
+          <h2 className="font-bold" id={id}>
+            {confirmDesignTitle}
+          </h2>
+          <DesignSectionsView
+            drawing={drawingNamed(items, item.design.sections['The drawing'])}
+            name={name}
+            sections={item.design.sections}
+          />
+          <p className="mt-2 text-xs text-[var(--muted)]">{`${name} · ${timeOf(item.at)}`}</p>
+        </section>
+      );
+    }
     if (item.kind === 'filed') {
       const { onOpenItem } = actions;
       return (
@@ -385,7 +468,7 @@ export function ThreadView({
           key={item.key}
         >
           <h2 className="font-bold text-[var(--danger)]">
-            {`${name} couldn’t record the outcome.`}
+            {`${name} couldn’t record the ${item.record}.`}
           </h2>
           <p className="mt-1">
             Nothing was moved. Your answer is kept; try again.

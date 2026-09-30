@@ -3,6 +3,7 @@ import { expect, test } from 'vitest';
 import {
   buildThread,
   describeStep,
+  drawingNamed,
   exitCodeOf,
   fileChangeOf,
   lineDiff,
@@ -390,4 +391,182 @@ test('a plan answered with changes, then revised, keeps each card in its own sta
     ['superseded', true, null],
     ['open', true, null],
   ]);
+});
+
+const drawingsRound = (drawingsId: string, question: string): RunEvent => ({
+  drawings: [
+    {
+      cost: 'One click; the toolbar gets busier',
+      label: 'A · Button in the toolbar',
+      recommended: true,
+      url: '/drawings/a.html',
+    },
+    {
+      cost: 'Tidy toolbar; one extra click',
+      label: 'B · Inside the ⋯ menu',
+      recommended: false,
+      url: null,
+    },
+  ],
+  drawingsId,
+  kind: 'drawings',
+  question,
+});
+
+test('a round of drawings is open until answered, and a newer round supersedes it', () => {
+  const items = buildThread(
+    records([
+      drawingsRound('d-1', 'Where should the export live?'),
+      {
+        choice: null,
+        drawingsId: 'd-1',
+        kind: 'drawings_answer',
+        text: 'Make the button smaller.',
+      },
+      drawingsRound('d-2', 'Which of these, then?'),
+      drawingsRound('d-3', 'And now?'),
+      drawingsRound('d-4', 'Last one?'),
+      { drawingsId: 'd-4', kind: 'drawings_withdrawn' },
+      drawingsRound('d-5', 'Really the last?'),
+      {
+        choice: 'A · Button in the toolbar',
+        drawingsId: 'd-5',
+        kind: 'drawings_answer',
+        text: '',
+      },
+    ]),
+  );
+
+  expect(kinds(items)).toEqual([
+    'drawings',
+    'navigator',
+    'drawings',
+    'drawings',
+    'drawings',
+    'drawings',
+    'navigator',
+  ]);
+  expect(
+    items.map((item) => (item.kind === 'drawings' ? item.status : null)),
+  ).toEqual([
+    'answered',
+    null,
+    'superseded',
+    'superseded',
+    'withdrawn',
+    'answered',
+    null,
+  ]);
+  expect(items[0]).toMatchObject({
+    choice: null,
+    drawings: [{ label: 'A · Button in the toolbar' }, { url: null }],
+    drawingsId: 'd-1',
+    question: 'Where should the export live?',
+  });
+  expect(items[1]).toMatchObject({ text: 'Make the button smaller.' });
+  expect(items[5]).toMatchObject({ choice: 'A · Button in the toolbar' });
+  expect(items[6]).toMatchObject({ text: 'Chose A · Button in the toolbar' });
+
+  const open = buildThread(records([drawingsRound('d-1', 'Where?')]));
+  expect(open[0]).toMatchObject({ kind: 'drawings', status: 'open' });
+});
+
+const designText = [
+  'Confirm the agreed experience',
+  '## The agreed experience',
+  'An "Export CSV" button sits in the toolbar.',
+  '## The states',
+  'Empty: disabled.',
+  '## The words, exactly',
+  '"Export CSV"',
+  '## What was considered and rejected',
+  'The ⋯ menu.',
+  '## The drawing',
+  'A · Button in the toolbar',
+].join('\n');
+
+test('an answered design confirmation stays as its sections, and the answer drops the recommendation mark', () => {
+  const items = buildThread(
+    records([
+      {
+        kind: 'question',
+        questionId: 'q-d',
+        questions: [
+          {
+            header: 'Design',
+            multiSelect: false,
+            options: [
+              {
+                description: 'record it',
+                label: 'Looks right — hand it to building (Recommended)',
+              },
+              { description: 'say what to change', label: 'Change something' },
+            ],
+            question: designText,
+          },
+        ],
+      },
+      {
+        answers: {
+          [designText]: 'Looks right — hand it to building (Recommended)',
+        },
+        kind: 'answer',
+        questionId: 'q-d',
+      },
+    ]),
+  );
+
+  expect(kinds(items)).toEqual(['design', 'navigator']);
+  expect(items[0]).toMatchObject({
+    design: {
+      sections: { 'The drawing': 'A · Button in the toolbar' },
+      title: 'Confirm the agreed experience',
+    },
+  });
+  expect(items[1]).toMatchObject({ text: 'Looks right — hand it to building' });
+});
+
+test('a refused move says which record could not be kept', () => {
+  const refused = (record: string, to: string): RunEvent[] => [
+    {
+      input: { record: { kind: record, markdown: 'x' }, to },
+      kind: 'tool_call',
+      name: 'mcp__cerebra__transition',
+      toolCallId: `t-${record}`,
+    },
+    {
+      content: '{"error":"refused","message":"Nothing was moved."}',
+      isError: true,
+      kind: 'tool_result',
+      toolCallId: `t-${record}`,
+    },
+  ];
+  const items = buildThread(
+    records([
+      ...refused('outcome', 'design_ready'),
+      ...refused('design', 'build_ready'),
+    ]),
+  );
+
+  expect(items).toMatchObject([
+    { kind: 'outcome_failed', record: 'outcome' },
+    { kind: 'outcome_failed', record: 'design' },
+  ]);
+});
+
+test('a design’s drawing section finds the newest round that showed it', () => {
+  const items = buildThread(
+    records([
+      drawingsRound('d-1', 'Where?'),
+      drawingsRound('d-2', 'Where, then?'),
+    ]),
+  );
+
+  expect(drawingNamed(items, ' A · Button in the toolbar ')).toMatchObject({
+    url: '/drawings/a.html',
+  });
+  expect(
+    drawingNamed(items, 'A · Button in the toolbar\nWith a smaller icon.'),
+  ).toMatchObject({ label: 'A · Button in the toolbar' });
+  expect(drawingNamed(items, 'Z · Nowhere')).toBeNull();
 });

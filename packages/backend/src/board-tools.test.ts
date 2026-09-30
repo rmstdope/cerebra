@@ -54,6 +54,41 @@ const outcomeQuestion = (body = outcome.markdown) => ({
   question: `Confirm the outcome and where it goes next\n\n${body.split('\n## Route')[0] ?? ''}`,
 });
 
+const designSections = [
+  '## The agreed experience',
+  'An "Export XLSX" button sits beside "Export CSV".',
+  '## The states',
+  'Empty list: the button is disabled.',
+  '## The words, exactly',
+  '"Export XLSX"',
+  '## What was considered and rejected',
+  'A format picker: one more step.',
+];
+
+const design = {
+  kind: 'design',
+  markdown: [...designSections, '## The mockup', 'A · Beside CSV'].join('\n'),
+};
+
+const designQuestion = (drawing = 'A · Beside CSV') => ({
+  header: 'Design',
+  multiSelect: false,
+  options: [
+    {
+      description: 'record it and send it to building',
+      label: 'Looks right — hand it to building',
+    },
+    { description: 'say what to change', label: 'Change something' },
+  ],
+  question: [
+    'Confirm the agreed experience',
+    '',
+    ...designSections,
+    '## The drawing',
+    drawing,
+  ].join('\n'),
+});
+
 interface Fixture {
   readonly board: Board;
   /** What the backend wrote into runs' conversations, in order. */
@@ -69,6 +104,11 @@ interface Fixture {
   ask(
     caller: ToolCaller,
     options?: { readonly answer?: string; readonly markdown?: string },
+  ): Promise<void>;
+  /** Records the design confirmation in the run's events, and the navigator's answer if given. */
+  askDesign(
+    caller: ToolCaller,
+    options?: { readonly answer?: string; readonly drawing?: string },
   ): Promise<void>;
   item(options?: {
     readonly heldBy?: ToolCaller;
@@ -121,6 +161,22 @@ async function withBoard(run: (fixture: Fixture) => Promise<void>) {
           });
         }
       },
+      async askDesign(caller, { answer, drawing } = {}) {
+        const question = designQuestion(drawing);
+        const questionId = crypto.randomUUID();
+        await runs.append(caller.runId, {
+          kind: 'question',
+          questionId,
+          questions: [question],
+        });
+        if (answer !== undefined) {
+          await runs.append(caller.runId, {
+            answers: { [question.question]: answer },
+            kind: 'answer',
+            questionId,
+          });
+        }
+      },
       async caller(name, role, inProject = projectId) {
         const token = crypto.randomUUID();
         await runs.create({
@@ -152,7 +208,7 @@ async function withBoard(run: (fixture: Fixture) => Promise<void>) {
           const claimed = await board.transition(id, {
             actor: { role: 'backend', runId: heldBy.runId },
             record: { kind: 'claim', role: heldBy.role },
-            to: 'grooming',
+            to: state === 'design_ready' ? 'designing' : 'grooming',
           });
           if (!claimed.ok) throw new Error(claimed.reason);
         }
@@ -541,6 +597,110 @@ describe('board tools', { concurrent: false }, () => {
           state: 'design_ready',
         });
       });
+    });
+  });
+
+  describe('leaving design on the confirmed experience', () => {
+    const confirm = 'Looks right — hand it to building';
+
+    test('a designer cannot leave design before the navigator confirmed', async () => {
+      await withBoard(async ({ askDesign, board, caller, item, tools }) => {
+        const iris = await caller('Xavier', 'designer');
+        const heldId = await item({ heldBy: iris, state: 'design_ready' });
+        const move = () =>
+          tools.call(iris, 'transition', { record: design, to: 'build_ready' });
+
+        expect(await move()).toMatchObject({
+          code: 'refused',
+          message: expect.stringContaining('Ask the navigator') as unknown,
+          ok: false,
+        });
+        await askDesign(iris);
+        expect(await move()).toMatchObject({
+          code: 'refused',
+          message: expect.stringContaining('not answered') as unknown,
+          ok: false,
+        });
+        expect(await board.getWorkItem(heldId)).toMatchObject({
+          state: 'designing',
+        });
+      });
+    });
+
+    test('a designer cannot leave design while the newest confirmation was answered with a change', async () => {
+      await withBoard(async ({ askDesign, caller, item, tools }) => {
+        const iris = await caller('Xavier', 'designer');
+        await item({ heldBy: iris, state: 'design_ready' });
+        await askDesign(iris, { answer: confirm });
+        await askDesign(iris, { answer: 'Call it "Download XLSX".' });
+
+        expect(
+          await tools.call(iris, 'transition', {
+            record: design,
+            to: 'build_ready',
+          }),
+        ).toMatchObject({
+          code: 'refused',
+          message: expect.stringContaining(
+            'Updated. Here it is again.',
+          ) as unknown,
+          ok: false,
+        });
+      });
+    });
+
+    test('a designer cannot leave design with a record other than the one confirmed', async () => {
+      await withBoard(async ({ askDesign, caller, item, tools }) => {
+        const iris = await caller('Xavier', 'designer');
+        await item({ heldBy: iris, state: 'design_ready' });
+        await askDesign(iris, { answer: confirm, drawing: 'B · In the menu' });
+
+        expect(
+          await tools.call(iris, 'transition', {
+            record: design,
+            to: 'build_ready',
+          }),
+        ).toMatchObject({
+          code: 'refused',
+          message: expect.stringContaining('confirmed') as unknown,
+          ok: false,
+        });
+      });
+    });
+
+    test('moves to build_ready on the confirmed design, says what was recorded and releases the run', async () => {
+      await withBoard(
+        async ({ askDesign, board, caller, item, released, tools }) => {
+          const iris = await caller('Xavier', 'designer');
+          const heldId = await item({
+            heldBy: iris,
+            state: 'design_ready',
+            title: 'Export invoices as XLSX',
+          });
+          await askDesign(iris, { answer: `${confirm} (Recommended)` });
+
+          expect(
+            await tools.call(iris, 'transition', {
+              record: {
+                ...design,
+                markdown: design.markdown.replace('\n', '\n\n  '),
+              },
+              to: 'build_ready',
+            }),
+          ).toEqual({
+            ok: true,
+            value: {
+              id: heldId,
+              message: 'Recorded. Export invoices as XLSX now waits for build.',
+              state: 'build_ready',
+            },
+          });
+          expect(await board.getWorkItem(heldId)).toMatchObject({
+            state: 'build_ready',
+          });
+          expect(released).toEqual([iris.runId]);
+        },
+      );
     });
   });
 

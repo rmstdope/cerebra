@@ -1,10 +1,15 @@
 import {
+  confirmsDesign,
+  designRecordSectionsOf,
   outcomeSectionsOf,
+  parseDesignQuestion,
   parseOutcomeQuestion,
   routeChoices,
   routeOfAnswer,
+  sameDesign,
   sameOutcome,
   type AgentEvent,
+  type Question,
   type OutcomeRoute,
 } from '@cerebra/shared';
 import { sql, type Kysely } from 'kysely';
@@ -226,6 +231,49 @@ export function createBoardTools({
   }
 
   /**
+   * The newest question of the run that `parse` recognises, with the navigator's answer to it
+   * when there is one; null when the run never asked it.
+   */
+  async function newestAsked<T>(
+    caller: ToolCaller,
+    parse: (question: Question) => T | null,
+  ): Promise<{ readonly parsed: T; readonly answer?: string } | null> {
+    const rows = await database
+      .selectFrom('run_events')
+      .select('event')
+      .where('run_id', '=', caller.runId)
+      .where(sql<string>`event->>'kind'`, 'in', ['question', 'answer'])
+      .orderBy('position', 'asc')
+      .execute();
+    const events = rows.map((row) => row.event as AgentEvent);
+    let asked: { questionId: string; text: string; parsed: T } | null = null;
+    for (const event of events) {
+      if (event.kind !== 'question') continue;
+      for (const question of event.questions) {
+        const parsed = parse(question);
+        if (parsed !== null) {
+          asked = {
+            parsed,
+            questionId: event.questionId,
+            text: question.question,
+          };
+        }
+      }
+    }
+    if (asked === null) return null;
+    const { questionId, text } = asked;
+    const answer = events.find(
+      (event) => event.kind === 'answer' && event.questionId === questionId,
+    );
+    const chosen = answer?.kind === 'answer' ? answer.answers[text] : undefined;
+    return chosen === undefined
+      ? { parsed: asked.parsed }
+      : { answer: chosen, parsed: asked.parsed };
+  }
+
+  const nothingMoved = 'Nothing was moved.';
+
+  /**
    * A groomer leaves grooming only on the outcome and route the navigator
    * confirmed in the run's newest outcome question (spec §6.3).
    */
@@ -243,46 +291,20 @@ export function createBoardTools({
       // The lifecycle refuses a missing or malformed outcome record itself.
       return;
     }
-    const rows = await database
-      .selectFrom('run_events')
-      .select('event')
-      .where('run_id', '=', caller.runId)
-      .where(sql<string>`event->>'kind'`, 'in', ['question', 'answer'])
-      .orderBy('position', 'asc')
-      .execute();
-    const events = rows.map((row) => row.event as AgentEvent);
-    let asked: { questionId: string; text: string } | null = null;
-    let confirmed: ReturnType<typeof parseOutcomeQuestion> = null;
-    for (const event of events) {
-      if (event.kind !== 'question') continue;
-      for (const question of event.questions) {
-        const parsed = parseOutcomeQuestion(question);
-        if (parsed !== null) {
-          asked = { questionId: event.questionId, text: question.question };
-          confirmed = parsed;
-        }
-      }
-    }
-    const nothingMoved = 'Nothing was moved.';
-    if (asked === null || confirmed === null) {
+    const asked = await newestAsked(caller, parseOutcomeQuestion);
+    if (asked === null) {
       throw new Refusal(
         'refused',
         `Ask the navigator to confirm the outcome and its route with the outcome question before recording it. ${nothingMoved}`,
       );
     }
-    const questionId = asked.questionId;
-    const answer = events.find(
-      (event) => event.kind === 'answer' && event.questionId === questionId,
-    );
-    const chosen =
-      answer?.kind === 'answer' ? answer.answers[asked.text] : undefined;
-    if (chosen === undefined) {
+    if (asked.answer === undefined) {
       throw new Refusal(
         'refused',
         `The navigator has not answered the outcome question yet. ${nothingMoved}`,
       );
     }
-    const route = routeOfAnswer(chosen);
+    const route = routeOfAnswer(asked.answer);
     if (route === null) {
       throw new Refusal(
         'refused',
@@ -295,10 +317,55 @@ export function createBoardTools({
         `The navigator chose ${routeChoices[route].label}, so the item moves to ${routeStates[route]}. ${nothingMoved}`,
       );
     }
-    if (!sameOutcome(confirmed.sections, recorded)) {
+    if (!sameOutcome(asked.parsed.sections, recorded)) {
       throw new Refusal(
         'refused',
         `The outcome record differs from the outcome the navigator confirmed; record the confirmed sections word for word. ${nothingMoved}`,
+      );
+    }
+  }
+
+  /**
+   * A designer leaves design only on the experience the navigator confirmed in the run's newest
+   * design confirmation (spec §6.3).
+   */
+  async function requireDesignConfirmed(
+    caller: ToolCaller,
+    record: Arguments | undefined,
+  ): Promise<void> {
+    const markdown =
+      record?.kind === 'design' && typeof record.markdown === 'string'
+        ? record.markdown
+        : null;
+    const recorded =
+      markdown === null ? null : designRecordSectionsOf(markdown);
+    if (recorded === null) {
+      // The lifecycle refuses a missing or malformed design record itself.
+      return;
+    }
+    const asked = await newestAsked(caller, parseDesignQuestion);
+    if (asked === null) {
+      throw new Refusal(
+        'refused',
+        `Ask the navigator to confirm the agreed experience with the design confirmation before recording it. ${nothingMoved}`,
+      );
+    }
+    if (asked.answer === undefined) {
+      throw new Refusal(
+        'refused',
+        `The navigator has not answered the design confirmation yet. ${nothingMoved}`,
+      );
+    }
+    if (!confirmsDesign(asked.answer)) {
+      throw new Refusal(
+        'refused',
+        `The navigator answered the design confirmation with a change: apply it, say "Updated. Here it is again." and ask the whole question again. ${nothingMoved}`,
+      );
+    }
+    if (!sameDesign(asked.parsed.sections, recorded)) {
+      throw new Refusal(
+        'refused',
+        `The design record differs from the experience the navigator confirmed; record the confirmed sections word for word, the drawing under ## The mockup. ${nothingMoved}`,
       );
     }
   }
@@ -535,9 +602,14 @@ export function createBoardTools({
         const leavesGrooming =
           caller.role === 'groomer' &&
           (to === 'design_ready' || to === 'build_ready');
+        const leavesDesign = caller.role === 'designer' && to === 'build_ready';
         if (leavesGrooming) {
           await requireHeld(caller);
           await requireConfirmed(caller, to, record as Arguments | undefined);
+        }
+        if (leavesDesign) {
+          await requireHeld(caller);
+          await requireDesignConfirmed(caller, record as Arguments | undefined);
         }
         if (caller.role === 'builder' && to === 'review_ready') {
           await requireLinkedPullRequest(
@@ -551,7 +623,7 @@ export function createBoardTools({
           record: record as Arguments | undefined,
           to,
         }));
-        if (!leavesGrooming) {
+        if (!leavesGrooming && !leavesDesign) {
           return moved;
         }
         const { title } = await board.getWorkItem(moved.id);

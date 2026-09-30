@@ -249,8 +249,19 @@ passes, and records the filing run (`work_items.filed_by_run_id`) and the item i
 shows it as the row's "Filed by" line. A groomer's `transition` out of grooming is also checked
 against the run's recorded events: the newest outcome question it asked (the shape shared with the
 UI in `@cerebra/shared`) must have an answer naming the route of `to`, and the record's five sections
-must equal the ones the navigator confirmed, whitespace aside. A refusal says what to do next and
-that nothing was moved.
+must equal the ones the navigator confirmed, whitespace aside. A designer's `transition` from
+`designing` to `build_ready` is checked the same way against the newest design confirmation it
+asked: it must be answered "Looks right — hand it to building", and the `design` record's four
+sections and `## The mockup` must equal the confirmed experience and drawing. A refusal says what
+to do next and that nothing was moved.
+
+A designer's round of drawings waits in `drawings.ts`, one round per run and in memory: the round
+is written into the run's conversation as a `drawings` event, the run shows as awaiting input, and
+the asking call returns once the navigator answers with `POST /api/runs/:runId/drawings-answers`
+(`{ drawingsId, choice }` naming a drawing of the round, or `{ drawingsId, text }` with what to
+change), written as `drawings_answer`. A newer round or an abandoned call writes
+`drawings_withdrawn`; an answer to a round that is not the run's waiting one is refused as
+`not_waiting`, and the navigator queue lists each live run's waiting round as a question.
 
 A builder records its plan with `submit_plan` and each run of the project's checks with
 `report_checks`, both only while it holds the item in `building`; each is a record carrying the
@@ -482,7 +493,9 @@ accessibility target of `spec.md` §12.
 of their own, with `Content-Security-Policy: sandbox allow-scripts` and no network access
 (`connect-src 'none'`, `default-src` limited to the mockup itself), and shown in the UI in
 sandboxed iframes. A mockup's script can therefore run but can reach neither Cerebra's page, its
-cookies, the API, nor anything else.
+cookies, the API, nor anything else. Until that listener exists, a round's drawings carry no address and
+each card says the drawing couldn't be shown; the cards, the full-size view and the choice already
+work.
 
 **Notifications.** The backend reads the attention list (questions, waiting work and trouble) every
 five seconds and diffs it against the entries it has already seen; the first read after a start

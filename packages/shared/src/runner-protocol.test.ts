@@ -157,6 +157,9 @@ describe('up messages', () => {
   test.each([
     { kind: 'plan_approval', planId: 1, markdown: '## Context' },
     { kind: 'plan_answer', planId: 1, verdict: 'approved', text: '' },
+    { kind: 'drawings', drawingsId: 'd1', question: 'Which?', drawings: [] },
+    { kind: 'drawings_answer', drawingsId: 'd1', choice: null, text: 'No.' },
+    { kind: 'drawings_withdrawn', drawingsId: 'd1' },
   ])('refuses the backend’s own $kind event from a runner', (event) => {
     expect(() =>
       parseUpMessage(JSON.stringify({ type: 'event', seq: 1, event })),
