@@ -918,3 +918,127 @@ test('an item back in design shows no empty delivery story', async () => {
     screen.queryByRole('region', { name: 'Delivery activity' }),
   ).toBeNull();
 });
+
+test('an item waiting for the navigator’s GitHub review says whose review counts and links to the pull request', async () => {
+  show(
+    client(async () =>
+      activity([approved], {
+        current: {
+          account: 'henrikku',
+          kind: 'code_review',
+          pullRequestUrl: 'https://github.com/acme/website/pull/482',
+          reviewer: 'Rogue',
+        },
+      }),
+    ),
+    'waiting',
+  );
+
+  const banner = await screen.findByRole('region', {
+    name: 'Waiting for your review on GitHub',
+  });
+  expect(
+    within(banner).getByText(
+      'Rogue approved it. It merges once you approve the pull request as henrikku; requested changes send it back to the builder.',
+    ),
+  ).toBeTruthy();
+  const open = within(banner).getByRole('link', { name: 'Review on GitHub' });
+  expect(open.getAttribute('href')).toBe(
+    'https://github.com/acme/website/pull/482',
+  );
+  expect(open.getAttribute('target')).toBeNull();
+
+  const trail = screen.getByRole('region', { name: 'Delivery activity' });
+  const headings = within(trail).getAllByRole('heading', { level: 4 });
+  expect(headings.at(-1)?.textContent).toBe(
+    'Waiting for your review on GitHub',
+  );
+  expect(within(trail).getByText('Waiting for you.')).toBeTruthy();
+});
+
+test('tells the navigator’s GitHub reviews in the trail, and a review that does not count', async () => {
+  const at = '2026-10-04T11:00:00.000Z';
+  show(
+    client(async () =>
+      activity([
+        {
+          account: 'henrikku',
+          agentName: null,
+          at,
+          id: '20',
+          kind: 'review_not_counted',
+          login: 'octocat',
+          runId: null,
+        },
+        {
+          agentName: null,
+          at,
+          body: 'Two things.',
+          comments: [
+            {
+              body: 'Export ignores hidden columns.',
+              file: 'src/export.ts',
+              line: 12,
+            },
+            {
+              body: 'Rename the menu entry to “Export CSV”.',
+              file: 'src/menu.tsx',
+            },
+          ],
+          id: '21',
+          kind: 'navigator_review',
+          runId: null,
+          url: 'https://github.com/acme/website/pull/482#pullrequestreview-9',
+          verdict: 'changes_requested',
+        },
+        {
+          agentName: null,
+          at,
+          body: '',
+          comments: [],
+          id: '22',
+          kind: 'navigator_review',
+          runId: null,
+          url: null,
+          verdict: 'approved',
+        },
+      ]),
+    ),
+    'merging',
+  );
+
+  const trail = await screen.findByRole('region', {
+    name: 'Delivery activity',
+  });
+  const headings = await within(trail).findAllByRole('heading', { level: 4 });
+  expect(headings.map((heading) => heading.textContent)).toEqual([
+    'A review that doesn’t count',
+    'You requested changes on GitHub',
+    'You approved on GitHub',
+  ]);
+  expect(
+    within(trail).getByText(
+      'octocat approved on GitHub, but only henrikku’s review counts here.',
+    ),
+  ).toBeTruthy();
+  const comments = within(trail).getByRole('list', { name: 'Comments' });
+  expect(
+    within(comments)
+      .getAllByRole('listitem')
+      .map((item) => item.textContent),
+  ).toEqual([
+    'src/export.ts:12 — Export ignores hidden columns.',
+    'src/menu.tsx — Rename the menu entry to “Export CSV”.',
+  ]);
+  expect(
+    within(trail)
+      .getByRole('link', { name: 'Open the review on GitHub' })
+      .getAttribute('href'),
+  ).toBe('https://github.com/acme/website/pull/482#pullrequestreview-9');
+  expect(
+    within(trail).getByText('Waiting for checks, then it merges.'),
+  ).toBeTruthy();
+  expect(
+    screen.queryByRole('region', { name: 'Waiting for your review on GitHub' }),
+  ).toBeNull();
+});

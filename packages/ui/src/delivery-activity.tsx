@@ -40,7 +40,26 @@ export type DeliveryEvent = {
   | { readonly kind: 'sent_back' }
   | { readonly kind: 'returned_to_design'; readonly reason: string }
   | { readonly kind: 'merged'; readonly base: string; readonly sha: string }
+  | {
+      readonly kind: 'navigator_review';
+      readonly body: string;
+      readonly comments: readonly NavigatorReviewComment[];
+      readonly url: string | null;
+      readonly verdict: 'approved' | 'changes_requested';
+    }
+  | {
+      readonly kind: 'review_not_counted';
+      readonly account: string;
+      readonly login: string;
+    }
 );
+
+/** A comment on the navigator's own GitHub review. */
+export interface NavigatorReviewComment {
+  readonly body: string;
+  readonly file: string;
+  readonly line?: number;
+}
 
 export interface ReviewFinding {
   readonly file: string;
@@ -82,6 +101,14 @@ export type DeliveryCurrent =
   | { readonly kind: 'waiting_for_review'; readonly reviewer: string | null }
   | { readonly kind: 'plan_approval'; readonly runId: string }
   | { readonly kind: 'waiting_for_checks' }
+  | {
+      /** The GitHub account whose review counts. */
+      readonly account: string;
+      readonly kind: 'code_review';
+      readonly pullRequestUrl: string | null;
+      /** The agent that approved it. */
+      readonly reviewer: string | null;
+    }
   | null;
 
 export interface DeliveryActivityPage {
@@ -488,6 +515,13 @@ export function DeliveryActivity({
           returnButton={returnButton}
         />
       )}
+      {glance?.current?.kind === 'code_review' ? (
+        <CodeReviewBanner
+          current={glance.current}
+          onFollow={remember}
+          pullRequestUrl={glance.latestPullRequest?.url ?? null}
+        />
+      ) : null}
       {lead}
       {quiet ? null : (
         <div className="@container mt-6 border-t border-[var(--border)] pt-5">
@@ -654,6 +688,8 @@ function eventTone(event: DeliveryEvent): Tone {
       return 'failed';
     case 'merged':
       return 'success';
+    case 'navigator_review':
+      return event.verdict === 'approved' ? 'success' : 'failed';
     default:
       return 'done';
   }
@@ -721,6 +757,44 @@ function Banner({
           {answerFailure}
         </p>
       ) : null}
+    </section>
+  );
+}
+
+/** The item waits for the navigator's own review on GitHub (spec §4.9). */
+function CodeReviewBanner({
+  current,
+  onFollow,
+  pullRequestUrl,
+}: {
+  readonly current: Extract<DeliveryCurrent, { kind: 'code_review' }>;
+  readonly onFollow: (linkId: string) => void;
+  readonly pullRequestUrl: string | null;
+}): ReactNode {
+  const url = current.pullRequestUrl ?? pullRequestUrl;
+  return (
+    <section
+      aria-labelledby="delivery-code-review-heading"
+      className="mb-5 rounded-lg border border-amber-300 bg-amber-50 p-4 text-amber-950 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-50"
+    >
+      <h3 className="font-bold" id="delivery-code-review-heading">
+        Waiting for your review on GitHub
+      </h3>
+      <p className="mt-1 text-sm">
+        {current.reviewer ?? 'The reviewer'} approved it. It merges once you
+        approve the pull request as {current.account}; requested changes send it
+        back to the builder.
+      </p>
+      {url === null ? null : (
+        <a
+          className="primary-button mt-3 inline-block w-full text-center sm:w-auto"
+          href={url}
+          id="delivery-code-review-open"
+          onClick={() => onFollow('delivery-code-review-open')}
+        >
+          Review on GitHub
+        </a>
+      )}
     </section>
   );
 }
@@ -1035,6 +1109,67 @@ function EventText({
           </p>
         </>
       );
+    case 'navigator_review':
+      return (
+        <>
+          <h4
+            className={`font-bold ${event.verdict === 'approved' ? '' : 'text-[var(--danger)]'}`}
+          >
+            {event.verdict === 'approved'
+              ? 'You approved on GitHub'
+              : 'You requested changes on GitHub'}
+          </h4>
+          {event.verdict === 'approved' ? (
+            <p className="text-sm text-[var(--muted)]">
+              Waiting for checks, then it merges.
+            </p>
+          ) : (
+            <>
+              {event.body.trim() === '' ? null : (
+                <p className="text-sm break-words whitespace-pre-wrap">
+                  “{event.body.trim()}”
+                </p>
+              )}
+              {event.comments.length === 0 ? null : (
+                <ul aria-label="Comments" className="mt-1 grid gap-1 text-sm">
+                  {event.comments.map((comment, index) => (
+                    // Comments carry no id of their own; their order is fixed for an entry.
+                    <li className="break-words" key={index}>
+                      <span className="font-mono text-xs">
+                        {comment.file}
+                        {comment.line === undefined ? '' : `:${comment.line}`}
+                      </span>{' '}
+                      — {comment.body}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {event.url === null ? null : (
+                <p className="mt-1 text-sm">
+                  <a
+                    className={linkClass}
+                    href={event.url}
+                    id={linkId}
+                    onClick={() => onFollow(linkId)}
+                  >
+                    Open the review on GitHub
+                  </a>
+                </p>
+              )}
+            </>
+          )}
+        </>
+      );
+    case 'review_not_counted':
+      return (
+        <>
+          <h4 className="font-bold">A review that doesn’t count</h4>
+          <p className="text-sm text-[var(--muted)]">
+            {event.login} approved on GitHub, but only {event.account}’s review
+            counts here.
+          </p>
+        </>
+      );
     case 'merged':
       return (
         <>
@@ -1069,6 +1204,14 @@ function CurrentText({
         >
           Review plan
         </button>
+      </>
+    );
+  }
+  if (current.kind === 'code_review') {
+    return (
+      <>
+        <h4 className="font-bold">Waiting for your review on GitHub</h4>
+        <p className="text-sm text-[var(--muted)]">Waiting for you.</p>
       </>
     );
   }
