@@ -5,7 +5,7 @@ import {
   type Transaction,
 } from 'kysely';
 
-import type { Database, WorkItemType } from './database.js';
+import type { Database, HistoryKind, WorkItemType } from './database.js';
 import {
   createWorkItem,
   runEndedRequest,
@@ -60,6 +60,7 @@ export interface BoardHistoryEntry {
   readonly actorRole: string;
   readonly createdAt: Date;
   readonly fromState: WorkItemState;
+  readonly kind: HistoryKind;
   readonly reason: string | null;
   readonly toState: WorkItemState;
 }
@@ -726,17 +727,20 @@ export function createBoard(database: Kysely<Database>): Board {
           'actor_role',
           'created_at',
           'from_state',
+          'kind',
           'reason',
           'to_state',
         ])
         .where('work_item_id', '=', itemId)
         .orderBy('created_at asc')
+        .orderBy('id asc')
         .execute()
         .then((rows) =>
           rows.map((row) => ({
             actorRole: row.actor_role,
             createdAt: row.created_at,
             fromState: row.from_state as WorkItemState,
+            kind: row.kind,
             reason: row.reason,
             toState: row.to_state as WorkItemState,
           })),
@@ -1478,7 +1482,7 @@ export async function releaseHeldItem(
   return result.item.state;
 }
 
-async function getLockedItem(
+export async function getLockedItem(
   database: DatabaseExecutor,
   itemId: string,
 ): Promise<{ readonly context: LifecycleContext; readonly item: WorkItem }> {
@@ -1583,12 +1587,13 @@ async function buildEvidenceOf(
   };
 }
 
-async function persistTransition(
+export async function persistTransition(
   database: DatabaseExecutor,
   itemId: string,
   current: WorkItem,
   result: Extract<TransitionResult, { readonly ok: true }>,
   request: TransitionRequest,
+  historyKind: HistoryKind = 'transition',
 ): Promise<void> {
   await database
     .updateTable('work_items')
@@ -1625,6 +1630,7 @@ async function persistTransition(
       to_state: result.item.state,
       actor_role: request.actor.role,
       actor_run_id: request.actor.runId ?? null,
+      kind: historyKind,
       reason: request.reason ?? null,
     })
     .execute();

@@ -161,6 +161,7 @@ export interface Database {
     created_at: Generated<Date>;
     from_state: string;
     id: Generated<number>;
+    kind: Generated<HistoryKind>;
     reason: string | null;
     to_state: string;
     work_item_id: string;
@@ -175,6 +176,8 @@ export interface Database {
   };
   work_items: {
     attempts: number;
+    /** The classic item this one was carried over from, by hand (roadmap step 9). */
+    carried_from: Generated<string | null>;
     created_at: Generated<Date>;
     description: string;
     discovered_from_id: Generated<string | null>;
@@ -226,6 +229,9 @@ export interface Database {
     verify_enabled: Generated<boolean>;
   };
 }
+
+/** A state change, or the one entry that says an item was carried over from the old board. */
+export type HistoryKind = 'carried_over' | 'transition';
 
 /** What kind of work an item is (spec §4.1); a `bug` goes to the bugfixer. */
 export type WorkItemType = 'feature' | 'bug' | 'task' | 'refactoring';

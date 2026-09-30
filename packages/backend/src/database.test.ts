@@ -124,6 +124,10 @@ describe('database migrations', { concurrent: false }, () => {
           migrationName: '20261008000000_mockups',
           status: 'Success',
         }),
+        expect.objectContaining({
+          migrationName: '20261009000000_carry_over',
+          status: 'Success',
+        }),
       ]);
       expect(
         await database.introspection.getTables({

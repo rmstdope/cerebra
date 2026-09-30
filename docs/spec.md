@@ -738,6 +738,6 @@ not change what the MVP built.
 | The webhook, the feed, the `informed` and `merge` checkpoints, per-item involvement | In-app counts and browser notifications; `plan` and `code_review` per project. The presets are `autonomous`, `plan` and `full`, with `informed` ignored. |
 | Project images built from `.cerebro/agent.Containerfile` | The base image, or an image named in the project's settings. |
 | Surviving a backend restart: the runner's event spool, reconnect, stopping idle containers | A restart fails live runs, whose items go back to their queues. |
-| The beads importer | The new repository starts with an empty board. |
+| The beads importer | Open beads are carried over by hand: a written manifest files each one in the state it was in, with one *Carried over* entry in its history, or files it and cancels it with the reason it was not carried over. |
 
 **Order of delivery** is `roadmap.md`, steps 4 to 8.
