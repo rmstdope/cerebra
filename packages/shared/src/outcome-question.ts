@@ -54,7 +54,7 @@ export function routeOfAnswer(answer: string): OutcomeRoute | null {
 }
 
 /** Splits markdown on `## ` headings; null when a heading repeats. */
-function sectionsOf(
+export function sectionsOf(
   markdown: string,
 ): { lead: string; sections: Map<string, string> } | null {
   const lead: string[] = [];
@@ -123,7 +123,7 @@ export function outcomeSectionsOf(markdown: string): OutcomeSections | null {
   return parsed === null ? null : outcomeOf(parsed.sections);
 }
 
-const normalised = (text: string) => text.replace(/\s+/g, ' ').trim();
+export const normalised = (text: string) => text.replace(/\s+/g, ' ').trim();
 
 export function sameOutcome(a: OutcomeSections, b: OutcomeSections): boolean {
   return outcomeSections.every(
