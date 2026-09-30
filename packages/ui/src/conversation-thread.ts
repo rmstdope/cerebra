@@ -60,17 +60,20 @@ export type ThreadItem =
   | DrawingsItem;
 
 /**
- * A designer's round of drawings (spec §6.3). `open` waits for an answer; `superseded` was
- * replaced by a newer round before it was answered; `withdrawn` stopped waiting unanswered.
+ * A designer's round of drawings (spec §6.3). `preparing` is a set on its way, its `count`
+ * drawings not yet stored; `open` waits for an answer; `superseded` was replaced by a newer round
+ * before it was answered; `withdrawn` stopped waiting unanswered.
  */
 export interface DrawingsItem {
   readonly kind: 'drawings';
   readonly key: string;
-  readonly at: string;
+  at: string;
   readonly drawingsId: string;
   readonly question: string;
-  readonly drawings: readonly Drawing[];
-  status: 'open' | 'answered' | 'superseded' | 'withdrawn';
+  drawings: readonly Drawing[];
+  /** How many drawings the round holds, known before they arrive. */
+  count: number;
+  status: 'preparing' | 'open' | 'answered' | 'superseded' | 'withdrawn';
   /** The chosen drawing's label; null while unanswered or answered with a change. */
   choice: string | null;
 }
@@ -146,6 +149,8 @@ export function planSectionsOf(markdown: string): PlanSection[] {
 
 const createItem = 'mcp__cerebra__create_item';
 const transition = 'mcp__cerebra__transition';
+/** Its call is shown as the round of drawings it brings, never as a step. */
+const showMockups = 'mcp__cerebra__show_mockups';
 
 function isOutcomeMove(step: StepItem): boolean {
   if (step.name !== transition) return false;
@@ -213,6 +218,7 @@ export function buildThread(events: readonly RecordedEvent[]): ThreadItem[] {
         target.push({ at, key, kind: 'assistant', text: event.text });
         break;
       case 'tool_call': {
+        if (event.name === showMockups) break;
         const step: StepItem = {
           input: event.input,
           key: `step-${event.toolCallId}`,
@@ -290,11 +296,38 @@ export function buildThread(events: readonly RecordedEvent[]): ThreadItem[] {
         });
         break;
       }
-      case 'drawings': {
+      case 'drawings_preparing': {
         if (lastRound?.status === 'open') lastRound.status = 'superseded';
         const round: DrawingsItem = {
           at,
           choice: null,
+          count: event.count,
+          drawings: [],
+          drawingsId: event.drawingsId,
+          key: `drawings-${event.drawingsId}`,
+          kind: 'drawings',
+          question: event.question,
+          status: 'preparing',
+        };
+        rounds.set(event.drawingsId, round);
+        lastRound = round;
+        root.push(round);
+        break;
+      }
+      case 'drawings': {
+        const prepared = rounds.get(event.drawingsId);
+        if (prepared?.status === 'preparing') {
+          prepared.at = at;
+          prepared.drawings = event.drawings;
+          prepared.count = event.drawings.length;
+          prepared.status = 'open';
+          break;
+        }
+        if (lastRound?.status === 'open') lastRound.status = 'superseded';
+        const round: DrawingsItem = {
+          at,
+          choice: null,
+          count: event.drawings.length,
           drawings: event.drawings,
           drawingsId: event.drawingsId,
           key: `drawings-${event.drawingsId}`,
@@ -309,6 +342,11 @@ export function buildThread(events: readonly RecordedEvent[]): ThreadItem[] {
       }
       case 'drawings_withdrawn': {
         const round = rounds.get(event.drawingsId);
+        if (round?.status === 'preparing') {
+          root.splice(root.indexOf(round), 1);
+          rounds.delete(event.drawingsId);
+          if (lastRound === round) lastRound = null;
+        }
         if (round?.status === 'open') round.status = 'withdrawn';
         break;
       }

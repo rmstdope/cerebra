@@ -61,6 +61,7 @@ const drawings: readonly Drawing[] = [
 const round = (status: DrawingsItem['status'] = 'open'): DrawingsItem => ({
   at: '2026-10-01T10:31:00.000Z',
   choice: null,
+  count: 3,
   drawings,
   drawingsId: 'd-1',
   key: 'drawings-d-1',
@@ -295,6 +296,31 @@ test('an answered, superseded or withdrawn round shows its drawings without choo
   }
   render(<DrawingsRoundView live={false} name="Iris" round={round()} />);
   expect(screen.queryByRole('button', { name: /^Choose/ })).toBeNull();
+});
+
+test('a set on its way shows its question over placeholders, with nothing to answer yet', () => {
+  const preparing: DrawingsItem = {
+    ...round('preparing'),
+    count: 2,
+    drawings: [],
+  };
+  render(
+    <DrawingsRoundView live name="Iris" onAnswer={vi.fn()} round={preparing} />,
+  );
+  const shown = screen.getByRole('region', { name: 'Which export button?' });
+  const placeholders = within(shown).getAllByRole('listitem');
+  expect(placeholders).toHaveLength(2);
+  expect(placeholders[0]!.textContent).toBe('Preparing drawings…');
+  expect(placeholders[0]!.className).toContain('motion-reduce:animate-none');
+  expect(within(shown).queryByRole('button')).toBeNull();
+  expect(within(shown).queryByRole('textbox')).toBeNull();
+  expect(document.activeElement).toBe(document.body);
+  cleanup();
+
+  const { container } = render(
+    <DrawingsRoundView live={false} name="Iris" round={preparing} />,
+  );
+  expect(container.innerHTML).toBe('');
 });
 
 test('a card previews its drawing as a still picture Tab never enters', async () => {

@@ -373,6 +373,32 @@ export function DrawingsRoundView({
     if (open) form.current?.focus();
   }, [open]);
 
+  if (round.status === 'preparing') {
+    // A set that never arrived is not history: after the run it is simply gone.
+    if (!live) return null;
+    return (
+      <section
+        aria-busy="true"
+        aria-labelledby={`${id}-title`}
+        className="w-full max-w-[85%] self-start rounded-2xl border border-[var(--border)] p-4 max-sm:max-w-full"
+      >
+        <h2 className="font-bold" id={`${id}-title`}>
+          {round.question}
+        </h2>
+        <ul className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-[repeat(auto-fit,minmax(12rem,1fr))]">
+          {Array.from({ length: round.count }, (_, index) => (
+            <li
+              className="flex h-32 animate-pulse items-center justify-center rounded-xl border border-[var(--border)] bg-[var(--surface)] p-2 text-sm text-[var(--muted)] motion-reduce:animate-none"
+              key={index}
+            >
+              {index === 0 ? 'Preparing drawings…' : null}
+            </li>
+          ))}
+        </ul>
+      </section>
+    );
+  }
+
   if (!open) {
     return (
       <section
