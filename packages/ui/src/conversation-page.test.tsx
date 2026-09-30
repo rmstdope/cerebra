@@ -46,6 +46,7 @@ interface FakeClient extends ConversationClient {
   readonly sent: string[];
   readonly answers: { questionId: string; answers: Record<string, string> }[];
   readonly planAnswers: { planId: number; verdict: string; text: string }[];
+  readonly drawingsAnswers: { drawingsId: string; answer: unknown }[];
   readonly stopped: string[];
   readonly subscriptions: { after: number }[];
   push(update: RunUpdate): void;
@@ -65,6 +66,10 @@ function fakeClient(
       client.planAnswers.push({ planId, text, verdict });
     },
     planAnswers: [],
+    answerDrawings: async (_runId, drawingsId, answer) => {
+      client.drawingsAnswers.push({ answer, drawingsId });
+    },
+    drawingsAnswers: [],
     push: (update) => {
       act(() => {
         for (const listener of listeners) listener(update);
@@ -1181,4 +1186,312 @@ test('a plan whose builder stopped waiting is no longer waiting, while the run g
   });
   expect(within(card).queryByRole('button')).toBeNull();
   expect(screen.getByRole('status').textContent).toBe('Working');
+});
+
+const designer: Partial<Conversation['run']> = {
+  agentId: 'agent-iris',
+  agentName: 'Iris',
+  agentRole: 'designer',
+  item: { id: 'item-1', title: 'Export invoices as CSV' },
+};
+
+function drawingsRound(drawingsId: string, question: string): RunEvent {
+  return {
+    drawings: [
+      {
+        cost: 'Always visible; takes toolbar room.',
+        label: 'A · Button in the toolbar',
+        recommended: true,
+        url: '/drawings/a.html',
+      },
+      {
+        cost: 'Tidier; one extra click.',
+        label: 'B · Inside the ⋯ menu',
+        recommended: false,
+        url: '/drawings/b.html',
+      },
+    ],
+    drawingsId,
+    kind: 'drawings',
+    question,
+  };
+}
+
+test('an open round of drawings takes focus and is answered by a choice or in words', async () => {
+  const client = fakeClient(
+    conversation(
+      [
+        {
+          kind: 'message',
+          text: 'Two ways the export button could look.',
+        },
+        drawingsRound('d-1', 'Which export button?'),
+      ],
+      { ...designer, state: 'awaiting_input' },
+    ),
+  );
+  renderPage(client);
+
+  const form = await screen.findByRole('form', {
+    name: 'Which export button?',
+  });
+  await waitFor(() => expect(document.activeElement).toBe(form));
+  expect(screen.getByRole('heading', { level: 1, name: 'Iris' })).toBeTruthy();
+  expect(screen.getByText('Designer · Export invoices as CSV')).toBeTruthy();
+  expect(screen.getByRole('status').textContent).toBe(
+    'Waiting for your answer',
+  );
+  expect(
+    within(form).getByText('Iris needs one answer before it can continue.'),
+  ).toBeTruthy();
+  expect(screen.getByText('Showed drawings')).toBeTruthy();
+
+  await userEvent.click(within(form).getByRole('button', { name: 'Choose B' }));
+  await userEvent.type(
+    within(form).getByLabelText('Or say what to change'),
+    'Make it smaller.',
+  );
+  await userEvent.click(within(form).getByRole('button', { name: 'Send' }));
+  expect(client.drawingsAnswers).toEqual([
+    { answer: { choice: 'B · Inside the ⋯ menu' }, drawingsId: 'd-1' },
+    { answer: { text: 'Make it smaller.' }, drawingsId: 'd-1' },
+  ]);
+});
+
+test('after a revision the earlier round stays viewable but not choosable, and all rounds survive a reload', async () => {
+  const events: RunEvent[] = [
+    drawingsRound('d-1', 'Which export button?'),
+    {
+      choice: null,
+      drawingsId: 'd-1',
+      kind: 'drawings_answer',
+      text: 'Make it smaller.',
+    },
+    drawingsRound('d-2', 'Which smaller button?'),
+  ];
+  const client = fakeClient(
+    conversation(events, { ...designer, state: 'awaiting_input' }),
+  );
+  const { unmount } = renderPage(client);
+
+  const earlier = await screen.findByRole('region', {
+    name: 'Which export button?',
+  });
+  expect(within(earlier).queryByRole('button', { name: /^Choose/ })).toBeNull();
+  await userEvent.click(
+    within(earlier).getAllByRole('button', { name: 'Open full size' })[0]!,
+  );
+  expect(
+    within(screen.getByRole('dialog')).queryByRole('button', {
+      name: /^Choose/,
+    }),
+  ).toBeNull();
+  await userEvent.keyboard('{Escape}');
+  expect(screen.getByText('Make it smaller.')).toBeTruthy();
+  expect(
+    screen.getByRole('form', { name: 'Which smaller button?' }),
+  ).toBeTruthy();
+
+  client.push({
+    type: 'event',
+    ...record(4, {
+      choice: 'A · Button in the toolbar',
+      drawingsId: 'd-2',
+      kind: 'drawings_answer',
+      text: '',
+    }),
+  });
+  expect(screen.queryByRole('form')).toBeNull();
+  expect(screen.getByText('Chose A · Button in the toolbar')).toBeTruthy();
+
+  unmount();
+  renderPage(
+    fakeClient(conversation(events, { ...designer, state: 'active' })),
+  );
+  expect(
+    await screen.findByRole('region', { name: 'Which export button?' }),
+  ).toBeTruthy();
+  expect(
+    screen.getByRole('form', { name: 'Which smaller button?' }),
+  ).toBeTruthy();
+});
+
+const designText = [
+  'Confirm the agreed experience',
+  '',
+  '## The agreed experience',
+  'An "Export CSV" button sits in the invoice toolbar.',
+  '## The states',
+  'Empty list: button disabled with "Nothing to export".',
+  '## The words, exactly',
+  '"Export CSV"; "Nothing to export"',
+  '## What was considered and rejected',
+  'Export inside the ⋯ menu: one extra click.',
+  '## The drawing',
+  'A · Button in the toolbar',
+].join('\n');
+
+const designQuestion: RunEvent = {
+  kind: 'question',
+  questionId: 'q-d',
+  questions: [
+    {
+      header: 'Design',
+      multiSelect: false,
+      options: [
+        {
+          description: 'record it and send it to building',
+          label: 'Looks right — hand it to building (Recommended)',
+        },
+        { description: 'say what to change', label: 'Change something' },
+      ],
+      question: designText,
+    },
+  ],
+};
+
+test('the designer confirms the agreed experience as one focused form', async () => {
+  const client = fakeClient(
+    conversation(
+      [
+        drawingsRound('d-1', 'Which export button?'),
+        {
+          choice: 'A · Button in the toolbar',
+          drawingsId: 'd-1',
+          kind: 'drawings_answer',
+          text: '',
+        },
+        {
+          kind: 'message',
+          text: 'I think we have it. Here is what I will record for whoever builds it.',
+        },
+        designQuestion,
+      ],
+      { ...designer, state: 'awaiting_input' },
+    ),
+  );
+  renderPage(client);
+
+  const form = await screen.findByRole('form', {
+    name: 'Confirm the agreed experience',
+  });
+  await waitFor(() => expect(document.activeElement).toBe(form));
+  expect(
+    within(form).getByText('Iris needs one answer before it can continue.'),
+  ).toBeTruthy();
+  for (const heading of [
+    'The agreed experience',
+    'The states',
+    'The words, exactly',
+    'What was considered and rejected',
+    'The drawing',
+  ]) {
+    expect(within(form).getByRole('heading', { name: heading })).toBeTruthy();
+  }
+  expect(
+    within(form).getByText('"Export CSV"; "Nothing to export"'),
+  ).toBeTruthy();
+  expect(within(form).getByTitle('A · Button in the toolbar')).toBeTruthy();
+  expect(
+    within(form).queryByRole('button', { name: /Change something/ }),
+  ).toBeNull();
+  expect(within(form).queryAllByRole('button', { name: /^Choose/ })).toEqual(
+    [],
+  );
+
+  await userEvent.click(
+    within(form).getByRole('button', { name: 'Open full size' }),
+  );
+  expect(
+    screen.getByRole('dialog', { name: 'A · Button in the toolbar' }),
+  ).toBeTruthy();
+  await userEvent.keyboard('{Escape}');
+
+  await userEvent.type(
+    within(form).getByLabelText('Or say what to change'),
+    'Say "Download CSV".',
+  );
+  await userEvent.click(within(form).getByRole('button', { name: 'Send' }));
+  await userEvent.click(
+    within(form).getByRole('button', {
+      name: 'Looks right — hand it to building',
+    }),
+  );
+  expect(client.answers).toEqual([
+    { answers: { [designText]: 'Say "Download CSV".' }, questionId: 'q-d' },
+    {
+      answers: { [designText]: 'Looks right — hand it to building' },
+      questionId: 'q-d',
+    },
+  ]);
+});
+
+function designMove(id: string, isError: boolean): RunEvent[] {
+  return [
+    {
+      input: { record: { kind: 'design', markdown: 'x' }, to: 'build_ready' },
+      kind: 'tool_call',
+      name: 'mcp__cerebra__transition',
+      toolCallId: id,
+    },
+    {
+      content: isError ? '{"error":"refused"}' : '{"state":"build_ready"}',
+      isError,
+      kind: 'tool_result',
+      toolCallId: id,
+    },
+  ];
+}
+
+test('a confirmed design stays readable, and a refused recording offers Try again', async () => {
+  const client = fakeClient(
+    conversation(
+      [
+        designQuestion,
+        {
+          answers: {
+            [designText]: 'Looks right — hand it to building (Recommended)',
+          },
+          kind: 'answer',
+          questionId: 'q-d',
+        },
+        ...designMove('t1', true),
+      ],
+      { ...designer, state: 'active' },
+    ),
+  );
+  renderPage(client);
+
+  const block = await screen.findByRole('region', {
+    name: 'Confirm the agreed experience',
+  });
+  expect(
+    within(block).getByRole('heading', { name: 'The words, exactly' }),
+  ).toBeTruthy();
+  expect(screen.getByText('Looks right — hand it to building')).toBeTruthy();
+  expect(screen.getByText('Iris couldn’t record the design.')).toBeTruthy();
+  expect(
+    screen.getByText('Nothing was moved. Your answer is kept; try again.'),
+  ).toBeTruthy();
+
+  await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
+  expect(client.sent).toEqual(['Try again.']);
+
+  client.push({ type: 'event', ...record(5, designMove('t2', false)[0]!) });
+  client.push({ type: 'event', ...record(6, designMove('t2', false)[1]!) });
+  client.push({
+    type: 'event',
+    ...record(7, {
+      kind: 'message',
+      text: 'Recorded. Export invoices as CSV now waits for build.',
+    }),
+  });
+  client.push({ failure: null, state: 'finished', type: 'state' });
+  expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+  expect(
+    screen.getByText('Recorded. Export invoices as CSV now waits for build.'),
+  ).toBeTruthy();
+  expect(
+    screen.getByRole('heading', { name: 'Conversation finished' }),
+  ).toBeTruthy();
 });
