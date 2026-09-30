@@ -130,7 +130,6 @@ describe('carrying over open work from the old task list', () => {
             description: '',
             notCarriedOver: 'a duplicate of cr-2co.',
             oldName: 'cr-9zz.3',
-            priority: 'P2',
             title: 'Refuse subpaths',
             type: 'bug',
           },
@@ -324,6 +323,21 @@ describe('reading a carry-over manifest', () => {
         project: 'acme/website',
       },
       'cr-2co gives both a state and notCarriedOver; choose one.',
+    ],
+    [
+      {
+        items: [
+          {
+            notCarriedOver: 'obsolete',
+            oldName: 'cr-x',
+            priority: 'P1',
+            title: 'Old',
+            type: 'task',
+          },
+        ],
+        project: 'acme/website',
+      },
+      'cr-x is not carried over, so it cannot keep a priority.',
     ],
   ])('refuses %j', (manifest, message) => {
     expect(() => parseCarryOverManifest(manifest)).toThrow(

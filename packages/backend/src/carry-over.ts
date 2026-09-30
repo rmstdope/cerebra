@@ -119,6 +119,11 @@ export function parseCarryOverManifest(json: unknown): CarryOverManifest {
         ) {
           refuse(`${oldName} must give its reason for notCarriedOver.`);
         }
+        if (priority !== undefined) {
+          refuse(
+            `${oldName} is not carried over, so it cannot keep a priority.`,
+          );
+        }
         return { ...base, notCarriedOver: (notCarriedOver as string).trim() };
       }
       if (state === undefined) {

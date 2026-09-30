@@ -72,7 +72,8 @@ podman exec -i images_main_1 node packages/backend/dist/carry-over-cli.js < mani
 ```
 
 `state` is `new` (no priority), `grooming_ready`, `design_ready` or `build_ready` (with a
-`priority`, `P0`–`P3`). `notCarriedOver` files the item and cancels it with that reason instead.
+`priority`, `P0`–`P3`). `notCarriedOver` files the item and cancels it with that reason instead,
+and takes no priority.
 The manifest lands whole or not at all, and an old name already carried into the project is
 refused, so a re-run cannot file a second counterpart. It prints each old name with its new key.
 
