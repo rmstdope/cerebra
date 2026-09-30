@@ -33,6 +33,11 @@ import {
   type DeliveryActivityClient,
 } from './delivery-activity';
 import {
+  browserRecordsClient,
+  RecordsTab,
+  type RecordsClient,
+} from './records-tab';
+import {
   browserAutomaticStartsClient,
   reasonText,
   type AutomaticStartStatus,
@@ -41,7 +46,7 @@ import {
 } from './automatic-starts';
 
 type BoardStorage = Pick<Storage, 'getItem' | 'setItem'>;
-type Tab = 'overview' | 'discussion' | 'history';
+type Tab = 'overview' | 'records' | 'discussion' | 'history';
 type Panel =
   { kind: 'none' } | { kind: 'draft' } | { kind: 'item'; id: string };
 
@@ -262,6 +267,8 @@ export function ProjectBoard({
   deliveryClient = browserDeliveryActivityClient,
   deliveryIntervalMs = 10_000,
   costClient = browserCostClient,
+  recordsClient = browserRecordsClient,
+  recordsIntervalMs = 10_000,
   onClose,
   openRequest = null,
   projectId,
@@ -274,6 +281,8 @@ export function ProjectBoard({
   readonly deliveryClient?: DeliveryActivityClient;
   readonly deliveryIntervalMs?: number;
   readonly costClient?: CostClient;
+  readonly recordsClient?: RecordsClient;
+  readonly recordsIntervalMs?: number;
   /** Called when an open item or draft is closed, so a caller can return to where it came from. */
   readonly onClose?: () => void;
   /** Opens an item from elsewhere, such as the navigator queue; a new object reopens it. */
@@ -1093,6 +1102,14 @@ export function ProjectBoard({
                 onTab={chooseTab}
                 onTriage={() => void triage()}
                 priority={priority}
+                records={
+                  <RecordsTab
+                    client={recordsClient}
+                    intervalMs={recordsIntervalMs}
+                    itemId={selected.id}
+                    key={selected.id}
+                  />
+                }
                 route={route}
                 routeRefused={routeRefused}
                 saving={saving}
@@ -1266,6 +1283,7 @@ function ItemDetail({
   onTab,
   onTriage,
   priority,
+  records,
   route,
   routeRefused,
   saving,
@@ -1296,6 +1314,8 @@ function ItemDetail({
   readonly onTab: (value: Tab) => void;
   readonly onTriage: () => void;
   readonly priority: Priority;
+  /** The Records tab's content, shown only while that tab is open. */
+  readonly records: ReactNode;
   readonly route: BoardRoute;
   readonly routeRefused: boolean;
   readonly saving: boolean;
@@ -1303,6 +1323,7 @@ function ItemDetail({
 }): ReactNode {
   const tabs: readonly { readonly label: string; readonly value: Tab }[] = [
     { label: 'Overview', value: 'overview' },
+    { label: 'Records', value: 'records' },
     { label: 'Discussion', value: 'discussion' },
     { label: 'History', value: 'history' },
   ];
@@ -1496,6 +1517,8 @@ function ItemDetail({
               </div>
             ) : null}
           </>
+        ) : tab === 'records' ? (
+          records
         ) : tab === 'discussion' ? (
           <>
             {comments.loading && comments.data !== null ? (

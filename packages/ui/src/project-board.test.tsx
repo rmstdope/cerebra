@@ -22,6 +22,7 @@ import type {
 } from './automatic-starts';
 import type { DeliveryActivityClient } from './delivery-activity';
 import { ProjectBoard } from './project-board';
+import type { RecordsClient } from './records-tab';
 
 afterEach(cleanup);
 
@@ -547,6 +548,60 @@ test('keeps discussion and history on separate tabs', async () => {
   await user.click(screen.getByRole('tab', { name: 'History' }));
   expect(await screen.findByText('Needs triage → Build ready')).toBeTruthy();
   expect(screen.queryByText('Looks right')).toBeNull();
+});
+
+test('shows the item’s agreed records on a tab between Overview and Discussion', async () => {
+  const user = userEvent.setup();
+  const reads: string[] = [];
+  const records: RecordsClient = {
+    read: async (itemId) => {
+      reads.push(itemId);
+      return {
+        records: [
+          {
+            kind: 'outcome',
+            versions: [
+              {
+                agentName: 'Jubilee',
+                at: '2026-09-29T12:00:00.000Z',
+                id: '1',
+                markdown: '## Outcome\nInvoices download as CSV.',
+                mockupId: null,
+                version: 1,
+              },
+            ],
+          },
+        ],
+      };
+    },
+  };
+  render(
+    <ProjectBoard
+      arrivalsIntervalMs={60_000}
+      automaticStartsClient={startsClient()}
+      boardClient={createClient()}
+      costClient={noCosts}
+      projectId="project-1"
+      recordsClient={records}
+      storage={memoryStorage()}
+    />,
+  );
+
+  await openItem();
+  expect(
+    within(screen.getByRole('tablist', { name: 'Selected work item sections' }))
+      .getAllByRole('tab')
+      .map((tab) => tab.textContent),
+  ).toEqual(['Overview', 'Records', 'Discussion', 'History']);
+  expect(reads).toEqual([]);
+
+  await user.click(screen.getByRole('tab', { name: 'Records' }));
+  const panel = screen.getByRole('tabpanel', { name: 'Records' });
+  expect(
+    await within(panel).findByRole('region', { name: 'Agreed outcome' }),
+  ).toBeTruthy();
+  expect(within(panel).getByText('Invoices download as CSV.')).toBeTruthy();
+  expect(reads).toHaveLength(1);
 });
 
 test('shows empty history and a failed discussion read without hiding the board', async () => {
