@@ -1,3 +1,5 @@
+import type { Drawing } from '@cerebra/shared';
+
 export type RunState =
   'starting' | 'active' | 'awaiting_input' | 'finished' | 'failed';
 
@@ -65,6 +67,19 @@ export type RunEvent = { readonly parentToolCallId?: string } & (
       readonly verdict: PlanVerdict;
       readonly text: string;
     }
+  | {
+      readonly kind: 'drawings';
+      readonly drawingsId: string;
+      readonly question: string;
+      readonly drawings: readonly Drawing[];
+    }
+  | {
+      readonly kind: 'drawings_answer';
+      readonly drawingsId: string;
+      readonly choice: string | null;
+      readonly text: string;
+    }
+  | { readonly kind: 'drawings_withdrawn'; readonly drawingsId: string }
   | { readonly kind: 'status'; readonly status: 'active' | 'awaiting_input' }
   | { readonly kind: 'thinking' | 'error' | 'result' }
 );
@@ -101,6 +116,10 @@ export type RunUpdate =
       readonly failure: string | null;
     };
 
+/** The navigator's answer to a round of drawings: a drawing's label, or what to change. */
+export type DrawingsReply =
+  { readonly choice: string } | { readonly text: string };
+
 export interface ConversationClient {
   read(runId: string): Promise<Conversation>;
   send(runId: string, text: string): Promise<void>;
@@ -115,6 +134,12 @@ export interface ConversationClient {
     planId: number,
     verdict: PlanVerdict,
     text: string,
+  ): Promise<void>;
+  /** Chooses a drawing of a waiting round, or says what to change. */
+  answerDrawings(
+    runId: string,
+    drawingsId: string,
+    answer: DrawingsReply,
   ): Promise<void>;
   stop(runId: string): Promise<void>;
   /** Streams what happens after `after`; answers a function that stops listening. */
@@ -173,6 +198,12 @@ export const browserConversationClient: ConversationClient = {
   },
   answerPlan: async (runId, planId, verdict, text) => {
     await post(`/api/runs/${runId}/plan-answers`, { planId, text, verdict });
+  },
+  answerDrawings: async (runId, drawingsId, answer) => {
+    await post(`/api/runs/${runId}/drawings-answers`, {
+      drawingsId,
+      ...answer,
+    });
   },
   stop: async (runId) => {
     await post(`/api/runs/${runId}/stop`);

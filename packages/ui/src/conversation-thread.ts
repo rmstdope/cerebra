@@ -1,6 +1,9 @@
 import {
+  parseDesignQuestion,
   parseOutcomeQuestion,
   stripRecommended,
+  type DesignQuestion,
+  type Drawing,
   type OutcomeQuestion,
 } from '@cerebra/shared';
 
@@ -33,6 +36,13 @@ export type ThreadItem =
       readonly outcome: OutcomeQuestion;
     }
   | {
+      /** The designer's agreed experience, as the navigator answered it. */
+      readonly kind: 'design';
+      readonly key: string;
+      readonly at: string;
+      readonly design: DesignQuestion;
+    }
+  | {
       /** An item an agent filed, from a create_item that succeeded. */
       readonly kind: 'filed';
       readonly key: string;
@@ -40,11 +50,30 @@ export type ThreadItem =
       readonly title: string;
     }
   | {
-      /** A groomer's move out of grooming that the backend refused. */
+      /** A groomer's or designer's move on to the next queue that the backend refused. */
       readonly kind: 'outcome_failed';
       readonly key: string;
+      /** The record the move could not keep. */
+      readonly record: 'outcome' | 'design';
     }
-  | PlanItem;
+  | PlanItem
+  | DrawingsItem;
+
+/**
+ * A designer's round of drawings (spec §6.3). `open` waits for an answer; `superseded` was
+ * replaced by a newer round before it was answered; `withdrawn` stopped waiting unanswered.
+ */
+export interface DrawingsItem {
+  readonly kind: 'drawings';
+  readonly key: string;
+  readonly at: string;
+  readonly drawingsId: string;
+  readonly question: string;
+  readonly drawings: readonly Drawing[];
+  status: 'open' | 'answered' | 'superseded' | 'withdrawn';
+  /** The chosen drawing's label; null while unanswered or answered with a change. */
+  choice: string | null;
+}
 
 /** One section of a plan card, under the card's own heading. */
 export interface PlanSection {
@@ -166,6 +195,8 @@ export function buildThread(events: readonly RecordedEvent[]): ThreadItem[] {
   const questions = new Map<string, readonly Question[]>();
   const plans = new Map<number, PlanItem>();
   let lastPlan: PlanItem | null = null;
+  const rounds = new Map<string, DrawingsItem>();
+  let lastRound: DrawingsItem | null = null;
 
   for (const record of events) {
     const { event } = record;
@@ -259,6 +290,42 @@ export function buildThread(events: readonly RecordedEvent[]): ThreadItem[] {
         });
         break;
       }
+      case 'drawings': {
+        if (lastRound?.status === 'open') lastRound.status = 'superseded';
+        const round: DrawingsItem = {
+          at,
+          choice: null,
+          drawings: event.drawings,
+          drawingsId: event.drawingsId,
+          key: `drawings-${event.drawingsId}`,
+          kind: 'drawings',
+          question: event.question,
+          status: 'open',
+        };
+        rounds.set(event.drawingsId, round);
+        lastRound = round;
+        root.push(round);
+        break;
+      }
+      case 'drawings_withdrawn': {
+        const round = rounds.get(event.drawingsId);
+        if (round?.status === 'open') round.status = 'withdrawn';
+        break;
+      }
+      case 'drawings_answer': {
+        const round = rounds.get(event.drawingsId);
+        if (round !== undefined) {
+          round.status = 'answered';
+          round.choice = event.choice;
+        }
+        root.push({
+          at,
+          key,
+          kind: 'navigator',
+          text: event.choice === null ? event.text : `Chose ${event.choice}`,
+        });
+        break;
+      }
       case 'question':
         questions.set(event.questionId, event.questions);
         break;
@@ -268,8 +335,16 @@ export function buildThread(events: readonly RecordedEvent[]): ThreadItem[] {
           asked.length === 1 && asked[0] !== undefined
             ? parseOutcomeQuestion(asked[0])
             : null;
-        if (outcome !== null) {
-          target.push({ at, key: `${key}-outcome`, kind: 'outcome', outcome });
+        const design =
+          asked.length === 1 && asked[0] !== undefined
+            ? parseDesignQuestion(asked[0])
+            : null;
+        if (outcome !== null || design !== null) {
+          target.push(
+            outcome !== null
+              ? { at, key: `${key}-outcome`, kind: 'outcome', outcome }
+              : { at, design: design!, key: `${key}-design`, kind: 'design' },
+          );
           target.push({
             at,
             key,
@@ -311,7 +386,32 @@ function settled(step: StepItem): ThreadItem | null {
       : { itemId, key: step.key, kind: 'filed', title };
   }
   if (isOutcomeMove(step) && step.result.isError) {
-    return { key: step.key, kind: 'outcome_failed' };
+    const kept =
+      typeof step.input === 'object' && step.input !== null
+        ? (step.input as { record?: unknown }).record
+        : undefined;
+    const record = field(kept, 'kind') === 'design' ? 'design' : 'outcome';
+    return { key: step.key, kind: 'outcome_failed', record };
+  }
+  return null;
+}
+
+/**
+ * The drawing a design's drawing section names, from the newest round that showed it; null when
+ * no round in the thread did.
+ */
+export function drawingNamed(
+  items: readonly ThreadItem[],
+  section: string,
+): Drawing | null {
+  const text = section.trim();
+  for (const item of [...items].reverse()) {
+    if (item.kind !== 'drawings') continue;
+    const found = item.drawings.find(
+      (drawing) =>
+        text === drawing.label || text.startsWith(`${drawing.label}\n`),
+    );
+    if (found !== undefined) return found;
   }
   return null;
 }
