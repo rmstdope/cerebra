@@ -1593,8 +1593,14 @@ function ItemDetail({
                     key={`${entry.createdAt}-${index}`}
                   >
                     <p className="font-bold">
-                      {stateLabel(entry.fromState)} →{' '}
-                      {stateLabel(entry.toState)}
+                      {entry.kind === 'carried_over' ? (
+                        'Carried over'
+                      ) : (
+                        <>
+                          {stateLabel(entry.fromState)} →{' '}
+                          {stateLabel(entry.toState)}
+                        </>
+                      )}
                     </p>
                     <p className="text-xs text-[var(--muted)]">
                       {actorLabel(entry.actorRole)} ·{' '}

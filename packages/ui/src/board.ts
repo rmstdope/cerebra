@@ -70,6 +70,8 @@ export interface HistoryEntry {
   readonly actorRole: string;
   readonly createdAt: string;
   readonly fromState: string;
+  /** A state change, or the one entry saying the item was carried over from the old task list. */
+  readonly kind?: 'carried_over' | 'transition';
   readonly reason: string | null;
   readonly toState: string;
 }

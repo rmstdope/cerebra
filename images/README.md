@@ -38,6 +38,45 @@ omitted rather than risk logging a partially captured credential. The registrati
 actionable reason for common access, network, certificate and storage failures, or the redacted
 Git diagnostic for an unrecognised failure.
 
+### Carrying over open beads
+
+Until the v1 importer exists, a registered repository's open beads are carried over by hand
+(roadmap step 9). Write a manifest naming the project as `owner/name` and one entry per open bead,
+then run it inside the main container:
+
+```sh
+podman exec -i images_main_1 node packages/backend/dist/carry-over-cli.js < manifest.json
+```
+
+```json
+{
+  "project": "rmstdope/cerebra",
+  "items": [
+    {
+      "oldName": "cr-2co",
+      "title": "…",
+      "description": "…",
+      "type": "bug",
+      "priority": "P1",
+      "state": "build_ready"
+    },
+    {
+      "oldName": "cr-knk",
+      "title": "…",
+      "description": "…",
+      "type": "task",
+      "notCarriedOver": "the handover itself"
+    }
+  ]
+}
+```
+
+`state` is `new` (no priority), `grooming_ready`, `design_ready` or `build_ready` (with a
+`priority`, `P0`–`P3`). `notCarriedOver` files the item and cancels it with that reason instead,
+and takes no priority.
+The manifest lands whole or not at all, and an old name already carried into the project is
+refused, so a re-run cannot file a second counterpart. It prints each old name with its new key.
+
 ## `cerebro-agent`
 
 The runner and the Claude CLI it drives, with `git` and `gh`; one container per agent run

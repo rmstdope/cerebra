@@ -550,6 +550,44 @@ test('keeps discussion and history on separate tabs', async () => {
   expect(screen.queryByText('Looks right')).toBeNull();
 });
 
+test('shows a carried-over entry as Carried over, with where it came from', async () => {
+  const user = userEvent.setup();
+  renderBoard(
+    createClient({
+      history: async () => [
+        {
+          actorRole: 'navigator',
+          createdAt: '2026-09-29T00:00:00.000Z',
+          fromState: 'new',
+          kind: 'carried_over',
+          reason:
+            'Moved here from the old task list, where it was cr-2vd.7. Its priority, scope and what it waits on came with it.',
+          toState: 'design_ready',
+        },
+        {
+          actorRole: 'navigator',
+          createdAt: '2026-09-29T00:01:00.000Z',
+          fromState: 'design_ready',
+          kind: 'transition',
+          reason: null,
+          toState: 'cancelled',
+        },
+      ],
+    }),
+  );
+
+  await openItem();
+  await user.click(screen.getByRole('tab', { name: 'History' }));
+  expect(await screen.findByText('Carried over')).toBeTruthy();
+  expect(
+    screen.getByText(
+      'Moved here from the old task list, where it was cr-2vd.7. Its priority, scope and what it waits on came with it.',
+    ),
+  ).toBeTruthy();
+  expect(screen.queryByText('Needs triage → Design ready')).toBeNull();
+  expect(screen.getByText('Design ready → Cancelled')).toBeTruthy();
+});
+
 test('shows the item’s agreed records on a tab between Overview and Discussion', async () => {
   const user = userEvent.setup();
   const reads: string[] = [];

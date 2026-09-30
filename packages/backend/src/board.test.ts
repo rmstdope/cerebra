@@ -125,6 +125,7 @@ describe('board lifecycle mutations', { concurrent: false }, () => {
       expect(await board.getHistory(itemId)).toEqual([
         expect.objectContaining({
           fromState: 'new',
+          kind: 'transition',
           toState: 'build_ready',
         }),
       ]);

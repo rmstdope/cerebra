@@ -456,11 +456,11 @@ the ones the lifecycle depends on are the implementer's.
 | `projects` | Remote, default branch, settings (§3 of the spec), involvement preset and review account, limits, pause, whether it raises browser notifications, and whether its default fleet has been created (so an emptied fleet is never refilled). |
 | `agent_types`, `agent_type_overrides` | Instance defaults, seeded on start from `packages/backend/agent-types/` without overwriting a stored type, and per-project overrides (only the fields changed). |
 | `agents` | Named agents: project, type, name, enabled. |
-| `items` | `key`, `title`, `description`, `type`, `priority`, `state`, `holder_run_id`, `waiting_reason`, `waiting_kind`, `return_state`, `involvement`, `attempts`, `rounds`, `filed_by`, `source`, `parent_id`. The constraints of §4 live here. |
+| `items` | `key`, `title`, `description`, `type`, `priority`, `state`, `holder_run_id`, `waiting_reason`, `waiting_kind`, `return_state`, `involvement`, `attempts`, `rounds`, `filed_by`, `source`, `parent_id`, `carried_from` (the classic bead it was carried over from, unique per project). The constraints of §4 live here. |
 | `item_dependencies` | `(item, depends_on, kind)`. |
 | `item_records` | `(item, kind, version, body, created_by_run)`; attachments such as mockups beside them. |
 | `mockups` | `(id, work_item, run, path, content_type, content)`: a drawing the designer showed, served by id from its own origin (§11). |
-| `item_comments`, `item_history` | Discussion; every state change with actor, reason, from and to. |
+| `item_comments`, `item_history` | Discussion; every state change with actor, reason, from and to, and its kind: a `transition`, or the one `carried_over` entry of an item carried over from a beads board. |
 | `runs` | Project, agent, type revision, item held, the item it first claimed (`work_item_id`, kept after the hold ends, so cost stays attributed; null for a run that never held one), state, container id, backend session id, token hash, cost, started and ended. |
 | `run_model_usage` | `(run, model)`: input, output and cache tokens, added to as each result arrives, so a run that later fails keeps what it spent. |
 | `run_events` | `(run, seq, event)`: the normalised event stream the chat view replays. |
