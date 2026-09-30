@@ -88,6 +88,12 @@ export function createPlanApprovals({
         const aborted = () => {
           waiting.delete(plan.id);
           reject(signal?.reason ?? new Error('The call was abandoned.'));
+          // Nobody is waiting for an answer any more, so the plan can no longer be answered.
+          note(
+            runId,
+            { kind: 'plan_withdrawn', planId: plan.id },
+            'active',
+          ).catch(() => undefined);
         };
         waiting.set(plan.id, (answer) => {
           signal?.removeEventListener('abort', aborted);
@@ -152,7 +158,7 @@ export function createPlanApprovals({
               record.kind === 'plan_answer' &&
               (record.payload as { planId?: unknown }).planId === answer.planId,
           );
-        if (!needsAnswer) {
+        if (!needsAnswer || !waiting.has(answer.planId)) {
           throw new PlanAnswerError('not_waiting', planNotWaitingMessage);
         }
         await transaction

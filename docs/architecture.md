@@ -261,9 +261,10 @@ approval and then waits (`plan-approvals.ts`): the plan is written into the run'
 `plan_approval` event, the run shows as awaiting input, and the call returns once the navigator
 answers with `POST /api/runs/:runId/plan-answers` (`{ planId, verdict: "approved" | "changes",
 text }`). The answer is kept as a `plan_answer` record and written to the conversation, and the
-lifecycle refuses `building → review_ready` unless the newest plan's answer is an approval. An
-answer to a plan that is not the newest, is already answered, or whose run has ended is refused as
-`not_waiting`; the navigator queue lists the newest unanswered plan of each live run. The tool layer also refuses a pull request outside the project's repository or on a
+lifecycle refuses `building → review_ready` unless the newest plan's answer is an approval. A
+`submit_plan` call the runner abandons stops waiting and writes `plan_withdrawn`. An answer to a
+plan that is not the newest, is already answered or withdrawn, or whose run has ended is refused
+as `not_waiting`; the navigator queue lists the newest unanswered plan of each live run. The tool layer also refuses a pull request outside the project's repository or on a
 branch not named after the item's key. The Overview reads these records, newest 50 at a time,
 through `GET /api/work-items/:id/delivery-activity`.
 

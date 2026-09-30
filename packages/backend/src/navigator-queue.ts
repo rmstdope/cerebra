@@ -255,7 +255,10 @@ async function waitingPlans(database: Kysely<Database>): Promise<QueueEntry[]> {
           selectFrom('run_events as answer')
             .select('answer.id')
             .whereRef('answer.run_id', '=', 'shown.run_id')
-            .where(sql<string>`answer.event->>'kind'`, '=', 'plan_answer')
+            .where(sql<string>`answer.event->>'kind'`, 'in', [
+              'plan_answer',
+              'plan_withdrawn',
+            ])
             .where(
               sql<string>`answer.event->>'planId'`,
               '=',

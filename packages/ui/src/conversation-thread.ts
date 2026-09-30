@@ -54,7 +54,7 @@ export interface PlanSection {
 
 /**
  * A builder's plan at the plan checkpoint (spec §4.9). `open` waits for an answer; `superseded`
- * was replaced by a newer plan before it was answered.
+ * was replaced by a newer plan before it was answered; `withdrawn` stopped waiting unanswered.
  */
 export interface PlanItem {
   readonly kind: 'plan';
@@ -63,7 +63,7 @@ export interface PlanItem {
   readonly planId: number;
   readonly revised: boolean;
   readonly sections: readonly PlanSection[];
-  status: 'open' | 'superseded' | 'approved' | 'changes';
+  status: 'open' | 'superseded' | 'withdrawn' | 'approved' | 'changes';
   request: string | null;
 }
 
@@ -238,6 +238,11 @@ export function buildThread(events: readonly RecordedEvent[]): ThreadItem[] {
         plans.set(event.planId, plan);
         lastPlan = plan;
         root.push(plan);
+        break;
+      }
+      case 'plan_withdrawn': {
+        const plan = plans.get(event.planId);
+        if (plan?.status === 'open') plan.status = 'withdrawn';
         break;
       }
       case 'plan_answer': {

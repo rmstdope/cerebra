@@ -1165,3 +1165,20 @@ test('a plan the builder stopped before answering is no longer waiting', async (
   ).toBeTruthy();
   expect(within(card).queryByRole('button')).toBeNull();
 });
+
+test('a plan whose builder stopped waiting is no longer waiting, while the run goes on', async () => {
+  renderPage(
+    fakeClient(
+      conversation([planEvent, { kind: 'plan_withdrawn', planId: 11 }], {
+        ...builder,
+        state: 'active',
+      }),
+    ),
+  );
+
+  const card = await screen.findByRole('region', {
+    name: 'Plan · no longer waiting Add export button',
+  });
+  expect(within(card).queryByRole('button')).toBeNull();
+  expect(screen.getByRole('status').textContent).toBe('Working');
+});

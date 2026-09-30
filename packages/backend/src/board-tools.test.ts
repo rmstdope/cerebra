@@ -934,12 +934,13 @@ describe('board tools', { concurrent: false }, () => {
             database,
             item,
             notes,
+            plans,
             projectId,
             tools,
           }) => {
             await approvePlans(database, projectId);
             const wolverine = await caller('Storm', 'builder');
-            await building(board, item, wolverine);
+            const heldId = await building(board, item, wolverine);
             const abandon = new AbortController();
 
             const call = tools.call(
@@ -948,10 +949,22 @@ describe('board tools', { concurrent: false }, () => {
               { markdown: plan },
               abandon.signal,
             );
-            await shown(notes, 1);
+            const planId = await shown(notes, 1);
             abandon.abort(new Error('The runner hung up.'));
 
             await expect(call).rejects.toThrow('The runner hung up.');
+            await expect.poll(() => notes.length).toBe(2);
+            expect(notes[1]).toEqual({
+              event: { kind: 'plan_withdrawn', planId },
+              runId: wolverine.runId,
+              state: 'active',
+            });
+            await expect(
+              plans.answer(wolverine.runId, { planId, verdict: 'approved' }),
+            ).rejects.toMatchObject({ code: 'not_waiting' });
+            expect(
+              (await board.listRecords(heldId)).map((record) => record.kind),
+            ).not.toContain('plan_answer');
           },
         );
       });

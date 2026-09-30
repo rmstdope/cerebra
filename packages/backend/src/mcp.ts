@@ -98,10 +98,12 @@ export function createMcpEndpoint<Caller>({
       'content-type': 'text/event-stream',
     });
     reply.raw.write(': waiting\n\n');
-    const beat = setInterval(
-      () => reply.raw.write(': waiting\n\n'),
-      keepAlive.everyMs,
-    );
+    const beat = setInterval(() => {
+      if (!reply.raw.destroyed) reply.raw.write(': waiting\n\n');
+    }, keepAlive.everyMs);
+    abandoned.signal.addEventListener('abort', () => clearInterval(beat), {
+      once: true,
+    });
     const message = await answer;
     clearInterval(beat);
     if (!abandoned.signal.aborted) {

@@ -340,7 +340,7 @@ describe('navigator queue', { concurrent: false }, () => {
     ]);
   });
 
-  test('lists a builder’s plan waiting for approval until it is answered or the run ends', async () => {
+  test('lists a builder’s plan waiting for approval until it is answered, withdrawn or the run ends', async () => {
     const id = await file(alpha, 'Add export button', 'build_ready');
     const claimed = await board.claim(id, 'builder');
     if (!claimed.ok) throw new Error(claimed.reason);
@@ -409,8 +409,20 @@ describe('navigator queue', { concurrent: false }, () => {
     await note(5, '2026-10-01T09:04:00Z', {
       kind: 'plan_approval',
       markdown: '## Context',
+      planId: 10,
+    });
+    await note(6, '2026-10-01T09:05:00Z', {
+      kind: 'plan_withdrawn',
+      planId: 10,
+    });
+    expect((await queue.list()).entries).toEqual([]);
+
+    await note(7, '2026-10-01T09:06:00Z', {
+      kind: 'plan_approval',
+      markdown: '## Context',
       planId: 11,
     });
+    expect((await queue.list()).entries).toHaveLength(1);
     await database
       .updateTable('runs')
       .set({ status: 'failed' })

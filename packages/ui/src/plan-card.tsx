@@ -44,8 +44,9 @@ export function PlanCard({
   const [problem, setProblem] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
-  const stale =
-    plan.status === 'superseded' || (plan.status === 'open' && !live);
+  const stopped =
+    plan.status === 'withdrawn' || (plan.status === 'open' && !live);
+  const stale = stopped || plan.status === 'superseded';
   const waiting =
     plan.status === 'open' && live && onAnswer !== undefined && !sent;
 
@@ -105,7 +106,7 @@ export function PlanCard({
           {`“${plan.request}”`}
         </blockquote>
       ) : null}
-      {plan.status === 'open' && stale ? (
+      {stopped ? (
         <p className="mt-2 text-sm text-[var(--muted)]">
           The builder stopped before you answered. The next builder writes a new
           plan.

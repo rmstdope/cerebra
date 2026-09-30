@@ -58,6 +58,7 @@ export type RunEvent = { readonly parentToolCallId?: string } & (
       readonly planId: number;
       readonly markdown: string;
     }
+  | { readonly kind: 'plan_withdrawn'; readonly planId: number }
   | {
       readonly kind: 'plan_answer';
       readonly planId: number;

@@ -142,6 +142,11 @@ export type AgentEvent = Nested &
         readonly planId: number;
         readonly markdown: string;
       }
+    /**
+     * A plan whose `submit_plan` call stopped waiting before the navigator answered, so it can no
+     * longer be answered; written by the backend, never accepted from a runner.
+     */
+    | { readonly kind: 'plan_withdrawn'; readonly planId: number }
     /** The navigator's answer to a plan; written by the backend, never accepted from a runner. */
     | {
         readonly kind: 'plan_answer';

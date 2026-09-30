@@ -75,7 +75,9 @@ function hasOpenPlan(events: readonly RecordedEvent[]): boolean {
   let open = false;
   for (const { event } of events) {
     if (event.kind === 'plan_approval') open = true;
-    if (event.kind === 'plan_answer') open = false;
+    if (event.kind === 'plan_answer' || event.kind === 'plan_withdrawn') {
+      open = false;
+    }
   }
   return open;
 }
