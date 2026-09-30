@@ -61,7 +61,11 @@ export function DrawingPreview({
     let current = true;
     setShowing({ state: 'loading', url: null });
     const limit = setTimeout(() => {
-      if (current) setShowing({ state: 'failed' });
+      if (current) {
+        setShowing((was) =>
+          was.state === 'loading' ? { state: 'failed' } : was,
+        );
+      }
     }, drawingLoadLimitMs);
     locate(mockupId).then(
       (url) => {
@@ -114,6 +118,7 @@ export function DrawingPreview({
           onLoad={() => setShowing({ state: 'shown', url })}
           sandbox="allow-scripts"
           src={url}
+          tabIndex={0}
           title={drawing.label}
         />
       ) : (

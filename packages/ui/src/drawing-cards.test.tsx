@@ -152,17 +152,59 @@ test('Esc or ✕ closes full size and returns focus to the card it came from', a
   await waitFor(() => expect(document.activeElement).toBe(openThird));
 });
 
+test('a drawing that loaded stays shown past twenty seconds', async () => {
+  vi.useFakeTimers();
+  render(<DrawingCards drawings={[drawings[0]!]} name="Iris" />);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  fireEvent.load(card(0).querySelector('iframe')!);
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(60_000);
+  });
+  expect(card(0).querySelector('iframe')).not.toBeNull();
+  expect(
+    within(card(0)).queryByText('This drawing couldn’t be shown.'),
+  ).toBeNull();
+});
+
+test('Tab reaches the live drawing between the dialog controls', async () => {
+  const user = userEvent.setup();
+  render(<DrawingCards drawings={drawings} name="Iris" onChoose={vi.fn()} />);
+  await user.click(
+    within(card(0)).getByRole('button', { name: 'Open full size' }),
+  );
+  const dialog = screen.getByRole('dialog');
+  const frame = await waitFor(() => {
+    const found = dialog.querySelector('iframe');
+    expect(found).not.toBeNull();
+    return found!;
+  });
+  fireEvent.load(frame);
+
+  within(dialog).getByRole('button', { name: 'Close' }).focus();
+  await user.tab();
+  expect(document.activeElement).toBe(frame);
+
+  within(dialog).getByRole('button', { name: '‹ Previous' }).focus();
+  await user.tab({ shift: true });
+  expect(document.activeElement).toBe(frame);
+});
+
 test('focus stays inside full size', async () => {
   const user = userEvent.setup();
   render(<DrawingCards drawings={drawings} name="Iris" onChoose={vi.fn()} />);
   await user.click(
-    within(screen.getAllByRole('listitem')[0]!).getByRole('button', {
+    within(screen.getAllByRole('listitem')[1]!).getByRole('button', {
       name: 'Open full size',
     }),
   );
   const dialog = screen.getByRole('dialog');
-  const close = within(dialog).getByRole('button', { name: 'Close' });
-  close.focus();
+  const last = await within(dialog).findByRole('button', {
+    name: 'Try again',
+  });
+  last.focus();
 
   await user.tab();
   expect(dialog.contains(document.activeElement)).toBe(true);
