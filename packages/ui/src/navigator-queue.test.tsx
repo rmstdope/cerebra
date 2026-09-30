@@ -25,6 +25,7 @@ function entry(overrides: Partial<QueueEntry>): QueueEntry {
     askedBy: null,
     availableRoutes: ['grooming_ready', 'design_ready', 'build_ready'],
     blocked: false,
+    checkpoint: null,
     description: '',
     id: 'item',
     kind: 'new',
@@ -850,5 +851,61 @@ test('a blocked merge says why with its project, and Open shows the item', async
 
   expect(opened).toEqual([
     { itemId: 'blocked', projectId: 'project-2', tab: 'overview' },
+  ]);
+});
+
+test('checkpoints say what waits with its project, and Open goes where it is answered', async () => {
+  const user = userEvent.setup();
+  const conversations: string[] = [];
+  const items: unknown[] = [];
+  const plan = entry({
+    askedBy: 'Rogue',
+    availableRoutes: [],
+    checkpoint: 'plan',
+    id: 'plan:run-9:11',
+    kind: 'review',
+    projectName: 'acme/mobile',
+    run: { id: 'run-9' },
+    title: 'Add export button',
+    waitingReason: 'Plan waiting for your approval',
+  });
+  const codeReview = entry({
+    checkpoint: 'code_review',
+    id: 'item-4',
+    kind: 'attention',
+    projectId: 'project-2',
+    projectName: 'northstar/admin',
+    title: 'Sign-in keeps failing',
+    waitingReason: 'Waiting for your review on GitHub',
+  });
+  renderQueue(
+    createClient({ list: async () => page([plan, codeReview, newWork]) }),
+    {
+      onOpenConversation: (runId) => conversations.push(runId),
+      onViewWork: (projectId, itemId, tab) =>
+        items.push({ itemId, projectId, tab }),
+    },
+  );
+
+  const planRow = (await screen.findByText('Add export button')).closest(
+    '[data-checkpoint]',
+  ) as HTMLElement;
+  expect(
+    within(planRow).getByText('Plan waiting for your approval · acme/mobile'),
+  ).toBeTruthy();
+  await user.click(within(planRow).getByRole('button', { name: 'Open' }));
+  expect(conversations).toEqual(['run-9']);
+
+  const reviewRow = screen
+    .getByText('Sign-in keeps failing')
+    .closest('[data-checkpoint]') as HTMLElement;
+  expect(
+    within(reviewRow).getByText(
+      'Waiting for your review on GitHub · northstar/admin',
+    ),
+  ).toBeTruthy();
+  await user.click(within(reviewRow).getByRole('button', { name: 'Open' }));
+  expect(items).toEqual([
+    { itemId: 'item-4', projectId: 'project-2', tab: 'overview' },
   ]);
 });
