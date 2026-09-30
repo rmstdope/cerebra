@@ -127,6 +127,11 @@ interface Fixture {
     caller: ToolCaller,
     options?: { readonly answer?: string; readonly drawing?: string },
   ): Promise<void>;
+  /** Records a round of drawings shown in the run's events, by label and stored mockup id. */
+  showDrawings(
+    caller: ToolCaller,
+    drawings: Readonly<Record<string, string | null>>,
+  ): Promise<void>;
   item(options?: {
     readonly heldBy?: ToolCaller;
     readonly projectId?: string;
@@ -245,6 +250,19 @@ async function withBoard(run: (fixture: Fixture) => Promise<void>) {
             questionId,
           });
         }
+      },
+      async showDrawings(caller, drawings) {
+        await runs.append(caller.runId, {
+          drawings: Object.entries(drawings).map(([label, mockupId]) => ({
+            cost: 'It costs something.',
+            label,
+            mockupId,
+            recommended: false,
+          })),
+          drawingsId: crypto.randomUUID(),
+          kind: 'drawings',
+          question: 'Which one?',
+        });
       },
       async caller(name, role, inProject = projectId) {
         const token = crypto.randomUUID();
@@ -671,6 +689,75 @@ describe('board tools', { concurrent: false }, () => {
 
   describe('leaving design on the confirmed experience', () => {
     const confirm = 'Confirm and send to build';
+    const mockupA = '00000000-0000-4000-8000-00000000000a';
+    const mockupB = '00000000-0000-4000-8000-00000000000b';
+
+    test('the design record keeps the chosen drawing, from the newest round that showed it', async () => {
+      await withBoard(
+        async ({ askDesign, board, caller, item, showDrawings, tools }) => {
+          const iris = await caller('Xavier', 'designer');
+          const heldId = await item({ heldBy: iris, state: 'design_ready' });
+          await showDrawings(iris, {
+            'A · Beside CSV': mockupB,
+            'B · In the menu': mockupA,
+          });
+          await showDrawings(iris, { 'A · Beside CSV': mockupA });
+          await askDesign(iris, {
+            answer: confirm,
+            drawing: 'A · Beside CSV\nWith a smaller icon.',
+          });
+
+          expect(
+            await tools.call(iris, 'transition', {
+              record: {
+                ...design,
+                markdown: design.markdown.replace(
+                  'A · Beside CSV',
+                  'A · Beside CSV\nWith a smaller icon.',
+                ),
+                mockupId: mockupB,
+              },
+              to: 'build_ready',
+            }),
+          ).toMatchObject({ ok: true, value: { state: 'build_ready' } });
+          const records = await board.listRecords(heldId);
+          expect(records.at(-1)?.record).toMatchObject({
+            kind: 'design',
+            mockupId: mockupA,
+          });
+        },
+      );
+    });
+
+    test('a designer cannot leave design on a drawing the conversation never showed', async () => {
+      await withBoard(
+        async ({ askDesign, board, caller, item, showDrawings, tools }) => {
+          const iris = await caller('Xavier', 'designer');
+          const heldId = await item({ heldBy: iris, state: 'design_ready' });
+          await showDrawings(iris, {
+            'A · Beside CSV': null,
+            'B · In the menu': mockupB,
+          });
+          await askDesign(iris, { answer: confirm });
+
+          expect(
+            await tools.call(iris, 'transition', {
+              record: { ...design, mockupId: mockupB },
+              to: 'build_ready',
+            }),
+          ).toMatchObject({
+            code: 'refused',
+            message: expect.stringContaining(
+              'names no drawing shown',
+            ) as unknown,
+            ok: false,
+          });
+          expect(await board.getWorkItem(heldId)).toMatchObject({
+            state: 'designing',
+          });
+        },
+      );
+    });
 
     test('a designer cannot leave design before the navigator confirmed', async () => {
       await withBoard(async ({ askDesign, board, caller, item, tools }) => {
@@ -739,13 +826,22 @@ describe('board tools', { concurrent: false }, () => {
 
     test('moves to build_ready on the confirmed design, says what was recorded and releases the run', async () => {
       await withBoard(
-        async ({ askDesign, board, caller, item, released, tools }) => {
+        async ({
+          askDesign,
+          board,
+          caller,
+          item,
+          released,
+          showDrawings,
+          tools,
+        }) => {
           const iris = await caller('Xavier', 'designer');
           const heldId = await item({
             heldBy: iris,
             state: 'design_ready',
             title: 'Export invoices as XLSX',
           });
+          await showDrawings(iris, { 'A · Beside CSV': mockupA });
           await askDesign(iris, { answer: `${confirm} (Recommended)` });
 
           expect(
