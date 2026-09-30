@@ -77,12 +77,17 @@ try {
     build('cerebro-agent', 'images/agent.Containerfile');
     build('cerebra-stub-agent', 'images/stub-agent.Containerfile');
   }
+  // The suites import the workspace's packages from their built output.
+  if (run('pnpm', ['run', 'build']).status !== 0) {
+    throw new Error('Could not build the workspace.');
+  }
   const result = run(
     'node',
     ['scripts/test-database.mjs', 'pnpm', 'exec', 'vitest', 'run', ...suites],
     {
       env: {
         ...process.env,
+        CEREBRA_E2E: '1',
         CEREBRA_REQUIRE_PODMAN: '1',
         CEREBRA_TEST_PODMAN_SOCKET: socket,
       },

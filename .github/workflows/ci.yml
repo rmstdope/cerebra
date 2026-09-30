@@ -63,6 +63,18 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # ubuntu-latest's Podman 4.9 ignores volume subpaths, which the engine's mounts are (D44).
+      - name: Install Podman 5
+        env:
+          PODMAN_STATIC: https://github.com/mgoltzsche/podman-static/releases/download/v5.8.7/podman-linux-amd64.tar.gz
+          PODMAN_STATIC_SHA256: 1957a6ec8f4848b748bded0d9c778a9c1735b9b0055506a0521947e934b2997f
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/podman.tar.gz" "$PODMAN_STATIC"
+          echo "$PODMAN_STATIC_SHA256  $RUNNER_TEMP/podman.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/podman.tar.gz" -C "$RUNNER_TEMP"
+          sudo cp -r "$RUNNER_TEMP/podman-linux-amd64/usr" "$RUNNER_TEMP/podman-linux-amd64/etc" /
+          hash -r
+          test "$(command -v podman)" = /usr/local/bin/podman
       - name: Start the rootless Podman API
         run: |
           podman version

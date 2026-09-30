@@ -36,6 +36,8 @@ import {
  */
 const podmanSocket = process.env.CEREBRA_TEST_PODMAN_SOCKET ?? '';
 const required = process.env.CEREBRA_REQUIRE_PODMAN === '1';
+/** Only `pnpm run test:e2e` builds the stub image, so only it turns this suite on. */
+const enabled = process.env.CEREBRA_E2E === '1';
 const stubImage = process.env.CEREBRA_E2E_IMAGE ?? 'cerebra-stub-agent';
 /** How a container reaches a port the test listens on, on the machine running the test. */
 const containerHost =
@@ -43,7 +45,7 @@ const containerHost =
 const loopTimeout = 300_000;
 const scriptFile = '.cerebra-stub.json';
 
-test.runIf(required && podmanSocket === '')(
+test.runIf(enabled && required && podmanSocket === '')(
   'the real-Podman suite is required but has no Podman socket',
   () => {
     throw new Error(
@@ -189,6 +191,8 @@ function review(
 interface FakeGitHub {
   readonly forge: ProjectForge;
   readonly checked: string[];
+  /** How many times the loop has read the pull request's reviews. */
+  reviewsRead: number;
   checks: Map<string, ForgeChecks>;
   reviews: ForgeReview[];
   readonly merges: { readonly number: number; readonly sha: string }[];
@@ -198,6 +202,7 @@ function fakeGitHub(remote: string, branchOf: () => string): FakeGitHub {
   const state: FakeGitHub = {
     forge: async () => forge,
     checked: [],
+    reviewsRead: 0,
     checks: new Map(),
     reviews: [],
     merges: [],
@@ -243,6 +248,7 @@ function fakeGitHub(remote: string, branchOf: () => string): FakeGitHub {
       return [];
     },
     async reviews() {
+      state.reviewsRead += 1;
       return state.reviews;
     },
   };
@@ -294,9 +300,15 @@ async function teardown(): Promise<void> {
   }
   if (directory !== undefined) {
     // What an agent wrote belongs to its container's user; only Podman's namespace may remove it.
-    await rm(directory, { recursive: true, force: true }).catch(() =>
-      run('podman', ['unshare', 'rm', '-rf', directory]),
-    );
+    await rm(directory, { recursive: true, force: true }).catch(() => {
+      // A cleanup failure must not hide the test's own.
+      const removed = spawnSync('podman', ['unshare', 'rm', '-rf', directory], {
+        encoding: 'utf8',
+      });
+      if (removed.status !== 0) {
+        console.error(`Could not remove ${directory}: ${removed.stderr}`);
+      }
+    });
   }
 }
 
@@ -581,189 +593,211 @@ async function watchedTwice(loop: Loop, head: string): Promise<void> {
   );
 }
 
-describe.skipIf(podmanSocket === '')('the loop under real Podman', () => {
-  test(
-    'an item in build_ready is built, sent back once, reworked on the same pull request, and merged only once approved and green',
-    async () => {
-      await withLoop(
-        {
-          name: 'website',
-          script: (remote, pullRequest) => ({
-            building: [
-              [
-                { say: 'Building {{key}}.' },
-                { tool: 'submit_plan', arguments: { markdown: plan } },
-                ...build(remote, pullRequest, 'first'),
+describe.skipIf(!enabled || podmanSocket === '')(
+  'the loop under real Podman',
+  () => {
+    test(
+      'an item in build_ready is built, sent back once, reworked on the same pull request, and merged only once approved and green',
+      async () => {
+        await withLoop(
+          {
+            name: 'website',
+            script: (remote, pullRequest) => ({
+              building: [
+                [
+                  { say: 'Building {{key}}.' },
+                  { tool: 'submit_plan', arguments: { markdown: plan } },
+                  ...build(remote, pullRequest, 'first'),
+                ],
+                [
+                  { say: 'Reworking {{key}}.' },
+                  { tool: 'submit_plan', arguments: { markdown: plan } },
+                  ...build(remote, pullRequest, 'second'),
+                ],
               ],
-              [
-                { say: 'Reworking {{key}}.' },
-                { tool: 'submit_plan', arguments: { markdown: plan } },
-                ...build(remote, pullRequest, 'second'),
+              reviewing: [
+                review(pullRequest, 'changes_requested'),
+                review(pullRequest, 'approved'),
               ],
-            ],
-            reviewing: [
-              review(pullRequest, 'changes_requested'),
-              review(pullRequest, 'approved'),
-            ],
-          }),
-        },
-        async (loop) => {
-          await until('merging', reached(loop, 'merging'), () =>
-            loop.diagnose(),
-          );
-          const pullRequests = await recordsOf(loop, 'pull_request');
-          expect(pullRequests.map((record) => record.url)).toEqual([
-            'https://github.com/acme/website/pull/1',
-            'https://github.com/acme/website/pull/1',
-          ]);
-          const approved = String(pullRequests[1]?.head);
-          expect(approved).not.toBe(pullRequests[0]?.head);
-          const reviews = await recordsOf(loop, 'review');
-          expect(reviews.map((record) => record.verdict)).toEqual([
-            'changes_requested',
-            'approved',
-          ]);
-          expect(reviews[1]?.revision).toBe(approved);
+            }),
+          },
+          async (loop) => {
+            await until('merging', reached(loop, 'merging'), () =>
+              loop.diagnose(),
+            );
+            // The script names the one pull request both times; that the rework reused its branch
+            // is proven below, by main holding both builds' lines.
+            const pullRequests = await recordsOf(loop, 'pull_request');
+            expect(pullRequests.map((record) => record.url)).toEqual([
+              'https://github.com/acme/website/pull/1',
+              'https://github.com/acme/website/pull/1',
+            ]);
+            const approved = String(pullRequests[1]?.head);
+            expect(approved).not.toBe(pullRequests[0]?.head);
+            const reviews = await recordsOf(loop, 'review');
+            expect(reviews.map((record) => record.verdict)).toEqual([
+              'changes_requested',
+              'approved',
+            ]);
+            expect(reviews[1]?.revision).toBe(approved);
 
-          // Approved, but its checks are still running: nothing merges.
-          await watchedTwice(loop, approved);
-          expect(await stateOf(loop)).toBe('merging');
-          expect(loop.github.merges).toEqual([]);
+            // Approved, but its checks are still running: nothing merges.
+            await watchedTwice(loop, approved);
+            expect(await stateOf(loop)).toBe('merging');
+            expect(loop.github.merges).toEqual([]);
 
-          loop.github.checks.set(approved, { status: 'success' });
-          await until('done', reached(loop, 'done'), () => loop.diagnose());
+            loop.github.checks.set(approved, { status: 'success' });
+            await until('done', reached(loop, 'done'), () => loop.diagnose());
 
-          expect(loop.github.merges).toEqual([{ number: 1, sha: approved }]);
-          expect(bare(loop.remote, 'rev-parse', 'refs/heads/main')).toBe(
-            approved,
-          );
-          expect(
-            bare(loop.remote, 'show', 'main:feature.txt').split('\n'),
-          ).toEqual(['first', 'second']);
-          const history = await createBoard(loop.database).getHistory(
-            loop.itemId,
-          );
-          expect(history.map((entry) => entry.toState)).toEqual([
-            'build_ready',
-            'building',
-            'review_ready',
-            'reviewing',
-            'build_ready',
-            'building',
-            'review_ready',
-            'reviewing',
-            'merging',
-            'done',
-          ]);
-          const runs = await loop.database
-            .selectFrom('runs')
-            .select(['role', 'status', 'container_id'])
-            .where('work_item_id', '=', loop.itemId)
-            .orderBy('created_at')
-            .execute();
-          expect(runs.map((entry) => [entry.role, entry.status])).toEqual([
-            ['builder', 'finished'],
-            ['reviewer', 'finished'],
-            ['builder', 'finished'],
-            ['reviewer', 'finished'],
-          ]);
-          await until(
-            'every run container to be removed',
-            async () =>
-              runs.every(
-                (entry) =>
-                  entry.container_id === null ||
-                  spawnSync('podman', [
-                    'container',
-                    'exists',
-                    entry.container_id,
-                  ]).status === 1,
-              )
-                ? true
-                : undefined,
-            () => loop.diagnose(),
-            30_000,
-          );
-        },
-      );
-    },
-    loopTimeout,
-  );
+            expect(loop.github.merges).toEqual([{ number: 1, sha: approved }]);
+            expect(bare(loop.remote, 'rev-parse', 'refs/heads/main')).toBe(
+              approved,
+            );
+            expect(
+              bare(loop.remote, 'show', 'main:feature.txt').split('\n'),
+            ).toEqual(['first', 'second']);
+            const history = await createBoard(loop.database).getHistory(
+              loop.itemId,
+            );
+            expect(history.map((entry) => entry.toState)).toEqual([
+              'build_ready',
+              'building',
+              'review_ready',
+              'reviewing',
+              'build_ready',
+              'building',
+              'review_ready',
+              'reviewing',
+              'merging',
+              'done',
+            ]);
+            const runs = await loop.database
+              .selectFrom('runs')
+              .select(['role', 'status', 'container_id'])
+              .where('work_item_id', '=', loop.itemId)
+              .orderBy('created_at')
+              .execute();
+            expect(runs.map((entry) => [entry.role, entry.status])).toEqual([
+              ['builder', 'finished'],
+              ['reviewer', 'finished'],
+              ['builder', 'finished'],
+              ['reviewer', 'finished'],
+            ]);
+            expect(runs.every((entry) => entry.container_id !== null)).toBe(
+              true,
+            );
+            await until(
+              'every run container to be removed',
+              async () =>
+                runs.every(
+                  (entry) =>
+                    spawnSync('podman', [
+                      'container',
+                      'exists',
+                      entry.container_id ?? '',
+                    ]).status === 1,
+                )
+                  ? true
+                  : undefined,
+              () => loop.diagnose(),
+              30_000,
+            );
+          },
+        );
+      },
+      loopTimeout,
+    );
 
-  test(
-    'with involvement full, the item stops at the plan and at the code review before it merges',
-    async () => {
-      await withLoop(
-        {
-          name: 'webshop',
-          involvement: 'full',
-          script: (remote, pullRequest) => ({
-            building: [
-              [
-                { tool: 'submit_plan', arguments: { markdown: plan } },
-                ...build(remote, pullRequest, 'only'),
+    test(
+      'with involvement full, the item stops at the plan and at the code review before it merges',
+      async () => {
+        await withLoop(
+          {
+            name: 'webshop',
+            involvement: 'full',
+            script: (remote, pullRequest) => ({
+              building: [
+                [
+                  { tool: 'submit_plan', arguments: { markdown: plan } },
+                  ...build(remote, pullRequest, 'only'),
+                ],
               ],
-            ],
-            reviewing: [review(pullRequest, 'approved')],
-          }),
-        },
-        async (loop) => {
-          // The builder waits in submit_plan for the navigator's answer.
-          const plans = await until(
-            'the plan to wait for the navigator',
-            async () => {
-              const found = await recordsOf(loop, 'plan');
-              return found.length > 0 ? found : undefined;
-            },
-            () => loop.diagnose(),
-          );
-          const holder = await loop.database
-            .selectFrom('work_items')
-            .select('holder_run_id')
-            .where('id', '=', loop.itemId)
-            .executeTakeFirstOrThrow();
-          await new Promise((resolve) => setTimeout(resolve, 2_000));
-          expect(await stateOf(loop)).toBe('building');
-          expect(await recordsOf(loop, 'pull_request')).toEqual([]);
+              reviewing: [review(pullRequest, 'approved')],
+            }),
+          },
+          async (loop) => {
+            // The builder waits in submit_plan for the navigator's answer.
+            const plans = await until(
+              'the plan to wait for the navigator',
+              async () => {
+                const found = await recordsOf(loop, 'plan');
+                return found.length > 0 ? found : undefined;
+              },
+              () => loop.diagnose(),
+            );
+            // A plan that needs approval holds submit_plan open, so the builder can go no further.
+            expect(plans.map((record) => record.approval)).toEqual([
+              'required',
+            ]);
+            const holder = await loop.database
+              .selectFrom('work_items')
+              .innerJoin('runs', 'runs.id', 'work_items.holder_run_id')
+              .select(['runs.id', 'runs.role', 'runs.status'])
+              .where('work_items.id', '=', loop.itemId)
+              .executeTakeFirstOrThrow();
+            expect(holder.role).toBe('builder');
+            expect(['active', 'awaiting_input']).toContain(holder.status);
+            expect(await stateOf(loop)).toBe('building');
+            expect(await recordsOf(loop, 'pull_request')).toEqual([]);
 
-          await loop.backend.plans?.answer(holder.holder_run_id ?? '', {
-            planId: Number(plans[0]?.id),
-            verdict: 'approved',
-          });
+            await loop.backend.plans?.answer(holder.id, {
+              planId: Number(plans[0]?.id),
+              verdict: 'approved',
+            });
 
-          // Approved by the reviewer, the item waits for the navigator's review on GitHub.
-          const waiting = await until(
-            'the code review checkpoint',
-            async () => {
-              const found = await recordsOf(loop, 'awaiting_code_review');
-              return (await stateOf(loop)) === 'waiting' && found.length > 0
-                ? found
-                : undefined;
-            },
-            () => loop.diagnose(),
-          );
-          const head = String((await recordsOf(loop, 'pull_request'))[0]?.head);
-          loop.github.checks.set(head, { status: 'success' });
-          await new Promise((resolve) => setTimeout(resolve, 2_000));
-          expect(await stateOf(loop)).toBe('waiting');
-          expect(loop.github.merges).toEqual([]);
-          expect(waiting[0]?.account).toBe('navigator');
+            // Approved by the reviewer, the item waits for the navigator's review on GitHub.
+            const waiting = await until(
+              'the code review checkpoint',
+              async () => {
+                const found = await recordsOf(loop, 'awaiting_code_review');
+                return (await stateOf(loop)) === 'waiting' && found.length > 0
+                  ? found
+                  : undefined;
+              },
+              () => loop.diagnose(),
+            );
+            const head = String(
+              (await recordsOf(loop, 'pull_request'))[0]?.head,
+            );
+            loop.github.checks.set(head, { status: 'success' });
+            // Green, but without the navigator's review: watch the backend read the reviews twice.
+            const read = loop.github.reviewsRead;
+            await until(
+              'the backend to read the reviews again',
+              async () =>
+                loop.github.reviewsRead >= read + 2 ? true : undefined,
+              () => loop.diagnose(),
+            );
+            expect(await stateOf(loop)).toBe('waiting');
+            expect(loop.github.merges).toEqual([]);
+            expect(waiting[0]?.account).toBe('navigator');
 
-          loop.github.reviews = [
-            {
-              body: 'Looks right.',
-              id: 7,
-              login: 'navigator',
-              state: 'approved',
-              submittedAt: new Date(),
-              url: 'https://github.com/acme/webshop/pull/1#pullrequestreview-7',
-            },
-          ];
-          await until('done', reached(loop, 'done'), () => loop.diagnose());
-          expect(loop.github.merges).toEqual([{ number: 1, sha: head }]);
-        },
-      );
-    },
-    loopTimeout,
-  );
-});
+            loop.github.reviews = [
+              {
+                body: 'Looks right.',
+                id: 7,
+                login: 'navigator',
+                state: 'approved',
+                submittedAt: new Date(),
+                url: 'https://github.com/acme/webshop/pull/1#pullrequestreview-7',
+              },
+            ];
+            await until('done', reached(loop, 'done'), () => loop.diagnose());
+            expect(loop.github.merges).toEqual([{ number: 1, sha: head }]);
+          },
+        );
+      },
+      loopTimeout,
+    );
+  },
+);

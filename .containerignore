@@ -1,0 +1,8 @@
+# The image builds copy packages/ and build it inside; nothing from this machine's builds belongs there.
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+.cerebro
+.beads
+.git
+spikes

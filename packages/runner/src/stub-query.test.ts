@@ -273,3 +273,20 @@ test('an SDK message stream: init first, result last', async () => {
     expect.objectContaining({ type: 'result', subtype: 'success' }),
   );
 });
+
+test('a step naming a variable nothing captured fails the run naming it', async () => {
+  const mcp = board('building', 1);
+
+  const events = await run(
+    { building: [[{ say: 'Pushed {{nowhere}}.' }]] },
+    { fetch: mcp.fetch, exec: commands().exec },
+  );
+
+  expect(events.at(-1)).toEqual(
+    expect.objectContaining({
+      kind: 'result',
+      end: 'failed',
+      error: expect.stringContaining('nowhere'),
+    }),
+  );
+});
