@@ -432,10 +432,16 @@ function DesignForm({
   const form = useRef<HTMLFormElement>(null);
   const id = useId();
   const [own, setOwn] = useState('');
+  const [changing, setChanging] = useState(false);
+  const change = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     form.current?.focus();
   }, [questionId]);
+
+  useEffect(() => {
+    if (changing) change.current?.focus();
+  }, [changing]);
 
   return (
     <form
@@ -460,32 +466,48 @@ function DesignForm({
         name={name}
         sections={design.sections}
       />
-      <button
-        className="secondary-button mt-3 w-full text-left text-sm"
-        disabled={sending}
-        onClick={() => void onAnswer(confirmDesignLabel)}
-        type="button"
-      >
-        <b>{confirmDesignLabel}</b>
-      </button>
-      <label className="auth-label" htmlFor={`${id}-own`}>
-        Or say what to change
-      </label>
-      <div className="flex gap-2">
-        <input
-          className="auth-input min-w-0 flex-1"
-          id={`${id}-own`}
-          onChange={(event) => setOwn(event.target.value)}
-          value={own}
-        />
+      <div className="mt-3 flex flex-wrap gap-2">
         <button
-          className="primary-button self-end"
-          disabled={own.trim() === '' || sending}
-          type="submit"
+          className="primary-button"
+          disabled={sending}
+          onClick={() => void onAnswer(confirmDesignLabel)}
+          type="button"
         >
-          Send
+          {confirmDesignLabel}
+        </button>
+        <button
+          aria-expanded={changing}
+          className="secondary-button"
+          disabled={sending}
+          onClick={() => setChanging(true)}
+          type="button"
+        >
+          Change something
         </button>
       </div>
+      {changing ? (
+        <>
+          <label className="auth-label" htmlFor={`${id}-own`}>
+            Or say what to change
+          </label>
+          <div className="flex gap-2">
+            <input
+              className="auth-input min-w-0 flex-1"
+              id={`${id}-own`}
+              onChange={(event) => setOwn(event.target.value)}
+              ref={change}
+              value={own}
+            />
+            <button
+              className="primary-button self-end"
+              disabled={own.trim() === '' || sending}
+              type="submit"
+            >
+              Send
+            </button>
+          </div>
+        </>
+      ) : null}
     </form>
   );
 }

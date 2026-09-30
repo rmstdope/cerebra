@@ -1504,8 +1504,10 @@ test('the designer confirms the agreed experience as one focused form', async ()
   ).toBeTruthy();
   expect(within(form).getByText('A · Button in the toolbar')).toBeTruthy();
   expect(
-    within(form).queryByRole('button', { name: /Change something/ }),
-  ).toBeNull();
+    within(form)
+      .getByRole('button', { name: 'Change something' })
+      .getAttribute('aria-expanded'),
+  ).toBe('false');
   expect(within(form).queryAllByRole('button', { name: /^Choose/ })).toEqual(
     [],
   );
@@ -1518,10 +1520,13 @@ test('the designer confirms the agreed experience as one focused form', async ()
   ).toBeTruthy();
   await userEvent.keyboard('{Escape}');
 
-  await userEvent.type(
-    within(form).getByLabelText('Or say what to change'),
-    'Say "Download CSV".',
+  expect(within(form).queryByLabelText('Or say what to change')).toBeNull();
+  await userEvent.click(
+    within(form).getByRole('button', { name: 'Change something' }),
   );
+  const change = within(form).getByLabelText('Or say what to change');
+  await waitFor(() => expect(document.activeElement).toBe(change));
+  await userEvent.type(change, 'Say "Download CSV".');
   await userEvent.click(within(form).getByRole('button', { name: 'Send' }));
   await userEvent.click(
     within(form).getByRole('button', {
