@@ -45,7 +45,7 @@ const containerHost =
 const loopTimeout = 300_000;
 const scriptFile = '.cerebra-stub.json';
 
-test.runIf(enabled && required && podmanSocket === '')(
+test.runIf(required && podmanSocket === '')(
   'the real-Podman suite is required but has no Podman socket',
   () => {
     throw new Error(
