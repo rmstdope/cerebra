@@ -1313,6 +1313,7 @@ test('the placeholders turn into the drawings when they arrive, and only then ta
     name: 'Which export button?',
   });
   expect(preparing.contains(document.activeElement)).toBe(false);
+  expect(screen.getByRole('status').textContent).toBe('Working');
 
   client.push({
     type: 'event',

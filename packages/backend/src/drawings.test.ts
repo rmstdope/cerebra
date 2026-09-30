@@ -329,6 +329,56 @@ describe('drawing questions', () => {
       expect(notes).toHaveLength(2);
     });
 
+    it('a round started while a set is announced waits for its withdrawal', async () => {
+      const notes: Array<[string, AgentEvent, string]> = [];
+      let release = () => {};
+      const held = new Promise<void>((resolve) => (release = resolve));
+      const drawings = createDrawingQuestions({
+        note: async (run, event, state) => {
+          if (event.kind === 'drawings_preparing' && notes.length === 0) {
+            await held;
+          }
+          notes.push([run, event, state]);
+        },
+      });
+      const first = drawings.prepare(runId, preparing);
+      await settle();
+      const second = drawings.prepare(runId, preparing);
+      await settle();
+      release();
+      const [older, newer] = await Promise.all([first, second]);
+
+      expect(notes.map(([, event]) => event.kind)).toEqual([
+        'drawings_preparing',
+        'drawings_withdrawn',
+        'drawings_preparing',
+      ]);
+      expect(notes[1]?.[1]).toMatchObject({ drawingsId: older.drawingsId });
+      await expect(older.show(round.drawings)).rejects.toThrow(
+        'no longer on its way',
+      );
+      expect(notes[2]?.[1]).toMatchObject({ drawingsId: newer.drawingsId });
+    });
+
+    it('a newer round is shown even when the older set cannot be withdrawn', async () => {
+      const notes: Array<[string, AgentEvent, string]> = [];
+      const drawings = createDrawingQuestions({
+        note: async (run, event, state) => {
+          if (event.kind === 'drawings_withdrawn') {
+            throw new Error('The database went away.');
+          }
+          notes.push([run, event, state]);
+        },
+      });
+      await drawings.prepare(runId, preparing);
+      const newer = await drawings.prepare(runId, preparing);
+      expect(notes.map(([, event]) => event.kind)).toEqual([
+        'drawings_preparing',
+        'drawings_preparing',
+      ]);
+      expect(notes[1]?.[1]).toMatchObject({ drawingsId: newer.drawingsId });
+    });
+
     it('a newer round withdraws a set still on its way', async () => {
       const { drawings, notes } = setup();
       const older = await drawings.prepare(runId, preparing);

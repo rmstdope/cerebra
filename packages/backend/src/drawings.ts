@@ -122,7 +122,10 @@ export function createDrawingQuestions({
 
   // The older round's withdrawal lands before the newer round, so the chat reads in order.
   async function withdrawOlder(runId: string): Promise<void> {
-    await onItsWay.get(runId)?.();
+    // A set on its way that cannot be withdrawn belongs to a run that is ending anyway.
+    await onItsWay
+      .get(runId)?.()
+      .catch(() => {});
     await waiting
       .get(runId)
       ?.withdraw(new Error('A newer round of drawings replaced this one.'));
@@ -207,27 +210,47 @@ export function createDrawingQuestions({
       await withdrawOlder(runId);
       signal?.throwIfAborted();
       const drawingsId = randomUUID();
-      await note(
+      let stage: 'preparing' | 'shown' | 'withdrawn' = 'preparing';
+      let withdrawing: Promise<void> | null = null;
+      const announced = note(
         runId,
         { count, drawingsId, kind: 'drawings_preparing', question },
         'active',
       );
-      let stage: 'preparing' | 'shown' | 'withdrawn' = 'preparing';
-      const leave = (next: 'shown' | 'withdrawn') => {
-        stage = next;
+      const forget = () => {
         signal?.removeEventListener('abort', abandoned);
         if (onItsWay.get(runId) === withdraw) onItsWay.delete(runId);
       };
-      const withdraw = async () => {
-        if (stage !== 'preparing') return;
-        leave('withdrawn');
-        await note(runId, { drawingsId, kind: 'drawings_withdrawn' }, 'active');
+      // One withdrawal, however many ask for it, written after the set was announced; the set
+      // stays on its way until it is written, so a newer round waits for it.
+      const withdraw = (): Promise<void> => {
+        if (stage === 'shown') return Promise.resolve();
+        stage = 'withdrawn';
+        withdrawing ??= (async () => {
+          try {
+            await announced;
+            await note(
+              runId,
+              { drawingsId, kind: 'drawings_withdrawn' },
+              'active',
+            );
+          } finally {
+            forget();
+          }
+        })();
+        return withdrawing;
       };
       // An abandoned call leaves nothing on its way; a failed note is the run ending anyway.
       const abandoned = () => void withdraw().catch(() => {});
-      signal?.addEventListener('abort', abandoned, { once: true });
       onItsWay.set(runId, withdraw);
-      if (signal?.aborted) abandoned();
+      signal?.addEventListener('abort', abandoned, { once: true });
+      try {
+        await announced;
+      } catch (error) {
+        stage = 'withdrawn';
+        forget();
+        throw error;
+      }
       return {
         drawingsId,
         async show(drawings) {
@@ -247,7 +270,8 @@ export function createDrawingQuestions({
             await withdraw().catch(() => {});
             throw error;
           }
-          leave('shown');
+          stage = 'shown';
+          forget();
           return wait(runId, drawingsId, round, signal);
         },
         withdraw,

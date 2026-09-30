@@ -775,6 +775,7 @@ export function createBoardTools({
           }
           shown = [];
           for (const drawing of set.drawings) {
+            signal?.throwIfAborted();
             const mockupId = await mockups.save({
               content: content.get(drawing.path)!,
               contentType: drawing.type,
