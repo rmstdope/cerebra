@@ -259,8 +259,10 @@ A designer's round of drawings waits in `drawings.ts`, one round per run and in 
 is written into the run's conversation as a `drawings` event, the run shows as awaiting input, and
 the asking call returns once the navigator answers with `POST /api/runs/:runId/drawings-answers`
 (`{ drawingsId, choice }` naming a drawing of the round, or `{ drawingsId, text }` with what to
-change), written as `drawings_answer`. A newer round or an abandoned call writes
-`drawings_withdrawn`; an answer to a round that is not the run's waiting one is refused as
+change), written as `drawings_answer`. While `show_mockups` fetches and checks a set, its round is
+first written as `drawings_preparing` with the question and how many drawings are coming, the run
+still active; the set's `drawings` event then fills in that same round. A newer round, an abandoned
+call or a set refused before it was shown writes `drawings_withdrawn`; an answer to a round that is not the run's waiting one is refused as
 `not_waiting`, and the navigator queue lists each live run's waiting round as a question.
 
 A builder records its plan with `submit_plan` and each run of the project's checks with
@@ -491,7 +493,10 @@ accessibility target of `spec.md` §12.
 
 **Mockups.** `show_mockups` has the gateway fetch the named files from the run's checkout with
 `fetch_files` (§5.2) and stores each in the `mockups` table, beside the item's records, under an
-unguessable id; HTML and PNG, JPEG, GIF, WebP and SVG images are accepted. A second listener
+unguessable id; HTML and PNG, JPEG, GIF, WebP and SVG images are accepted, told apart by the path's
+extension and checked against the content. A set is shown whole or not at all: between 1 and 64
+drawings, 8 MiB together, every file checked before any is stored, and a refusal names what to fix
+and says nothing was shown. A second listener
 (`CEREBRA_MOCKUP_PORT`, 4318, reached at `CEREBRA_MOCKUP_ADDRESS`, `http://127.0.0.1:4318`, the
 interface compose publishes it on) serves `GET /mockups/:id`, so
 drawings have an origin of their own and never see the session cookie; it reads no cookie, and

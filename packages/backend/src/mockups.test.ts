@@ -5,6 +5,8 @@ import { describe, expect, test } from 'vitest';
 import type { Database } from './database.js';
 import {
   createMockupStore,
+  drawingContentProblem,
+  drawingTypeOf,
   MockupError,
   mockupContentSecurityPolicy,
   mockupDocument,
@@ -43,6 +45,76 @@ async function itemAndRun(
     .execute();
   return { itemId, runId };
 }
+
+describe('what counts as a drawing', () => {
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0]);
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0]);
+  const gif = Buffer.from('GIF89a\0\0');
+  const webp = Buffer.concat([
+    Buffer.from('RIFF'),
+    Buffer.from([1, 0, 0, 0]),
+    Buffer.from('WEBPVP8 '),
+  ]);
+
+  test("names a drawing's type by its extension", () => {
+    expect(drawingTypeOf('mockups/a.html')).toBe('text/html');
+    expect(drawingTypeOf('mockups/A.HTM')).toBe('text/html');
+    expect(drawingTypeOf('a.png')).toBe('image/png');
+    expect(drawingTypeOf('a.jpg')).toBe('image/jpeg');
+    expect(drawingTypeOf('a.jpeg')).toBe('image/jpeg');
+    expect(drawingTypeOf('a.gif')).toBe('image/gif');
+    expect(drawingTypeOf('a.webp')).toBe('image/webp');
+    expect(drawingTypeOf('a.svg')).toBe('image/svg+xml');
+    expect(drawingTypeOf('notes.txt')).toBeNull();
+    expect(drawingTypeOf('script.js')).toBeNull();
+    expect(drawingTypeOf('html')).toBeNull();
+  });
+
+  test('accepts real HTML, SVG and images', () => {
+    expect(
+      drawingContentProblem(
+        'a.html',
+        'text/html',
+        Buffer.from('<!doctype html><p>Export – CSV</p>'),
+      ),
+    ).toBeNull();
+    expect(
+      drawingContentProblem(
+        'a.svg',
+        'image/svg+xml',
+        Buffer.from('<?xml version="1.0"?><svg xmlns="x"></svg>'),
+      ),
+    ).toBeNull();
+    expect(drawingContentProblem('a.png', 'image/png', png)).toBeNull();
+    expect(drawingContentProblem('a.jpg', 'image/jpeg', jpeg)).toBeNull();
+    expect(drawingContentProblem('a.gif', 'image/gif', gif)).toBeNull();
+    expect(drawingContentProblem('a.webp', 'image/webp', webp)).toBeNull();
+  });
+
+  test('refuses bytes that are not what the name says', () => {
+    expect(drawingContentProblem('a.png', 'image/png', jpeg)).toBe(
+      'a.png is not a PNG image.',
+    );
+    expect(drawingContentProblem('b.jpg', 'image/jpeg', png)).toBe(
+      'b.jpg is not a JPEG image.',
+    );
+    expect(drawingContentProblem('c.gif', 'image/gif', png)).toBe(
+      'c.gif is not a GIF image.',
+    );
+    expect(drawingContentProblem('d.webp', 'image/webp', png)).toBe(
+      'd.webp is not a WebP image.',
+    );
+    expect(
+      drawingContentProblem('e.svg', 'image/svg+xml', Buffer.from('<p>hi</p>')),
+    ).toBe('e.svg is not an SVG image.');
+    expect(drawingContentProblem('f.html', 'text/html', png)).toBe(
+      'f.html is not a web page: it is not UTF-8 text.',
+    );
+    expect(drawingContentProblem('g.html', 'text/html', Buffer.alloc(0))).toBe(
+      'g.html is empty.',
+    );
+  });
+});
 
 describe('the mockup store', () => {
   test('keeps a drawing with its item and finds it by id', async () => {

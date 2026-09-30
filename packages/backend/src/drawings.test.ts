@@ -235,4 +235,207 @@ describe('drawing questions', () => {
     ).rejects.toThrow();
     expect(notes).toEqual([]);
   });
+
+  describe('a set on its way', () => {
+    const preparing = { question: round.question, count: 2 };
+
+    it('prepares a round, then shows it under the same id and waits', async () => {
+      const { drawings, notes } = setup();
+      const prepared = await drawings.prepare(runId, preparing);
+      expect(notes).toEqual([
+        [
+          runId,
+          {
+            count: 2,
+            drawingsId: prepared.drawingsId,
+            kind: 'drawings_preparing',
+            question: round.question,
+          },
+          'active',
+        ],
+      ]);
+
+      const answered = prepared.show(round.drawings);
+      await settle();
+      expect(notes[1]).toEqual([
+        runId,
+        { kind: 'drawings', drawingsId: prepared.drawingsId, ...round },
+        'awaiting_input',
+      ]);
+      await drawings.answer(runId, {
+        choice: 'B · Inside the ⋯ menu',
+        drawingsId: prepared.drawingsId,
+      });
+      await expect(answered).resolves.toEqual({
+        choice: 'B · Inside the ⋯ menu',
+        text: '',
+      });
+    });
+
+    it('a withdrawn preparing round shows nothing more', async () => {
+      const { drawings, notes } = setup();
+      const prepared = await drawings.prepare(runId, preparing);
+      await prepared.withdraw();
+
+      expect(notes.map(([, event, state]) => [event.kind, state])).toEqual([
+        ['drawings_preparing', 'active'],
+        ['drawings_withdrawn', 'active'],
+      ]);
+      expect(notes[1]?.[1]).toEqual({
+        drawingsId: prepared.drawingsId,
+        kind: 'drawings_withdrawn',
+      });
+      await expect(prepared.show(round.drawings)).rejects.toThrow();
+      await expect(
+        drawings.answer(runId, {
+          drawingsId: prepared.drawingsId,
+          text: 'Late.',
+        }),
+      ).rejects.toMatchObject({ code: 'not_waiting' });
+      expect(notes).toHaveLength(2);
+    });
+
+    it('a set of another size than prepared is refused', async () => {
+      const { drawings, notes } = setup();
+      const prepared = await drawings.prepare(runId, {
+        ...preparing,
+        count: 3,
+      });
+      await expect(prepared.show(round.drawings)).rejects.toThrow(
+        'The set holds 2 drawings, not the 3 prepared.',
+      );
+      // A set that could not be shown is not left on its way.
+      expect(notes.map(([, event]) => event.kind)).toEqual([
+        'drawings_preparing',
+        'drawings_withdrawn',
+      ]);
+    });
+
+    it('a set abandoned while on its way is withdrawn at once', async () => {
+      const { drawings, notes } = setup();
+      const abandoned = new AbortController();
+      const prepared = await drawings.prepare(
+        runId,
+        preparing,
+        abandoned.signal,
+      );
+      abandoned.abort();
+      await settle();
+      expect(notes[1]?.[1]).toEqual({
+        drawingsId: prepared.drawingsId,
+        kind: 'drawings_withdrawn',
+      });
+      await expect(prepared.show(round.drawings)).rejects.toThrow();
+      expect(notes).toHaveLength(2);
+    });
+
+    it('a round started while a set is announced waits for its withdrawal', async () => {
+      const notes: Array<[string, AgentEvent, string]> = [];
+      let release = () => {};
+      const held = new Promise<void>((resolve) => (release = resolve));
+      const drawings = createDrawingQuestions({
+        note: async (run, event, state) => {
+          if (event.kind === 'drawings_preparing' && notes.length === 0) {
+            await held;
+          }
+          notes.push([run, event, state]);
+        },
+      });
+      const first = drawings.prepare(runId, preparing);
+      await settle();
+      const second = drawings.prepare(runId, preparing);
+      await settle();
+      release();
+      const [older, newer] = await Promise.all([first, second]);
+
+      expect(notes.map(([, event]) => event.kind)).toEqual([
+        'drawings_preparing',
+        'drawings_withdrawn',
+        'drawings_preparing',
+      ]);
+      expect(notes[1]?.[1]).toMatchObject({ drawingsId: older.drawingsId });
+      await expect(older.show(round.drawings)).rejects.toThrow(
+        'no longer on its way',
+      );
+      expect(notes[2]?.[1]).toMatchObject({ drawingsId: newer.drawingsId });
+    });
+
+    it('a newer round is shown even when the older set cannot be withdrawn', async () => {
+      const notes: Array<[string, AgentEvent, string]> = [];
+      const drawings = createDrawingQuestions({
+        note: async (run, event, state) => {
+          if (event.kind === 'drawings_withdrawn') {
+            throw new Error('The database went away.');
+          }
+          notes.push([run, event, state]);
+        },
+      });
+      await drawings.prepare(runId, preparing);
+      const newer = await drawings.prepare(runId, preparing);
+      expect(notes.map(([, event]) => event.kind)).toEqual([
+        'drawings_preparing',
+        'drawings_preparing',
+      ]);
+      expect(notes[1]?.[1]).toMatchObject({ drawingsId: newer.drawingsId });
+    });
+
+    it('a newer round withdraws a set still on its way', async () => {
+      const { drawings, notes } = setup();
+      const older = await drawings.prepare(runId, preparing);
+      const newer = drawings.ask(runId, round);
+      await settle();
+      expect(notes.map(([, event]) => event.kind)).toEqual([
+        'drawings_preparing',
+        'drawings_withdrawn',
+        'drawings',
+      ]);
+      expect(notes[1]?.[1]).toMatchObject({ drawingsId: older.drawingsId });
+      await drawings.answer(runId, {
+        drawingsId: askedId(notes),
+        text: 'Fine.',
+      });
+      await expect(newer).resolves.toMatchObject({ text: 'Fine.' });
+    });
+
+    it('preparing replaces an older waiting round', async () => {
+      const { drawings, notes } = setup();
+      const first = drawings.ask(runId, round);
+      const refused = expect(first).rejects.toThrow('A newer round');
+      await settle();
+      const older = askedId(notes);
+
+      await drawings.prepare(runId, preparing);
+      await refused;
+      expect(notes.map(([, event]) => event.kind)).toEqual([
+        'drawings',
+        'drawings_withdrawn',
+        'drawings_preparing',
+      ]);
+      expect(notes[1]?.[1]).toEqual({
+        drawingsId: older,
+        kind: 'drawings_withdrawn',
+      });
+    });
+
+    it('an abandoned prepared round is withdrawn', async () => {
+      const { drawings, notes } = setup();
+      const controller = new AbortController();
+      const prepared = await drawings.prepare(
+        runId,
+        preparing,
+        controller.signal,
+      );
+      const answered = prepared.show(round.drawings);
+      await settle();
+
+      controller.abort(new Error('The turn ended.'));
+      await expect(answered).rejects.toThrow('The turn ended.');
+      await settle();
+      expect(notes.at(-1)).toEqual([
+        runId,
+        { drawingsId: prepared.drawingsId, kind: 'drawings_withdrawn' },
+        'active',
+      ]);
+    });
+  });
 });

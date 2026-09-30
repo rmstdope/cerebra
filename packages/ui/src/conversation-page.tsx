@@ -114,7 +114,8 @@ function activityOf(events: readonly RecordedEvent[]): string[] {
         ? ['Asked a question']
         : event.kind === 'drawings'
           ? ['Showed drawings']
-          : event.kind === 'tool_call'
+          : event.kind === 'tool_call' &&
+              event.name !== 'mcp__cerebra__show_mockups'
             ? [describeStep(event.name, event.input)]
             : [],
     )

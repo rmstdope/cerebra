@@ -1261,6 +1261,80 @@ test('an open round of drawings takes focus and is answered by a choice or in wo
   ]);
 });
 
+test('a set on its way shows as placeholders while the designer is still working', async () => {
+  const client = fakeClient(
+    conversation(
+      [
+        { kind: 'message', text: 'Two ways the export button could look.' },
+        {
+          input: { question: 'Which export button?' },
+          kind: 'tool_call',
+          name: 'mcp__cerebra__show_mockups',
+          toolCallId: 't1',
+        },
+        {
+          count: 2,
+          drawingsId: 'd-1',
+          kind: 'drawings_preparing',
+          question: 'Which export button?',
+        },
+      ],
+      { ...designer, state: 'active' },
+    ),
+  );
+  renderPage(client);
+
+  const shown = await screen.findByRole('region', {
+    name: 'Which export button?',
+  });
+  expect(within(shown).getAllByRole('listitem')).toHaveLength(2);
+  expect(screen.queryByRole('form')).toBeNull();
+  expect(screen.getByRole('status').textContent).toBe('Working');
+  expect(screen.queryByText(/show_mockups/)).toBeNull();
+  expect(screen.queryByRole('heading', { name: 'Activity' })).toBeNull();
+});
+
+test('the placeholders turn into the drawings when they arrive, and only then take focus', async () => {
+  const client = fakeClient(
+    conversation(
+      [
+        {
+          count: 2,
+          drawingsId: 'd-1',
+          kind: 'drawings_preparing',
+          question: 'Which export button?',
+        },
+      ],
+      { ...designer, state: 'active' },
+    ),
+  );
+  renderPage(client);
+  const preparing = await screen.findByRole('region', {
+    name: 'Which export button?',
+  });
+  expect(preparing.contains(document.activeElement)).toBe(false);
+  expect(screen.getByRole('status').textContent).toBe('Working');
+
+  client.push({
+    type: 'event',
+    ...record(2, drawingsRound('d-1', 'Which export button?')),
+  });
+  client.push({ failure: null, state: 'awaiting_input', type: 'state' });
+
+  const form = await screen.findByRole('form', {
+    name: 'Which export button?',
+  });
+  expect(screen.queryByText('Preparing drawings…')).toBeNull();
+  expect(
+    screen.getAllByRole('heading', { name: 'Which export button?' }),
+  ).toHaveLength(1);
+  expect(within(form).getByRole('button', { name: 'Choose B' })).toBeTruthy();
+  await waitFor(() => expect(document.activeElement).toBe(form));
+  expect(screen.getByRole('status').textContent).toBe(
+    'Waiting for your answer',
+  );
+});
+
 test('an answer to drawings that stopped waiting says so, and one that failed asks to try again', async () => {
   const failures = [
     new ConversationRequestError(

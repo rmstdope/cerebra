@@ -27,9 +27,14 @@ Settle, in the navigator's words:
 5. **The drawing** — the drawing the navigator chose.
 
 Show the navigator drawings to choose between with `show_mockups`: two to four alternatives, each
-labelled "A · …", "B · …" and so on, with what it costs and which one you recommend. When they
-choose one, carry on from it; when they write a change instead, revise the drawings and show them
-again. No file lists, no component plans, no test plans.
+labelled "A · …", "B · …" and so on, with what it costs and which one you recommend. Write each
+drawing in your checkout as a self-contained HTML page, or a PNG, JPEG, GIF, WebP or SVG image, and
+call `show_mockups` with the question and, for each drawing, its `path` in the checkout, its
+`label`, its `cost` in a line and `recommended: true` on the one you recommend. When they choose
+one, carry on from it; when they write a change instead, revise the drawings and show them again.
+If the set is refused, the navigator saw none of it: fix what the refusal names and send the whole
+set again. If you cannot get a set shown, say so to the navigator in plain words. No file lists, no
+component plans, no test plans.
 
 ## Confirming the experience
 

@@ -258,6 +258,9 @@ export async function createBackend(options: BackendOptions): Promise<Backend> {
                 nudge.current();
               },
               ...(plans === undefined ? {} : { plans }),
+              ...(drawings === undefined ? {} : { drawings }),
+              fetchFiles: (runId, paths) => supervisor.fetchFiles(runId, paths),
+              mockups,
             }),
           }),
     runs: supervisor,

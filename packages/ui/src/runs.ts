@@ -74,6 +74,12 @@ export type RunEvent = { readonly parentToolCallId?: string } & (
       readonly drawings: readonly Drawing[];
     }
   | {
+      readonly kind: 'drawings_preparing';
+      readonly drawingsId: string;
+      readonly question: string;
+      readonly count: number;
+    }
+  | {
       readonly kind: 'drawings_answer';
       readonly drawingsId: string;
       readonly choice: string | null;

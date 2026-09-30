@@ -49,6 +49,81 @@ function isMockupContentType(type: string): type is MockupContentType {
   return (mockupContentTypes as readonly string[]).includes(type);
 }
 
+const drawingExtensions: Readonly<Record<string, MockupContentType>> = {
+  gif: 'image/gif',
+  htm: 'text/html',
+  html: 'text/html',
+  jpeg: 'image/jpeg',
+  jpg: 'image/jpeg',
+  png: 'image/png',
+  svg: 'image/svg+xml',
+  webp: 'image/webp',
+};
+
+/** What a file in a designer's checkout is shown as, by its name; null when it is not a drawing. */
+export function drawingTypeOf(path: string): MockupContentType | null {
+  const extension = /\.([^./]+)$/.exec(path)?.[1]?.toLowerCase();
+  return extension === undefined
+    ? null
+    : (drawingExtensions[extension] ?? null);
+}
+
+function startsWith(content: Uint8Array, ...bytes: number[]): boolean {
+  return bytes.every((byte, index) => content[index] === byte);
+}
+
+function utf8(content: Uint8Array): string | null {
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(content);
+  } catch {
+    return null;
+  }
+}
+
+const ascii = (text: string) => [...text].map((c) => c.charCodeAt(0));
+
+/**
+ * Why a fetched file is not the drawing its name says, or null when it is. The runner's own
+ * content type is not trusted; the bytes are checked against the name.
+ */
+export function drawingContentProblem(
+  path: string,
+  type: MockupContentType,
+  content: Uint8Array,
+): string | null {
+  if (content.length === 0) return `${path} is empty.`;
+  switch (type) {
+    case 'text/html':
+      return utf8(content) === null
+        ? `${path} is not a web page: it is not UTF-8 text.`
+        : null;
+    case 'image/svg+xml': {
+      const text = utf8(content);
+      return text === null || !text.includes('<svg')
+        ? `${path} is not an SVG image.`
+        : null;
+    }
+    case 'image/png':
+      return startsWith(content, 0x89, ...ascii('PNG\r\n'), 0x1a, 0x0a)
+        ? null
+        : `${path} is not a PNG image.`;
+    case 'image/jpeg':
+      return startsWith(content, 0xff, 0xd8, 0xff)
+        ? null
+        : `${path} is not a JPEG image.`;
+    case 'image/gif':
+      return startsWith(content, ...ascii('GIF87a')) ||
+        startsWith(content, ...ascii('GIF89a'))
+        ? null
+        : `${path} is not a GIF image.`;
+    case 'image/webp':
+      return startsWith(content, ...ascii('RIFF')) &&
+        startsWith(content.subarray(8), ...ascii('WEBP'))
+        ? null
+        : `${path} is not a WebP image.`;
+  }
+}
+
 export function createMockupStore(database: Kysely<Database>): MockupStore {
   return {
     async save({ content, contentType, path, runId, workItemId }) {

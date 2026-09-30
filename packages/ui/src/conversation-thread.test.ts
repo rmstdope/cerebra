@@ -471,6 +471,81 @@ test('a round of drawings is open until answered, and a newer round supersedes i
   expect(open[0]).toMatchObject({ kind: 'drawings', status: 'open' });
 });
 
+const preparing = (drawingsId: string, question: string): RunEvent => ({
+  count: 2,
+  drawingsId,
+  kind: 'drawings_preparing',
+  question,
+});
+
+const showMockups = 'mcp__cerebra__show_mockups';
+
+test('a set on its way is one round, preparing until its drawings arrive in its place', () => {
+  const items = buildThread(
+    records([
+      drawingsRound('d-1', 'Where should the export live?'),
+      {
+        input: { question: 'Which of these, then?' },
+        kind: 'tool_call',
+        name: showMockups,
+        toolCallId: 't1',
+      },
+      preparing('d-2', 'Which of these, then?'),
+    ]),
+  );
+  expect(kinds(items)).toEqual(['drawings', 'drawings']);
+  expect(items[0]).toMatchObject({ status: 'superseded' });
+  expect(items[1]).toMatchObject({
+    count: 2,
+    drawings: [],
+    drawingsId: 'd-2',
+    question: 'Which of these, then?',
+    status: 'preparing',
+  });
+
+  const shown = buildThread(
+    records([
+      preparing('d-2', 'Which of these, then?'),
+      drawingsRound('d-2', 'Which of these, then?'),
+      {
+        content: '{"choice":"A · Button in the toolbar"}',
+        isError: false,
+        kind: 'tool_result',
+        toolCallId: 't1',
+      },
+    ]),
+  );
+  expect(kinds(shown)).toEqual(['drawings']);
+  expect(shown[0]).toMatchObject({
+    drawings: [{ label: 'A · Button in the toolbar' }, { mockupId: null }],
+    key: 'drawings-d-2',
+    status: 'open',
+  });
+});
+
+test('a set refused before it was shown leaves nothing in the thread', () => {
+  const items = buildThread(
+    records([
+      { kind: 'message', text: 'Here are two ways.' },
+      {
+        input: { question: 'Which?' },
+        kind: 'tool_call',
+        name: showMockups,
+        toolCallId: 't1',
+      },
+      preparing('d-1', 'Which?'),
+      { drawingsId: 'd-1', kind: 'drawings_withdrawn' },
+      {
+        content: 'b.png is not a PNG image.',
+        isError: true,
+        kind: 'tool_result',
+        toolCallId: 't1',
+      },
+    ]),
+  );
+  expect(kinds(items)).toEqual(['assistant']);
+});
+
 const designText = [
   'Confirm the agreed experience',
   '## The agreed experience',
