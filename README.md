@@ -43,6 +43,29 @@ Podman startup, database-readiness, connection, and migration failures make the 
 than skipping database behaviour. The generated connection details are never printed or written
 to the checkout.
 
+### The loop under real Podman
+
+`pnpm run test:e2e` runs the end-to-end loop (build, review, rework, merge, and the `full`
+checkpoints) and the engine contract against rootless Podman, with the stub agent image whose
+runner replays `.cerebra-stub.json` instead of calling a model. It needs no model credential. CI
+runs it as the `e2e` job.
+
+```bash
+pnpm run test:e2e
+```
+
+It needs a Podman that mounts subpaths of a volume, which the engine's mounts are: Podman 4 ignores
+them, and in CI 5.8 mounted a bind-backed one empty. CI installs Podman 6.1, the version the navigator runs,
+over ubuntu-latest's 4.9. It builds the workspace, builds `cerebro-agent`
+and `cerebra-stub-agent` from `images/`, then runs the suites with
+`CEREBRA_REQUIRE_PODMAN=1`, so a missing socket fails instead of skipping. The Podman API socket is
+`CEREBRA_TEST_PODMAN_SOCKET` when set, the Podman machine's on macOS, and otherwise the one
+`podman info` reports; on Linux start it with `systemctl --user start podman.socket` or
+`podman system service --time=0`. Containers reach the test through `host.containers.internal`
+(`CEREBRA_E2E_CONTAINER_HOST` overrides it). Building the agent image needs more memory than a
+2 GB Podman machine has; to use a stub image built another way, name it in `CEREBRA_E2E_IMAGE`
+and the builds are skipped. The database is provided as for `pnpm run check`.
+
 The workspace packages are:
 
 - `packages/shared` — shared protocol, schema, API-type, and lifecycle foundations.

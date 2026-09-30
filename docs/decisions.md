@@ -427,6 +427,14 @@ Confirmed during project definition on 2026-09-28:
   full gate: lint, format checks, typecheck, build, unit and database tests, identical locally and
   in GitHub Actions on `ubuntu-latest`. Foundations establishes these commands and documents the
   Postgres prerequisite. Real-Podman end-to-end coverage is added at roadmap step 7.
+- *Edited at step 7 (cr-c4f.6):* the real-Podman suites are CI's second job, `e2e`, run by
+  `pnpm run test:e2e`, and a pull request needs both jobs green. They are not part of the declared
+  gates: they build the agent image and start real containers, which a producer's machine may not
+  afford (a 2 GB Podman machine cannot install the image's dependencies), so the gates stay
+  `pnpm run check`, exactly CI's `check` job. A producer runs `pnpm run test:e2e` when a change
+  touches the runner, the supervisor, the engine or `images/`. The job installs Podman 6.1, the
+  navigator's version, over ubuntu-latest's 4.9, whose API ignores the volume subpaths every agent
+  mount is.
 
 No application workspace or executable gate exists at project definition time; the declaration is
 the contract foundations must implement, not a passing check. Automatic worktree installation is

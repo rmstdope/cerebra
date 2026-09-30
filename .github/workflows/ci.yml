@@ -34,3 +34,62 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm run check
+
+  # The loop under real rootless Podman, with the stub agent image (architecture §13).
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: cerebra_test
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+        options: >-
+          --health-cmd "pg_isready --username=postgres --dbname=cerebra_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/cerebra_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # ubuntu-latest's Podman 4.9 ignores volume subpaths, which the engine's mounts are (D44).
+      - name: Install Podman 6
+        env:
+          PODMAN_STATIC: https://github.com/mgoltzsche/podman-static/releases/download/v6.1.2/podman-linux-amd64.tar.gz
+          PODMAN_STATIC_SHA256: 481b6f5a57919aea837b54df1eaa6a5b968df505eedbdd78356e80306af676f1
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/podman.tar.gz" "$PODMAN_STATIC"
+          echo "$PODMAN_STATIC_SHA256  $RUNNER_TEMP/podman.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/podman.tar.gz" -C "$RUNNER_TEMP"
+          # Podman 4.9's own runtime and helpers would be found first.
+          sudo apt-get remove --purge -y podman buildah skopeo crun conmon
+          # The bundle's /etc/containers replaces the runner's configuration, deliberately.
+          sudo cp -r "$RUNNER_TEMP/podman-linux-amd64/usr" "$RUNNER_TEMP/podman-linux-amd64/etc" /
+          hash -r
+          test "$(command -v podman)" = /usr/local/bin/podman
+          # Ubuntu's AppArmor profile covers /usr/bin/podman only; let this one make user namespaces.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Start the rootless Podman API
+        run: |
+          podman version
+          socket="$XDG_RUNTIME_DIR/podman/podman.sock"
+          mkdir -p "$(dirname "$socket")"
+          podman system service --time=0 "unix://$socket" &
+          for attempt in $(seq 1 30); do
+            [ -S "$socket" ] && break
+            sleep 1
+          done
+          test -S "$socket"
+          echo "CEREBRA_TEST_PODMAN_SOCKET=$socket" >> "$GITHUB_ENV"
+      - run: pnpm run test:e2e
