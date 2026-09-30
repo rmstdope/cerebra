@@ -541,6 +541,13 @@ async function startLoop(
           ),
           runs: runs.map((entry) => ({
             ...entry,
+            checkout: spawnSync(
+              'ls',
+              ['-la', join(dataDirectory, 'runs', entry.id, 'checkout')],
+              { encoding: 'utf8' },
+            )
+              .output.join('')
+              .trim(),
             container: spawnSync('podman', [
               'logs',
               '--tail',
