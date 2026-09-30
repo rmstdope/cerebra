@@ -120,6 +120,10 @@ describe('database migrations', { concurrent: false }, () => {
           migrationName: '20261007000000_involvement',
           status: 'Success',
         }),
+        expect.objectContaining({
+          migrationName: '20261008000000_mockups',
+          status: 'Success',
+        }),
       ]);
       expect(
         await database.introspection.getTables({
@@ -133,6 +137,7 @@ describe('database migrations', { concurrent: false }, () => {
           expect.objectContaining({ name: 'agent_types' }),
           expect.objectContaining({ name: 'agent_type_overrides' }),
           expect.objectContaining({ name: 'agents' }),
+          expect.objectContaining({ name: 'mockups' }),
           expect.objectContaining({ name: 'credentials' }),
           expect.objectContaining({ name: 'dispatch_log' }),
           expect.objectContaining({ name: 'instance_settings' }),
