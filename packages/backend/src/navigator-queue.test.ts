@@ -345,7 +345,7 @@ describe('navigator queue', { concurrent: false }, () => {
       at,
       event: {
         drawings: [
-          { cost: '', label: 'A · Toolbar', recommended: true, url: null },
+          { cost: '', label: 'A · Toolbar', mockupId: null, recommended: true },
         ],
         drawingsId,
         kind: 'drawings',

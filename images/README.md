@@ -22,8 +22,9 @@ an unreadable or malformed key prevents startup. Never replace this secret on up
 credentials depend on it. See the root README for legacy-key migration and backup guidance.
 
 The private `database` network connects only `main` and Postgres. The main container also joins
-`internal` for runners and `egress` for GitHub HTTPS and Git. Only the web port is published, on
-`127.0.0.1:4317`; Postgres has no host port.
+`internal` for runners and `egress` for GitHub HTTPS and Git. Only the web port, on
+`127.0.0.1:4317`, and the drawings port, on `127.0.0.1:4318`, are published; Postgres has no host
+port.
 
 Project discovery uses GitHub API Bearer authentication; mirror cloning uses Git-over-HTTPS
 Basic authentication with the token as the password. The Git header is passed only in the clone
@@ -58,13 +59,15 @@ The main container runs agents only when `CEREBRA_PODMAN_SOCKET` names the mount
 and the mounted master key lets it read credentials; otherwise starting an agent answers that
 Cerebra can't run agents yet. The other settings, with the values compose gives them:
 
-| Variable                   | Value                   | What it is                                                      |
-| -------------------------- | ----------------------- | --------------------------------------------------------------- |
-| `CEREBRA_DATA_VOLUME`      | `cerebra-data`          | The volume mounted at `/data`; agent mounts are subpaths of it. |
-| `CEREBRA_INTERNAL_NETWORK` | `cerebro-internal`      | Joins the main container and agents only.                       |
-| `CEREBRA_EGRESS_NETWORK`   | `cerebro-egress`        | Agents' way out; `./cerebra start` creates it.                  |
-| `CEREBRA_GATEWAY_URL`      | `ws://main:4317/runner` | Where a runner reaches the backend.                             |
-| `CEREBRA_MCP_URL`          | `http://main:4317/mcp`  | Where an agent reaches its board tools.                         |
+| Variable                   | Value                   | What it is                                                       |
+| -------------------------- | ----------------------- | ---------------------------------------------------------------- |
+| `CEREBRA_DATA_VOLUME`      | `cerebra-data`          | The volume mounted at `/data`; agent mounts are subpaths of it.  |
+| `CEREBRA_INTERNAL_NETWORK` | `cerebro-internal`      | Joins the main container and agents only.                        |
+| `CEREBRA_EGRESS_NETWORK`   | `cerebro-egress`        | Agents' way out; `./cerebra start` creates it.                   |
+| `CEREBRA_GATEWAY_URL`      | `ws://main:4317/runner` | Where a runner reaches the backend.                              |
+| `CEREBRA_MCP_URL`          | `http://main:4317/mcp`  | Where an agent reaches its board tools.                          |
+| `CEREBRA_MOCKUP_PORT`      | `4318`                  | Where designers' drawings are served, on an origin of their own. |
+| `CEREBRA_MOCKUP_ADDRESS`   | `http://127.0.0.1:4318` | The drawings origin as the browser reaches it.                   |
 
 Postgres sits on a separate `database` network, so agents cannot reach it. The data volume is
 named `cerebra-data` exactly, because the engine mounts it by that name; an instance created before

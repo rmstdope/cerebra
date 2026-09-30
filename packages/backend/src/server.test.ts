@@ -77,6 +77,7 @@ test('every response carries a strict Content-Security-Policy', async () => {
         'object-src': "'none'",
         'base-uri': "'none'",
         'frame-ancestors': "'none'",
+        'frame-src': "'none'",
         'form-action': "'self'",
       });
     }

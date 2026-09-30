@@ -1,7 +1,7 @@
 import type { KeyboardEvent } from 'react';
 
 const focusable =
-  'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href]';
+  'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], iframe:not([tabindex="-1"])';
 
 export function trapFocus(
   event: KeyboardEvent<HTMLElement>,

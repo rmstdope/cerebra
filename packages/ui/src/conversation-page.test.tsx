@@ -138,8 +138,10 @@ test('a new conversation invites the first message with the composer focused', a
   expect(screen.getByRole('heading', { level: 1, name: 'Astra' })).toBeTruthy();
   expect(screen.getByText('Assistant')).toBeTruthy();
   expect(screen.getByRole('status').textContent).toBe('Ready');
-  expect(document.activeElement).toBe(
-    screen.getByRole('textbox', { name: 'Message Astra' }),
+  await waitFor(() =>
+    expect(document.activeElement).toBe(
+      screen.getByRole('textbox', { name: 'Message Astra' }),
+    ),
   );
   expect(screen.getByText('No work item attached')).toBeTruthy();
   expect(screen.queryByRole('heading', { name: 'Activity' })).toBeNull();
@@ -1203,13 +1205,13 @@ function drawingsRound(drawingsId: string, question: string): RunEvent {
         cost: 'Always visible; takes toolbar room.',
         label: 'A · Button in the toolbar',
         recommended: true,
-        url: '/drawings/a.html',
+        mockupId: 'mockup-a',
       },
       {
         cost: 'Tidier; one extra click.',
         label: 'B · Inside the ⋯ menu',
         recommended: false,
-        url: '/drawings/b.html',
+        mockupId: 'mockup-b',
       },
     ],
     drawingsId,
@@ -1426,7 +1428,7 @@ test('the designer confirms the agreed experience as one focused form', async ()
   expect(
     within(form).getByText('"Export CSV"; "Nothing to export"'),
   ).toBeTruthy();
-  expect(within(form).getByTitle('A · Button in the toolbar')).toBeTruthy();
+  expect(within(form).getByText('A · Button in the toolbar')).toBeTruthy();
   expect(
     within(form).queryByRole('button', { name: /Change something/ }),
   ).toBeNull();

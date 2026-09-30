@@ -11,6 +11,7 @@ import { type AuthService, type AuthenticationResult } from './auth.js';
 import type { Backups } from './backups.js';
 import { PlanAnswerError, type PlanApprovals } from './plan-approvals.js';
 import { DrawingsAnswerError, type DrawingQuestions } from './drawings.js';
+import { mockupOrigin, type MockupStore } from './mockups.js';
 import {
   InvolvementInputError,
   type InvolvementSettings,
@@ -110,6 +111,11 @@ export interface ServerOptions {
   readonly plans?: Pick<PlanApprovals, 'answer'>;
   /** Takes the navigator's answers to a designer's drawings (spec §6.3). */
   readonly drawings?: Pick<DrawingQuestions, 'answer'>;
+  /** The designer's drawings and the address of the listener that serves them (architecture §11). */
+  readonly mockups?: {
+    readonly store: Pick<MockupStore, 'find'>;
+    readonly address: string;
+  };
   /** Explains waiting work; absent when no container engine is configured. */
   readonly dispatcher?: Pick<Dispatcher, 'status'>;
   /** The scheduled database backups; absent when no backup folder is configured. */
@@ -324,18 +330,23 @@ function deliveriesBody(
   return deliveries;
 }
 
-const contentSecurityPolicy = [
-  "default-src 'self'",
-  "script-src 'self'",
-  // Radix's scroll lock injects a <style> element at runtime; scripts stay strict.
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data:",
-  "connect-src 'self'",
-  "object-src 'none'",
-  "base-uri 'none'",
-  "frame-ancestors 'none'",
-  "form-action 'self'",
-].join('; ');
+/** The page may frame nothing but drawings, and only from their own listener's origin. */
+const contentSecurityPolicyFor = (mockupAddress: string | undefined) =>
+  [
+    "default-src 'self'",
+    "script-src 'self'",
+    // Radix's scroll lock injects a <style> element at runtime; scripts stay strict.
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data:",
+    "connect-src 'self'",
+    "object-src 'none'",
+    "base-uri 'none'",
+    "frame-ancestors 'none'",
+    `frame-src ${mockupAddress === undefined ? "'none'" : mockupOrigin(mockupAddress)}`,
+    "form-action 'self'",
+  ].join('; ');
+
+const drawingNotShown = 'This drawing couldn’t be shown.';
 
 export const createServer = async ({
   auth,
@@ -356,6 +367,7 @@ export const createServer = async ({
   involvement,
   plans,
   drawings,
+  mockups,
   dispatcher,
   onMutation,
   attention,
@@ -365,6 +377,7 @@ export const createServer = async ({
 }: ServerOptions): Promise<FastifyInstance> => {
   const server = Fastify();
 
+  const contentSecurityPolicy = contentSecurityPolicyFor(mockups?.address);
   // The second layer behind rendering agent output as text (architecture §11).
   server.addHook('onSend', async (_request, reply) => {
     reply.header('content-security-policy', contentSecurityPolicy);
@@ -1110,6 +1123,22 @@ export const createServer = async ({
       throw error;
     }
   });
+
+  server.get<{ Params: { id: string } }>(
+    '/api/mockups/:id',
+    async (request, reply) => {
+      if (mockups === undefined) {
+        return reply.status(503).send({ error: drawingNotShown });
+      }
+      const { id } = request.params;
+      if ((await mockups.store.find(id)) === null) {
+        return reply.status(404).send({ error: drawingNotShown });
+      }
+      return {
+        url: new URL(`/mockups/${id}`, mockups.address).toString(),
+      };
+    },
+  );
 
   server.post('/api/runs/:runId/drawings-answers', async (request, reply) => {
     if (drawings === undefined) {

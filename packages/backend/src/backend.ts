@@ -35,6 +35,11 @@ import { createServer } from './server.js';
 import { createInvolvementSettings } from './involvement.js';
 import { createPlanApprovals, type PlanApprovals } from './plan-approvals.js';
 import { createDrawingQuestions, type DrawingQuestions } from './drawings.js';
+import {
+  createMockupServer,
+  createMockupStore,
+  type MockupStore,
+} from './mockups.js';
 import { createStartSettings } from './start-settings.js';
 import {
   createSupervisor,
@@ -60,6 +65,8 @@ export interface BackendOptions {
   readonly gatewayUrl: string;
   readonly mcpUrl: string;
   readonly uiDirectory: string;
+  /** Where the drawing listener is reached from the browser; absent: drawings cannot be shown. */
+  readonly mockupAddress?: string;
   /** The seams the end-to-end test replaces; production uses GitHub and the data directory. */
   readonly forge?: ProjectForge;
   readonly checkouts?: RunCheckouts;
@@ -80,6 +87,10 @@ export interface Backend {
   readonly plans: PlanApprovals | undefined;
   /** The designer's drawings question, for the tool that shows mockups (spec §6.2). */
   readonly drawings: DrawingQuestions | undefined;
+  /** Where a designer's drawings are kept, for the tool that publishes them. */
+  readonly mockups: MockupStore;
+  /** The drawing listener, to be listened on its own port (architecture §11). */
+  readonly mockupServer: FastifyInstance;
   readonly supervisor: Supervisor | undefined;
 }
 
@@ -193,6 +204,8 @@ export async function createBackend(options: BackendOptions): Promise<Backend> {
       : createDrawingQuestions({
           note: (runId, event, state) => supervisor.note(runId, event, state),
         });
+  const mockups = createMockupStore(database);
+  const mockupServer = createMockupServer({ mockups });
   const queue = createNavigatorQueue(database);
   const attention = createAttention(database, queue);
   const notificationSettings = createNotificationSettings(database);
@@ -257,6 +270,9 @@ export async function createBackend(options: BackendOptions): Promise<Backend> {
     involvement: createInvolvementSettings(database),
     ...(plans === undefined ? {} : { plans }),
     ...(drawings === undefined ? {} : { drawings }),
+    ...(options.mockupAddress === undefined
+      ? {}
+      : { mockups: { address: options.mockupAddress, store: mockups } }),
     uiDirectory: options.uiDirectory,
   });
   server.addHook('onClose', async () => {
@@ -267,7 +283,8 @@ export async function createBackend(options: BackendOptions): Promise<Backend> {
     clearInterval(mergeTimer);
     await dispatcher?.idle();
     await backups?.idle();
+    await mockupServer.close();
     await options.onClose?.();
   });
-  return { server, plans, drawings, supervisor };
+  return { server, plans, drawings, mockups, mockupServer, supervisor };
 }

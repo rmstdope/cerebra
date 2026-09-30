@@ -97,6 +97,15 @@ export interface Database {
     payload: unknown;
     work_item_id: string;
   };
+  mockups: {
+    content: Buffer;
+    content_type: string;
+    created_at: Generated<Date>;
+    id: string;
+    path: string;
+    run_id: string;
+    work_item_id: string;
+  };
   runs: {
     agent_id: Generated<string | null>;
     agent_name: Generated<string | null>;

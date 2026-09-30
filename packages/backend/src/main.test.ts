@@ -61,6 +61,7 @@ afterEach(async () => {
 
 test('starts the application and releases its database when closed', async () => {
   vi.stubEnv('CEREBRA_PORT', '0');
+  vi.stubEnv('CEREBRA_MOCKUP_PORT', '0');
   vi.stubEnv('CEREBRA_PROJECT_TOKEN_KEY', undefined);
   vi.stubEnv('CEREBRA_PROJECT_TOKEN_KEY_FILE', undefined);
 
@@ -74,6 +75,7 @@ test('starts the application and releases its database when closed', async () =>
 
 test('enables registration and credentials using the mounted master key', async () => {
   vi.stubEnv('CEREBRA_PORT', '0');
+  vi.stubEnv('CEREBRA_MOCKUP_PORT', '0');
   vi.stubEnv('CEREBRA_PROJECT_TOKEN_KEY', undefined);
   vi.stubEnv('CEREBRA_PROJECT_TOKEN_KEY_FILE', '/run/secrets/key');
 
@@ -82,6 +84,19 @@ test('enables registration and credentials using the mounted master key', async 
   expect(startup.readSecret).toHaveBeenCalledWith('/run/secrets/key', 'utf8');
   expect(startup.options?.projects).toBeDefined();
   expect(startup.options?.credentials).toBeDefined();
+  expect(startup.server?.server.listening).toBe(true);
+});
+
+test('serves drawings from a listener of its own, at the address the browser reaches', async () => {
+  vi.stubEnv('CEREBRA_PORT', '0');
+  vi.stubEnv('CEREBRA_MOCKUP_PORT', '0');
+  vi.stubEnv('CEREBRA_MOCKUP_ADDRESS', 'http://localhost:4999');
+  vi.stubEnv('CEREBRA_PROJECT_TOKEN_KEY', undefined);
+  vi.stubEnv('CEREBRA_PROJECT_TOKEN_KEY_FILE', undefined);
+
+  await import('./main.js');
+
+  expect(startup.options?.mockups?.address).toBe('http://localhost:4999');
   expect(startup.server?.server.listening).toBe(true);
 });
 
