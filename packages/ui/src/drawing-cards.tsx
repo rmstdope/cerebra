@@ -38,10 +38,13 @@ type Showing =
  */
 export function DrawingPreview({
   drawing,
+  failure = 'This drawing couldn’t be shown.',
   large = false,
   onOpen,
 }: {
   readonly drawing: Drawing;
+  /** What its place says when it cannot be shown. */
+  readonly failure?: string;
   readonly large?: boolean;
   readonly onOpen?: () => void;
 }): ReactNode {
@@ -94,7 +97,7 @@ export function DrawingPreview({
       <div
         className={`${box} flex flex-col items-center justify-center gap-2 p-2 text-center text-sm text-[var(--muted)]`}
       >
-        This drawing couldn’t be shown.
+        {failure}
         <button
           className="secondary-button text-sm"
           onClick={() => setAttempt((count) => count + 1)}
@@ -163,7 +166,8 @@ function DrawingDialog({
 }: {
   readonly drawings: readonly Drawing[];
   readonly index: number;
-  readonly name: string;
+  /** Who drew it, when it is shown for choosing between. */
+  readonly name?: string;
   readonly onChoose?: (label: string) => void;
   readonly onClose: () => void;
   readonly onIndex: (index: number) => void;
@@ -245,7 +249,9 @@ function DrawingDialog({
             ✕
           </button>
         </div>
-        <p className="sr-only">{`${name} drew this for you to choose from.`}</p>
+        {name === undefined ? null : (
+          <p className="sr-only">{`${name} drew this for you to choose from.`}</p>
+        )}
         <div className="mt-3 flex min-h-0 flex-1 flex-col" ref={area}>
           <DrawingPreview drawing={drawing} key={index} large />
         </div>
@@ -345,6 +351,50 @@ export function DrawingCards({
         />
       )}
     </>
+  );
+}
+
+/**
+ * The one drawing a record keeps (spec §4.11): its picture, and a way to open it full size in the
+ * same sandboxed view the chat uses; closing it returns focus to "Open full size".
+ */
+export function ChosenDrawing({
+  drawing,
+  failure,
+}: {
+  readonly drawing: Drawing;
+  readonly failure?: string;
+}): ReactNode {
+  const [open, setOpen] = useState(false);
+  const opener = useRef<HTMLButtonElement>(null);
+
+  return (
+    <div className="mt-2 flex max-w-md flex-col">
+      <DrawingPreview
+        drawing={drawing}
+        failure={failure}
+        onOpen={() => setOpen(true)}
+      />
+      <button
+        className="secondary-button mt-2 self-start text-sm"
+        onClick={() => setOpen(true)}
+        ref={opener}
+        type="button"
+      >
+        Open full size
+      </button>
+      {open ? (
+        <DrawingDialog
+          drawings={[drawing]}
+          index={0}
+          onClose={() => {
+            setOpen(false);
+            opener.current?.focus();
+          }}
+          onIndex={() => {}}
+        />
+      ) : null}
+    </div>
   );
 }
 
