@@ -72,6 +72,8 @@ jobs:
           curl -fsSL -o "$RUNNER_TEMP/podman.tar.gz" "$PODMAN_STATIC"
           echo "$PODMAN_STATIC_SHA256  $RUNNER_TEMP/podman.tar.gz" | sha256sum --check
           tar -xzf "$RUNNER_TEMP/podman.tar.gz" -C "$RUNNER_TEMP"
+          # Podman 4.9's own runtime and helpers would be found first.
+          sudo apt-get remove --purge -y podman buildah skopeo crun conmon
           sudo cp -r "$RUNNER_TEMP/podman-linux-amd64/usr" "$RUNNER_TEMP/podman-linux-amd64/etc" /
           hash -r
           test "$(command -v podman)" = /usr/local/bin/podman
