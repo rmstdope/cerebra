@@ -1428,7 +1428,7 @@ test('after a revision the earlier round stays viewable but not choosable, and a
 });
 
 const designText = [
-  'Confirm the agreed experience',
+  'Confirm the agreed design',
   '',
   '## The agreed experience',
   'An "Export CSV" button sits in the invoice toolbar.',
@@ -1452,7 +1452,7 @@ const designQuestion: RunEvent = {
       options: [
         {
           description: 'record it and send it to building',
-          label: 'Looks right — hand it to building (Recommended)',
+          label: 'Confirm and send to build (Recommended)',
         },
         { description: 'say what to change', label: 'Change something' },
       ],
@@ -1484,7 +1484,7 @@ test('the designer confirms the agreed experience as one focused form', async ()
   renderPage(client);
 
   const form = await screen.findByRole('form', {
-    name: 'Confirm the agreed experience',
+    name: 'Confirm the agreed design',
   });
   await waitFor(() => expect(document.activeElement).toBe(form));
   expect(
@@ -1525,13 +1525,13 @@ test('the designer confirms the agreed experience as one focused form', async ()
   await userEvent.click(within(form).getByRole('button', { name: 'Send' }));
   await userEvent.click(
     within(form).getByRole('button', {
-      name: 'Looks right — hand it to building',
+      name: 'Confirm and send to build',
     }),
   );
   expect(client.answers).toEqual([
     { answers: { [designText]: 'Say "Download CSV".' }, questionId: 'q-d' },
     {
-      answers: { [designText]: 'Looks right — hand it to building' },
+      answers: { [designText]: 'Confirm and send to build' },
       questionId: 'q-d',
     },
   ]);
@@ -1561,7 +1561,7 @@ test('a confirmed design stays readable, and a refused recording offers Try agai
         designQuestion,
         {
           answers: {
-            [designText]: 'Looks right — hand it to building (Recommended)',
+            [designText]: 'Confirm and send to build (Recommended)',
           },
           kind: 'answer',
           questionId: 'q-d',
@@ -1574,12 +1574,12 @@ test('a confirmed design stays readable, and a refused recording offers Try agai
   renderPage(client);
 
   const block = await screen.findByRole('region', {
-    name: 'Confirm the agreed experience',
+    name: 'Confirm the agreed design',
   });
   expect(
     within(block).getByRole('heading', { name: 'The words, exactly' }),
   ).toBeTruthy();
-  expect(screen.getByText('Looks right — hand it to building')).toBeTruthy();
+  expect(screen.getByText('Confirm and send to build')).toBeTruthy();
   expect(screen.getByText('Iris couldn’t record the design.')).toBeTruthy();
   expect(
     screen.getByText('Nothing was moved. Your answer is kept; try again.'),

@@ -83,12 +83,12 @@ const designQuestion = (drawing = 'A · Beside CSV') => ({
   options: [
     {
       description: 'record it and send it to building',
-      label: 'Looks right — hand it to building',
+      label: 'Confirm and send to build',
     },
     { description: 'say what to change', label: 'Change something' },
   ],
   question: [
-    'Confirm the agreed experience',
+    'Confirm the agreed design',
     '',
     ...designSections,
     '## The drawing',
@@ -670,7 +670,7 @@ describe('board tools', { concurrent: false }, () => {
   });
 
   describe('leaving design on the confirmed experience', () => {
-    const confirm = 'Looks right — hand it to building';
+    const confirm = 'Confirm and send to build';
 
     test('a designer cannot leave design before the navigator confirmed', async () => {
       await withBoard(async ({ askDesign, board, caller, item, tools }) => {

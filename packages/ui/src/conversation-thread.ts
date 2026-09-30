@@ -1,4 +1,5 @@
 import {
+  namesDrawing,
   parseDesignQuestion,
   parseOutcomeQuestion,
   stripRecommended,
@@ -442,12 +443,10 @@ export function drawingNamed(
   items: readonly ThreadItem[],
   section: string,
 ): Drawing | null {
-  const text = section.trim();
   for (const item of [...items].reverse()) {
     if (item.kind !== 'drawings') continue;
-    const found = item.drawings.find(
-      (drawing) =>
-        text === drawing.label || text.startsWith(`${drawing.label}\n`),
+    const found = item.drawings.find((drawing) =>
+      namesDrawing(section, drawing.label),
     );
     if (found !== undefined) return found;
   }
