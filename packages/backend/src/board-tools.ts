@@ -5,10 +5,13 @@ import {
   parseDesignQuestion,
   parseOutcomeQuestion,
   routeChoices,
+  maxFetchPaths,
   routeOfAnswer,
   sameDesign,
   sameOutcome,
   type AgentEvent,
+  type Drawing,
+  type RunFile,
   type Question,
   type OutcomeRoute,
 } from '@cerebra/shared';
@@ -29,8 +32,16 @@ import {
   type Priority,
   type WorkItemState,
 } from './lifecycle.js';
+import type { DrawingQuestions } from './drawings.js';
+import {
+  drawingContentProblem,
+  drawingTypeOf,
+  type MockupContentType,
+  type MockupStore,
+} from './mockups.js';
 import type { PlanApprovals } from './plan-approvals.js';
 import { isUuid } from './runs.js';
+import { FileRequestError } from './supervisor.js';
 
 type RunRole = Database['runs']['role'];
 
@@ -154,11 +165,23 @@ const routeStates: Readonly<Record<OutcomeRoute, WorkItemState>> = {
 export function createBoardTools({
   board,
   database,
+  drawings,
+  fetchFiles,
+  mockups,
   onReleased,
   plans,
 }: {
   readonly board: Board;
   readonly database: Kysely<Database>;
+  /** Where a designer's round of drawings waits for the navigator (spec §6.3). */
+  readonly drawings?: DrawingQuestions;
+  /** Reads files from a live run's checkout, through its runner (architecture §5.2). */
+  readonly fetchFiles?: (
+    runId: string,
+    paths: readonly string[],
+  ) => Promise<readonly RunFile[]>;
+  /** Where published drawings are kept (architecture §11). */
+  readonly mockups?: Pick<MockupStore, 'save'>;
   /** Told when a call leaves the calling run holding nothing, so it can finish (architecture §5.3). */
   readonly onReleased?: (runId: string) => void;
   /** Where a plan waits for the navigator's approval; without it no plan waits (spec §4.9). */
@@ -683,6 +706,106 @@ export function createBoardTools({
             };
       },
     },
+    show_mockups: {
+      descriptor: {
+        name: 'show_mockups',
+        description:
+          'Show the navigator a set of drawings from your checkout to choose between, and wait for their answer: the label they chose, or the change they wrote. Each drawing is a self-contained HTML page or a PNG, JPEG, GIF, WebP or SVG image, named by its path relative to the checkout; start each label with its letter ("A · Button in the toolbar") and say in `cost` what choosing it costs, in a line. The set is all or nothing: if any drawing is refused, none is shown and the navigator sees nothing; fix what the refusal names and send the whole set again.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            question: { type: 'string', minLength: 1 },
+            drawings: {
+              type: 'array',
+              minItems: 1,
+              maxItems: maxFetchPaths,
+              items: {
+                type: 'object',
+                properties: {
+                  path: { type: 'string', minLength: 1 },
+                  label: { type: 'string', minLength: 1 },
+                  cost: { type: 'string' },
+                  recommended: { type: 'boolean' },
+                },
+                required: ['path', 'label', 'cost'],
+              },
+            },
+          },
+          required: ['question', 'drawings'],
+        },
+      },
+      async run(caller, args, signal) {
+        const set = drawingSetOf(args);
+        const itemId = await requireHeld(caller);
+        if (
+          drawings === undefined ||
+          mockups === undefined ||
+          fetchFiles === undefined
+        ) {
+          throw new Refusal(
+            'refused',
+            'Drawings cannot be shown on this instance.',
+          );
+        }
+        const preparing = await drawings.prepare(
+          caller.runId,
+          { count: set.drawings.length, question: set.question },
+          signal,
+        );
+        let shown: Drawing[];
+        try {
+          const files = await fetchFiles(
+            caller.runId,
+            set.drawings.map((drawing) => drawing.path),
+          );
+          const content = new Map(
+            files.map((file) => [
+              file.path,
+              Buffer.from(file.content, 'base64'),
+            ]),
+          );
+          for (const drawing of set.drawings) {
+            const problem = drawingContentProblem(
+              drawing.path,
+              drawing.type,
+              content.get(drawing.path) ?? Buffer.alloc(0),
+            );
+            if (problem !== null) throw setRefused(problem);
+          }
+          shown = [];
+          for (const drawing of set.drawings) {
+            const mockupId = await mockups.save({
+              content: content.get(drawing.path)!,
+              contentType: drawing.type,
+              path: drawing.path,
+              runId: caller.runId,
+              workItemId: itemId,
+            });
+            shown.push({
+              cost: drawing.cost,
+              label: drawing.label,
+              mockupId,
+              recommended: drawing.recommended,
+            });
+          }
+        } catch (error) {
+          await preparing.withdraw();
+          if (error instanceof FileRequestError) {
+            throw setRefused(error.message);
+          }
+          throw error;
+        }
+        const answer = await preparing.show(shown);
+        return {
+          choice: answer.choice,
+          message:
+            answer.choice === null
+              ? `The navigator asked for a change: ${answer.text} Revise the drawings and show them again with show_mockups.`
+              : `The navigator chose ${answer.choice}.`,
+          text: answer.text,
+        };
+      },
+    },
     report_checks: {
       descriptor: {
         name: 'report_checks',
@@ -776,6 +899,83 @@ export function createBoardTools({
       }
     },
   };
+}
+
+const nothingShown =
+  'Nothing was shown to the navigator; fix it and send the whole set again.';
+
+/** A refusal of a whole set of drawings: the navigator sees none of it (spec §6.4). */
+function setRefused(reason: string): Refusal {
+  return new Refusal('refused', `${reason} ${nothingShown}`);
+}
+
+interface DrawingToShow {
+  readonly path: string;
+  readonly type: MockupContentType;
+  readonly label: string;
+  readonly cost: string;
+  readonly recommended: boolean;
+}
+
+/** A designer's set of drawings, checked whole before anything of it is shown. */
+function drawingSetOf(args: Arguments): {
+  readonly question: string;
+  readonly drawings: readonly DrawingToShow[];
+} {
+  const refuse = (reason: string) =>
+    new Refusal('invalid_arguments', `${reason} ${nothingShown}`);
+  const question =
+    typeof args.question === 'string' ? args.question.trim() : '';
+  if (question === '') throw refuse('question must be a non-empty string.');
+  const listed = args.drawings;
+  if (
+    !Array.isArray(listed) ||
+    listed.length < 1 ||
+    listed.length > maxFetchPaths
+  ) {
+    throw refuse(`drawings must list between 1 and ${maxFetchPaths} drawings.`);
+  }
+  const labels = new Set<string>();
+  const drawings = listed.map((entry: unknown): DrawingToShow => {
+    const fields =
+      typeof entry === 'object' && entry !== null
+        ? (entry as Record<string, unknown>)
+        : {};
+    const { cost, label, path, recommended } = fields;
+    if (typeof label !== 'string' || label.trim() === '') {
+      throw refuse('Each drawing needs a label.');
+    }
+    if (labels.has(label.trim())) {
+      throw refuse(`Two drawings share the label ${label.trim()}.`);
+    }
+    labels.add(label.trim());
+    if (typeof cost !== 'string') {
+      throw refuse(`The cost of ${label.trim()} must be a string.`);
+    }
+    if (recommended !== undefined && typeof recommended !== 'boolean') {
+      throw refuse(`recommended of ${label.trim()} must be a boolean.`);
+    }
+    if (typeof path !== 'string' || path === '') {
+      throw refuse(`${label.trim()} needs the path of its file.`);
+    }
+    if (path.startsWith('/') || path.split(/[\\/]/).includes('..')) {
+      throw refuse(`${path} is outside your checkout.`);
+    }
+    const type = drawingTypeOf(path);
+    if (type === null) {
+      throw refuse(
+        `${path} is not a web page or an image: a drawing is an HTML page or a PNG, JPEG, GIF, WebP or SVG image.`,
+      );
+    }
+    return {
+      cost: cost.trim(),
+      label: label.trim(),
+      path,
+      recommended: recommended === true,
+      type,
+    };
+  });
+  return { drawings, question };
 }
 
 /** `owner/name` of a GitHub remote, https or ssh, or null for anything else. */

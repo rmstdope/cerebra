@@ -1,3 +1,4 @@
+import type { Drawing } from '@cerebra/shared';
 import type { Kysely } from 'kysely';
 import { describe, expect, test } from 'vitest';
 
@@ -8,10 +9,13 @@ import {
   type ToolCaller,
 } from './board-tools.js';
 import type { Database } from './database.js';
+import { createDrawingQuestions, type DrawingQuestions } from './drawings.js';
 import type { WorkItemState } from './lifecycle.js';
+import { createMockupStore, type MockupStore } from './mockups.js';
 import { createPlanApprovals, type PlanApprovals } from './plan-approvals.js';
 import { hashRunToken } from './runner-gateway.js';
 import { createRunStore } from './runs.js';
+import { FileRequestError } from './supervisor.js';
 import {
   agentNamed,
   registerTestProject,
@@ -19,6 +23,9 @@ import {
 } from './test-support.js';
 
 type RunRole = Database['runs']['role'];
+
+/** What the fake runner answers a file request with: the files by path, or a refusal. */
+type Served = Readonly<Record<string, Buffer>> | Error;
 
 const outcome = {
   kind: 'outcome',
@@ -94,6 +101,12 @@ interface Fixture {
   /** What the backend wrote into runs' conversations, in order. */
   readonly notes: { runId: string; event: unknown; state: string }[];
   readonly plans: PlanApprovals;
+  readonly drawings: DrawingQuestions;
+  readonly mockups: MockupStore;
+  /** Sets what the run's checkout answers the next file requests with. */
+  serve(served: Served): void;
+  /** The paths of every file request made, in order. */
+  readonly fetched: (readonly string[])[];
   /** Runs whose tool call gave up their held item, in order. */
   readonly released: string[];
   readonly database: Kysely<Database>;
@@ -125,23 +138,55 @@ async function withBoard(run: (fixture: Fixture) => Promise<void>) {
     const runs = createRunStore(database);
     const released: string[] = [];
     const notes: Fixture['notes'] = [];
-    const plans = createPlanApprovals({
-      database,
-      note: async (runId, event, state) => {
-        notes.push({ event, runId, state });
-        await runs.append(runId, event);
-      },
-    });
+    const note = async (
+      runId: string,
+      event: Parameters<Parameters<typeof createPlanApprovals>[0]['note']>[1],
+      state: string,
+    ) => {
+      notes.push({ event, runId, state });
+      await runs.append(runId, event);
+    };
+    const plans = createPlanApprovals({ database, note });
+    const drawings = createDrawingQuestions({ note });
+    const mockups = createMockupStore(database);
+    let served: Served = {};
+    const fetched: (readonly string[])[] = [];
     await run({
       board,
       database,
+      drawings,
+      fetched,
+      mockups,
       notes,
       plans,
       projectId,
       released,
+      serve(next) {
+        served = next;
+      },
       tools: createBoardTools({
         board,
         database,
+        drawings,
+        fetchFiles: async (_runId, paths) => {
+          fetched.push(paths);
+          if (served instanceof Error) throw served;
+          const files = served;
+          return paths.map((path) => {
+            const content = files[path];
+            if (content === undefined) {
+              throw new FileRequestError(
+                `There is no file ${path} in the checkout.`,
+              );
+            }
+            return {
+              content: content.toString('base64'),
+              contentType: 'application/octet-stream',
+              path,
+            };
+          });
+        },
+        mockups,
         onReleased: (runId) => released.push(runId),
         plans,
       }),
@@ -699,6 +744,248 @@ describe('board tools', { concurrent: false }, () => {
             state: 'build_ready',
           });
           expect(released).toEqual([iris.runId]);
+        },
+      );
+    });
+  });
+
+  describe('showing drawings', () => {
+    const page = Buffer.from('<!doctype html><button>Export</button>');
+    const png = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1,
+    ]);
+    const set = {
+      question: 'Which export button?',
+      drawings: [
+        {
+          cost: 'Always visible.',
+          label: 'A · Button in the toolbar',
+          path: 'mockups/a.html',
+          recommended: true,
+        },
+        {
+          cost: 'One extra click.',
+          label: 'B · Inside the ⋯ menu',
+          path: 'mockups/b.png',
+        },
+      ],
+    };
+    const nothingShown =
+      'Nothing was shown to the navigator; fix it and send the whole set again.';
+
+    async function mockupCount(database: Kysely<Database>): Promise<number> {
+      const row = await database
+        .selectFrom('mockups')
+        .select((eb) => eb.fn.countAll<string>().as('count'))
+        .executeTakeFirstOrThrow();
+      return Number(row.count);
+    }
+
+    async function shown(
+      notes: Fixture['notes'],
+    ): Promise<{ drawingsId: string; drawings: Drawing[] }> {
+      for (let tries = 0; tries < 400; tries += 1) {
+        const found = notes.find(
+          ({ event }) => (event as { kind?: string }).kind === 'drawings',
+        );
+        if (found !== undefined) {
+          return found.event as { drawingsId: string; drawings: Drawing[] };
+        }
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      throw new Error('No round was shown.');
+    }
+
+    test('only a designer may show drawings', async () => {
+      await withBoard(async ({ caller, item, notes, tools }) => {
+        const groomer = await caller('Jubilee', 'groomer');
+        await item({ heldBy: groomer });
+
+        expect(await tools.call(groomer, 'show_mockups', set)).toMatchObject({
+          code: 'tool_not_allowed',
+          ok: false,
+        });
+        expect(notes).toEqual([]);
+      });
+    });
+
+    test('refuses a set before showing anything', async () => {
+      await withBoard(
+        async ({ caller, database, fetched, item, notes, tools }) => {
+          const iris = await caller('Xavier', 'designer');
+          expect(await tools.call(iris, 'show_mockups', set)).toMatchObject({
+            code: 'nothing_held',
+            ok: false,
+          });
+          await item({ heldBy: iris, state: 'design_ready' });
+          const [a, b] = set.drawings;
+          const refusals: [unknown, string][] = [
+            [{ ...set, question: ' ' }, 'question'],
+            [{ ...set, drawings: [] }, 'between 1 and 64'],
+            [{ ...set, drawings: [a, { ...b, label: a!.label }] }, 'label'],
+            [{ ...set, drawings: [a, { ...b, label: '' }] }, 'label'],
+            [{ ...set, drawings: [{ ...a, cost: 3 }] }, 'cost'],
+            [
+              { ...set, drawings: [a, { ...b, path: 'notes.txt' }] },
+              'notes.txt is not a web page or an image',
+            ],
+            [
+              { ...set, drawings: [a, { ...b, path: '../b.png' }] },
+              '../b.png is outside your checkout',
+            ],
+            [
+              { ...set, drawings: [a, { ...b, path: '/work/b.png' }] },
+              '/work/b.png is outside your checkout',
+            ],
+          ];
+          for (const [args, reason] of refusals) {
+            const result = await tools.call(iris, 'show_mockups', args);
+            expect(result).toMatchObject({ ok: false });
+            expect(result.ok ? '' : result.message).toContain(reason);
+            expect(result.ok ? '' : result.message).toContain(nothingShown);
+          }
+          expect(notes).toEqual([]);
+          expect(fetched).toEqual([]);
+          expect(await mockupCount(database)).toBe(0);
+        },
+      );
+    });
+
+    test('withdraws the preparing question when the checkout refuses a file', async () => {
+      await withBoard(
+        async ({ caller, database, item, notes, serve, tools }) => {
+          const iris = await caller('Xavier', 'designer');
+          await item({ heldBy: iris, state: 'design_ready' });
+          serve(
+            new FileRequestError(
+              'The files asked for come to more than 8 MiB.',
+            ),
+          );
+
+          const result = await tools.call(iris, 'show_mockups', set);
+          expect(result).toMatchObject({ code: 'refused', ok: false });
+          expect(result.ok ? '' : result.message).toBe(
+            `The files asked for come to more than 8 MiB. ${nothingShown}`,
+          );
+          expect(
+            notes.map(({ event, state }) => [
+              (event as { kind: string }).kind,
+              state,
+            ]),
+          ).toEqual([
+            ['drawings_preparing', 'active'],
+            ['drawings_withdrawn', 'active'],
+          ]);
+          expect(notes[0]?.event).toMatchObject({
+            count: 2,
+            question: 'Which export button?',
+          });
+          expect(await mockupCount(database)).toBe(0);
+        },
+      );
+    });
+
+    test('withdraws it when a file is not what its name says', async () => {
+      await withBoard(
+        async ({ caller, database, item, notes, serve, tools }) => {
+          const iris = await caller('Xavier', 'designer');
+          await item({ heldBy: iris, state: 'design_ready' });
+          serve({ 'mockups/a.html': page, 'mockups/b.png': page });
+
+          const result = await tools.call(iris, 'show_mockups', set);
+          expect(result.ok ? '' : result.message).toBe(
+            `mockups/b.png is not a PNG image. ${nothingShown}`,
+          );
+          expect(
+            notes.map(({ event }) => (event as { kind: string }).kind),
+          ).toEqual(['drawings_preparing', 'drawings_withdrawn']);
+          expect(await mockupCount(database)).toBe(0);
+        },
+      );
+    });
+
+    test("stores the set, shows it and returns the navigator's choice", async () => {
+      await withBoard(
+        async ({
+          caller,
+          drawings,
+          fetched,
+          item,
+          mockups,
+          notes,
+          serve,
+          tools,
+        }) => {
+          const iris = await caller('Xavier', 'designer');
+          await item({ heldBy: iris, state: 'design_ready' });
+          serve({ 'mockups/a.html': page, 'mockups/b.png': png });
+
+          const calling = tools.call(iris, 'show_mockups', set);
+          const round = await shown(notes);
+          expect(fetched).toEqual([['mockups/a.html', 'mockups/b.png']]);
+          const preparing = notes[0]?.event as { drawingsId: string };
+          expect(round.drawingsId).toBe(preparing.drawingsId);
+          expect(round.drawings).toEqual([
+            {
+              cost: 'Always visible.',
+              label: 'A · Button in the toolbar',
+              mockupId: expect.any(String) as unknown,
+              recommended: true,
+            },
+            {
+              cost: 'One extra click.',
+              label: 'B · Inside the ⋯ menu',
+              mockupId: expect.any(String) as unknown,
+              recommended: false,
+            },
+          ]);
+          expect(await mockups.find(round.drawings[0]!.mockupId!)).toEqual({
+            content: page,
+            contentType: 'text/html',
+          });
+          expect(await mockups.find(round.drawings[1]!.mockupId!)).toEqual({
+            content: png,
+            contentType: 'image/png',
+          });
+
+          await drawings.answer(iris.runId, {
+            choice: 'B · Inside the ⋯ menu',
+            drawingsId: round.drawingsId,
+          });
+          expect(await calling).toEqual({
+            ok: true,
+            value: {
+              choice: 'B · Inside the ⋯ menu',
+              message: 'The navigator chose B · Inside the ⋯ menu.',
+              text: '',
+            },
+          });
+        },
+      );
+    });
+
+    test("returns the navigator's written change", async () => {
+      await withBoard(
+        async ({ caller, drawings, item, notes, serve, tools }) => {
+          const iris = await caller('Xavier', 'designer');
+          await item({ heldBy: iris, state: 'design_ready' });
+          serve({ 'mockups/a.html': page, 'mockups/b.png': png });
+
+          const calling = tools.call(iris, 'show_mockups', set);
+          const round = await shown(notes);
+          await drawings.answer(iris.runId, {
+            drawingsId: round.drawingsId,
+            text: 'Make the button red.',
+          });
+          expect(await calling).toEqual({
+            ok: true,
+            value: {
+              choice: null,
+              message:
+                'The navigator asked for a change: Make the button red. Revise the drawings and show them again with show_mockups.',
+              text: 'Make the button red.',
+            },
+          });
         },
       );
     });

@@ -168,9 +168,18 @@ export type AgentEvent = Nested &
         readonly text: string;
       }
     /**
-     * A round of drawings the designer asks the navigator to choose from (spec §6.3). This and
-     * the two below are written by the backend, never accepted from a runner.
+     * A set of drawings on its way from the designer's checkout (spec §6.4): the question and how
+     * many drawings, before any can be shown. The `drawings` event with the same id is the set
+     * arrived; a `drawings_withdrawn` for it is a set refused. This and the three below are
+     * written by the backend, never accepted from a runner.
      */
+    | {
+        readonly kind: 'drawings_preparing';
+        readonly drawingsId: string;
+        readonly question: string;
+        readonly count: number;
+      }
+    /** A round of drawings the designer asks the navigator to choose from (spec §6.3). */
     | {
         readonly kind: 'drawings';
         readonly drawingsId: string;
