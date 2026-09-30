@@ -50,6 +50,8 @@ interface Waiting {
   readonly drawingsId: string;
   readonly labels: readonly string[];
   readonly settle: (answer: DrawingsAnswer) => void;
+  /** Whether the asking call still waits: neither answered nor withdrawn. */
+  readonly open: () => boolean;
   /** Resolves once the withdrawal is in the conversation. */
   readonly withdraw: (reason: unknown) => Promise<void>;
 }
@@ -114,6 +116,7 @@ export function createDrawingQuestions({
         'awaiting_input',
       );
       let aborted = () => {};
+      let open = true;
       const answered = new Promise<DrawingsAnswer>((resolve, reject) => {
         const release = () => {
           signal?.removeEventListener('abort', aborted);
@@ -122,6 +125,7 @@ export function createDrawingQuestions({
           }
         };
         const withdraw = (reason: unknown) => {
+          open = false;
           release();
           reject(reason);
           // The withdrawal follows the round's note, so it can never land before it.
@@ -137,7 +141,9 @@ export function createDrawingQuestions({
         waiting.set(runId, {
           drawingsId,
           labels: round.drawings.map((drawing) => drawing.label),
+          open: () => open,
           settle: (answer) => {
+            open = false;
             release();
             resolve(answer);
           },
@@ -184,9 +190,12 @@ export function createDrawingQuestions({
           },
           'active',
         );
-      } finally {
-        round.settle(settled);
+      } catch (error) {
+        // Unwritten, the answer never happened: the round waits again, so the navigator can retry.
+        if (round.open() && !waiting.has(runId)) waiting.set(runId, round);
+        throw error;
       }
+      round.settle(settled);
       return settled;
     },
   };

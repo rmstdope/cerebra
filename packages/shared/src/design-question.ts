@@ -76,6 +76,8 @@ export function designRecordSectionsOf(
   const parsed = sectionsOf(markdown);
   if (parsed === null) return null;
   const sections = new Map(parsed.sections);
+  // The record names its drawing once, as the mockup; a second name could disagree with it.
+  if (sections.has('The drawing')) return null;
   const mockup = sections.get('The mockup');
   sections.delete('The mockup');
   if (mockup !== undefined) sections.set('The drawing', mockup);

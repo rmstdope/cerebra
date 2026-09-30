@@ -41,6 +41,7 @@ import {
 import { trapFocus } from './focus-trap';
 import {
   browserConversationClient,
+  ConversationRequestError,
   type Conversation,
   type ConversationClient,
   type DrawingsReply,
@@ -448,7 +449,7 @@ function DesignForm({
       tabIndex={-1}
     >
       <h2 className="font-bold" id={`${id}-title`}>
-        {design.title || confirmDesignTitle}
+        {confirmDesignTitle}
       </h2>
       <p className="mt-1 text-sm text-[var(--muted)]">
         {`${name} needs one answer before it can continue.`}
@@ -684,8 +685,12 @@ export function ConversationPage({
       following.current = true;
       try {
         await client.answerDrawings(runId, drawingsId, reply);
-      } catch {
-        setProblem('Cerebra couldn’t send that answer. Try again.');
+      } catch (error) {
+        setProblem(
+          error instanceof ConversationRequestError && error.status === 409
+            ? error.message
+            : 'Cerebra couldn’t send that answer. Try again.',
+        );
       }
     },
     onRetryOutcome: () => void sendText('Try again.', false),

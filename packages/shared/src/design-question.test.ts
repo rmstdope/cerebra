@@ -107,6 +107,17 @@ describe('the design confirmation', () => {
       true,
     );
     expect(designRecordSectionsOf(sections.join('\n'))).toBeNull();
+    expect(
+      designRecordSectionsOf(
+        [
+          ...sections,
+          '## The drawing',
+          'B · Inside the menu',
+          '## The mockup',
+          'A · Button in the toolbar',
+        ].join('\n'),
+      ),
+    ).toBeNull();
   });
 
   it('compares designs with whitespace aside', () => {

@@ -4,6 +4,7 @@ import { afterEach, expect, test } from 'vitest';
 import { cleanup } from '@testing-library/react';
 
 import { ConversationPage } from './conversation-page';
+import { ConversationRequestError } from './runs';
 import type {
   Conversation,
   ConversationClient,
@@ -1256,6 +1257,40 @@ test('an open round of drawings takes focus and is answered by a choice or in wo
     { answer: { choice: 'B · Inside the ⋯ menu' }, drawingsId: 'd-1' },
     { answer: { text: 'Make it smaller.' }, drawingsId: 'd-1' },
   ]);
+});
+
+test('an answer to drawings that stopped waiting says so, and one that failed asks to try again', async () => {
+  const failures = [
+    new ConversationRequestError(
+      'These drawings are no longer waiting for you.',
+      409,
+    ),
+    new ConversationRequestError('Request failed with status 500.', 500),
+  ];
+  const client = fakeClient(
+    conversation([drawingsRound('d-1', 'Which export button?')], {
+      ...designer,
+      state: 'awaiting_input',
+    }),
+    {
+      answerDrawings: async () => {
+        throw failures.shift();
+      },
+    },
+  );
+  renderPage(client);
+
+  const form = await screen.findByRole('form', {
+    name: 'Which export button?',
+  });
+  await userEvent.click(within(form).getByRole('button', { name: 'Choose B' }));
+  expect(
+    await screen.findByText('These drawings are no longer waiting for you.'),
+  ).toBeTruthy();
+  await userEvent.click(within(form).getByRole('button', { name: 'Choose A' }));
+  expect(
+    await screen.findByText('Cerebra couldn’t send that answer. Try again.'),
+  ).toBeTruthy();
 });
 
 test('after a revision the earlier round stays viewable but not choosable, and all rounds survive a reload', async () => {

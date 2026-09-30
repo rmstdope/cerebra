@@ -424,7 +424,7 @@ export function ThreadView({
           key={item.key}
         >
           <h2 className="font-bold" id={id}>
-            {item.design.title || confirmDesignTitle}
+            {confirmDesignTitle}
           </h2>
           <DesignSectionsView
             drawing={drawingNamed(items, item.design.sections['The drawing'])}

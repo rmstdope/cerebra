@@ -49,6 +49,39 @@ function askedId(notes: Array<[string, AgentEvent, string]>, at = 0): string {
 }
 
 describe('drawing questions', () => {
+  it('keeps the round waiting when its answer could not be written', async () => {
+    const notes: Array<[string, AgentEvent, string]> = [];
+    let failNext = true;
+    const drawings = createDrawingQuestions({
+      note: async (run, event, state) => {
+        if (event.kind === 'drawings_answer' && failNext) {
+          failNext = false;
+          throw new Error('The database went away.');
+        }
+        notes.push([run, event, state]);
+      },
+    });
+    let resolved = false;
+    const answered = drawings.ask(runId, round).then((answer) => {
+      resolved = true;
+      return answer;
+    });
+    await settle();
+    const drawingsId = askedId(notes);
+
+    await expect(
+      drawings.answer(runId, { drawingsId, text: 'Bigger buttons.' }),
+    ).rejects.toThrow('The database went away.');
+    await settle();
+    expect(resolved).toBe(false);
+
+    await drawings.answer(runId, { drawingsId, text: 'Bigger buttons.' });
+    await expect(answered).resolves.toEqual({
+      choice: null,
+      text: 'Bigger buttons.',
+    });
+  });
+
   it('asks a round and resolves with the chosen label', async () => {
     const { drawings, notes } = setup();
     const answered = drawings.ask(runId, round);
