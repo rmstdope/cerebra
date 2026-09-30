@@ -6,13 +6,23 @@ import { hashRunToken } from './runner-gateway.js';
 /** The board tools as the endpoint needs them, over any caller type. */
 export interface McpTools<Caller> {
   list(caller: Caller): readonly ToolDescriptor[];
-  call(caller: Caller, name: string, args: unknown): Promise<ToolOutcome>;
+  call(
+    caller: Caller,
+    name: string,
+    args: unknown,
+    signal?: AbortSignal,
+  ): Promise<ToolOutcome>;
 }
 
 export interface McpEndpointOptions<Caller> {
   /** Answers the live run a token hash belongs to, or `null`. */
   readonly authenticate: (tokenHash: string) => Promise<Caller | null>;
   readonly tools: McpTools<Caller>;
+  /**
+   * When a tool call still runs after `afterMs`, its answer comes as an event stream with a
+   * comment every `everyMs`, so no proxy or client drops a call that waits for the navigator.
+   */
+  readonly keepAlive?: { readonly afterMs: number; readonly everyMs: number };
 }
 
 export interface McpEndpoint {
@@ -31,13 +41,77 @@ const internalError = -32603;
 type RequestId = number | string;
 
 /**
- * The backend's MCP server (architecture §5.4): stateless streamable HTTP, one JSON response per
- * POST, authenticated by the run token rather than the navigator's session.
+ * The backend's MCP server (architecture §5.4): stateless streamable HTTP, one response per POST,
+ * authenticated by the run token rather than the navigator's session. The response is JSON, or an
+ * event stream for a tool call that waits long, such as a plan waiting for approval.
  */
 export function createMcpEndpoint<Caller>({
   authenticate,
+  keepAlive = { afterMs: 20_000, everyMs: 25_000 },
   tools,
 }: McpEndpointOptions<Caller>): McpEndpoint {
+  async function callTool(
+    request: FastifyRequest,
+    reply: FastifyReply,
+    id: RequestId,
+    caller: Caller,
+    name: string,
+    args: unknown,
+  ): Promise<unknown> {
+    // The client going away abandons the call, so a waiting plan stops waiting for it.
+    const abandoned = new AbortController();
+    const onClose = () => {
+      if (!reply.raw.writableFinished) abandoned.abort();
+    };
+    reply.raw.on('close', onClose);
+    const answer = tools
+      .call(caller, name, args, abandoned.signal)
+      .then(
+        (outcome) => {
+          const payload = outcome.ok
+            ? outcome.value
+            : { error: outcome.code, message: outcome.message };
+          return success(id, {
+            content: [{ text: JSON.stringify(payload), type: 'text' }],
+            isError: !outcome.ok,
+          });
+        },
+        () => {
+          request.log.error(`The MCP tool ${name} failed.`);
+          return failure(id, internalError, 'Internal error');
+        },
+      )
+      .finally(() => reply.raw.off('close', onClose));
+
+    const streams = /text\/event-stream/.test(request.headers.accept ?? '');
+    let timer: NodeJS.Timeout | undefined;
+    const late = new Promise<'late'>((resolve) => {
+      timer = setTimeout(() => resolve('late'), keepAlive.afterMs);
+    });
+    const first = streams ? await Promise.race([answer, late]) : await answer;
+    clearTimeout(timer);
+    if (first !== 'late') return first;
+
+    reply.hijack();
+    reply.raw.writeHead(200, {
+      'cache-control': 'no-cache',
+      'content-type': 'text/event-stream',
+    });
+    reply.raw.write(': waiting\n\n');
+    const beat = setInterval(() => {
+      if (!reply.raw.destroyed) reply.raw.write(': waiting\n\n');
+    }, keepAlive.everyMs);
+    abandoned.signal.addEventListener('abort', () => clearInterval(beat), {
+      once: true,
+    });
+    const message = await answer;
+    clearInterval(beat);
+    if (!abandoned.signal.aborted) {
+      reply.raw.end(`event: message\ndata: ${JSON.stringify(message)}\n\n`);
+    }
+    return reply;
+  }
+
   async function handle(
     request: FastifyRequest,
     reply: FastifyReply,
@@ -98,24 +172,14 @@ export function createMcpEndpoint<Caller>({
         if (typeof params.name !== 'string') {
           return failure(id, invalidParams, 'tools/call needs a tool name.');
         }
-        let outcome: ToolOutcome;
-        try {
-          outcome = await tools.call(
-            caller,
-            params.name,
-            params.arguments ?? {},
-          );
-        } catch {
-          request.log.error(`The MCP tool ${String(params.name)} failed.`);
-          return failure(id, internalError, 'Internal error');
-        }
-        const payload = outcome.ok
-          ? outcome.value
-          : { error: outcome.code, message: outcome.message };
-        return success(id, {
-          content: [{ text: JSON.stringify(payload), type: 'text' }],
-          isError: !outcome.ok,
-        });
+        return callTool(
+          request,
+          reply,
+          id,
+          caller,
+          params.name,
+          params.arguments ?? {},
+        );
       }
       default:
         return failure(id, methodNotFound, 'Method not found');

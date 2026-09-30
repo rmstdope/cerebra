@@ -29,6 +29,8 @@ import { createRunnerGateway } from './runner-gateway.js';
 import { createRunStore } from './runs.js';
 import { createMcpEndpoint } from './mcp.js';
 import { createServer } from './server.js';
+import { createInvolvementSettings } from './involvement.js';
+import { createPlanApprovals } from './plan-approvals.js';
 import { createStartSettings } from './start-settings.js';
 import { createSupervisor, directoryPreparer } from './supervisor.js';
 import { createDispatcher, type Dispatcher } from './dispatcher.js';
@@ -134,6 +136,13 @@ try {
   mergeWatcher?.nudge();
   const mergeTimer = setInterval(() => mergeWatcher?.nudge(), 30_000).unref();
   const board = createBoard(database);
+  const plans =
+    supervisor === undefined
+      ? undefined
+      : createPlanApprovals({
+          database,
+          note: (runId, event, state) => supervisor.note(runId, event, state),
+        });
   const queue = createNavigatorQueue(database);
   const attention = createAttention(database, queue);
   const notificationSettings = createNotificationSettings(database);
@@ -187,6 +196,7 @@ try {
                 supervisor.finishAfterTurn(runId);
                 nudge.current();
               },
+              ...(plans === undefined ? {} : { plans }),
             }),
           }),
     runs: supervisor,
@@ -196,6 +206,8 @@ try {
       mergeWatcher?.nudge();
     },
     startSettings: createStartSettings(database),
+    involvement: createInvolvementSettings(database),
+    ...(plans === undefined ? {} : { plans }),
     uiDirectory: new URL('../../ui/dist', import.meta.url).pathname,
   });
   server.addHook('onClose', async () => {

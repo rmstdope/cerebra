@@ -650,7 +650,7 @@ describe('a Claude run', () => {
 });
 
 describe('the Claude query options', () => {
-  test('run Claude in default mode with the run settings, skills and tools', () => {
+  test('run Claude in default mode with the run settings, skills and tools, letting a board call wait a day', () => {
     const canUseTool: CanUseTool = async () => ({ behavior: 'allow' });
 
     const options = claudeQueryOptions(
@@ -683,6 +683,7 @@ describe('the Claude query options', () => {
         cerebra: {
           type: 'http',
           url: 'http://cerebra:3000/mcp',
+          timeout: 86_400_000,
           headers: { Authorization: 'Bearer run-token' },
         },
       },

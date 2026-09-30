@@ -12,6 +12,8 @@ import {
   type StepItem,
   type ThreadItem,
 } from './conversation-thread';
+import { PlanCard } from './plan-card';
+import type { PlanVerdict } from './runs';
 
 const outputLimit = 20;
 
@@ -295,6 +297,14 @@ function HelperNest({
 }
 
 export interface ThreadActions {
+  /** Answers a waiting plan; absent where plans cannot be answered. */
+  readonly onAnswerPlan?: (
+    planId: number,
+    verdict: PlanVerdict,
+    text: string,
+  ) => Promise<void>;
+  /** The title a plan card shows: the item the builder is building. */
+  readonly planTitle?: string;
   /** Opens an item an agent filed; absent where there is nowhere to open it. */
   readonly onOpenItem?: (itemId: string) => void;
   /** Asks the agent to try a refused outcome again. */
@@ -320,6 +330,17 @@ export function ThreadView({
   readonly stillWorkingKey: string | null;
 }): ReactNode {
   return items.map((item) => {
+    if (item.kind === 'plan') {
+      return (
+        <PlanCard
+          key={item.key}
+          live={live}
+          onAnswer={actions.onAnswerPlan}
+          plan={item}
+          title={actions.planTitle ?? ''}
+        />
+      );
+    }
     if (item.kind === 'outcome') {
       return (
         <AnsweredOutcome

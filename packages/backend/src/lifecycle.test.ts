@@ -1067,3 +1067,214 @@ describe('a merge the backend cannot make (spec §4.4)', () => {
     ).toMatchObject({ ok: false });
   });
 });
+
+describe('navigator checkpoints (spec §4.9)', () => {
+  const fullContext: LifecycleContext = {
+    ...context,
+    codeReviewAccount: 'navigator',
+  };
+  const reviewing = createWorkItem({
+    attempts: 1,
+    holderRunId: 'reviewer-run',
+    rounds: 1,
+    state: 'reviewing',
+  });
+  const awaitingCodeReview = createWorkItem({
+    returnState: 'merging',
+    rounds: 1,
+    state: 'waiting',
+    waitingKind: 'code_review',
+    waitingReason: 'Waiting for your review on GitHub',
+  });
+  const navigatorApproved = {
+    kind: 'navigator_review',
+    verdict: 'approved',
+    login: 'navigator',
+    reviewId: 7,
+    url: 'https://github.com/acme/website/pull/12#pullrequestreview-7',
+  };
+  const navigatorChanges = {
+    ...navigatorApproved,
+    verdict: 'changes_requested',
+    body: 'Also handle the empty board.',
+    comments: [],
+  };
+
+  test('sends the reviewer’s approval to the navigator’s code review under full involvement', () => {
+    const result = transition(
+      reviewing,
+      {
+        actor: { role: 'reviewer', runId: 'reviewer-run' },
+        record: approved,
+        to: 'merging',
+      },
+      fullContext,
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      item: createWorkItem({
+        attempts: 0,
+        priority: 'P1',
+        returnState: 'merging',
+        rounds: 1,
+        state: 'waiting',
+        waitingKind: 'code_review',
+        waitingReason: 'Waiting for your review on GitHub',
+      }),
+      effects: [
+        { kind: 'history', reason: null },
+        { kind: 'record', record: approved },
+        {
+          kind: 'record',
+          record: { kind: 'awaiting_code_review', account: 'navigator' },
+        },
+      ],
+    });
+  });
+
+  test('merges straight away without an account to wait for', () => {
+    const result = transition(
+      reviewing,
+      {
+        actor: { role: 'reviewer', runId: 'reviewer-run' },
+        record: approved,
+        to: 'merging',
+      },
+      { ...context, codeReviewAccount: null },
+    );
+
+    expect(result).toMatchObject({ ok: true, item: { state: 'merging' } });
+  });
+
+  test('lets the backend merge on the navigator’s approval, keeping the rounds', () => {
+    const result = transition(
+      awaitingCodeReview,
+      { actor: { role: 'backend' }, record: navigatorApproved, to: 'merging' },
+      fullContext,
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      item: { rounds: 1, state: 'merging', waitingKind: null },
+      effects: [
+        { kind: 'history', reason: null },
+        { kind: 'record', record: navigatorApproved },
+      ],
+    });
+  });
+
+  test('sends requested changes back to the builder as one more round', () => {
+    const result = transition(
+      awaitingCodeReview,
+      {
+        actor: { role: 'backend' },
+        record: navigatorChanges,
+        to: 'build_ready',
+      },
+      fullContext,
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      item: { rounds: 2, state: 'build_ready', returnState: null },
+    });
+  });
+
+  test('waits for the navigator when requested changes reach max rounds', () => {
+    const result = transition(
+      { ...awaitingCodeReview, rounds: 2 },
+      {
+        actor: { role: 'backend' },
+        record: navigatorChanges,
+        to: 'build_ready',
+      },
+      fullContext,
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      item: {
+        rounds: 3,
+        state: 'waiting',
+        waitingKind: 'escalation',
+        waitingReason: "Can't merge: too many rounds",
+        returnState: 'build_ready',
+      },
+      effects: [
+        { kind: 'history' },
+        { kind: 'record', record: navigatorChanges },
+        {
+          kind: 'record',
+          record: { kind: 'blocked', reason: 'too_many_rounds', count: 3 },
+        },
+      ],
+    });
+  });
+
+  test.each([
+    [{ ...navigatorApproved, verdict: 'changes_requested' }, 'merging'],
+    [navigatorApproved, 'build_ready'],
+    [approved, 'merging'],
+    [undefined, 'merging'],
+  ] as const)(
+    'refuses to leave the code review on %j towards %s',
+    (record, to) => {
+      const result = transition(
+        awaitingCodeReview,
+        {
+          actor: { role: 'backend' },
+          ...(record === undefined ? {} : { record }),
+          to,
+        },
+        fullContext,
+      );
+
+      expect(result.ok).toBe(false);
+    },
+  );
+
+  test('never moves another kind of wait on a GitHub review', () => {
+    const result = transition(
+      { ...awaitingCodeReview, waitingKind: 'escalation' },
+      { actor: { role: 'backend' }, record: navigatorApproved, to: 'merging' },
+      fullContext,
+    );
+
+    expect(result.ok).toBe(false);
+  });
+
+  test('refuses review while the latest plan waits for the navigator’s approval', () => {
+    const building = createWorkItem({
+      build: { checks: 'passed', planApproved: false, planRecorded: true },
+      holderRunId: 'builder-run',
+      state: 'building',
+    });
+
+    const refused = transition(
+      building,
+      {
+        actor: { role: 'builder', runId: 'builder-run' },
+        record: pullRequest,
+        to: 'review_ready',
+      },
+      context,
+    );
+    const allowed = transition(
+      { ...building, build: { ...delivered, planApproved: true } },
+      {
+        actor: { role: 'builder', runId: 'builder-run' },
+        record: pullRequest,
+        to: 'review_ready',
+      },
+      context,
+    );
+
+    expect(refused).toEqual({
+      ok: false,
+      reason:
+        'The navigator has not approved the latest plan; wait for the answer to submit_plan, or revise the plan, before handing the item to review.',
+    });
+    expect(allowed.ok).toBe(true);
+  });
+});

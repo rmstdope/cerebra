@@ -309,6 +309,7 @@ describe('navigator queue', { concurrent: false }, () => {
       askedBy: 'Astra',
       availableRoutes: [],
       blocked: false,
+      checkpoint: null,
       description: '',
       id: `run:${waiting}:q-2`,
       kind: 'question',
@@ -336,6 +337,118 @@ describe('navigator queue', { concurrent: false }, () => {
       .execute();
     expect((await queue.list()).entries.map((entry) => entry.id)).toEqual([
       item,
+    ]);
+  });
+
+  test('lists a builder’s plan waiting for approval until it is answered, withdrawn or the run ends', async () => {
+    const id = await file(alpha, 'Add export button', 'build_ready');
+    const claimed = await board.claim(id, 'builder');
+    if (!claimed.ok) throw new Error(claimed.reason);
+    const runId = claimed.item.holderRunId ?? '';
+    await database
+      .updateTable('runs')
+      .set({ agent_name: 'Wolverine', status: 'awaiting_input' })
+      .where('id', '=', runId)
+      .execute();
+    const note = async (position: number, at: string, event: object) =>
+      database
+        .insertInto('run_events')
+        .values({
+          created_at: new Date(at),
+          event: JSON.stringify(event),
+          position,
+          run_id: runId,
+        })
+        .execute();
+    await note(1, '2026-10-01T09:00:00Z', {
+      kind: 'plan_approval',
+      markdown: '## Context',
+      planId: 7,
+    });
+    await note(2, '2026-10-01T09:01:00Z', {
+      kind: 'plan_answer',
+      planId: 7,
+      text: 'Smaller.',
+      verdict: 'changes',
+    });
+    await note(3, '2026-10-01T09:02:00Z', {
+      kind: 'plan_approval',
+      markdown: '## Context',
+      planId: 9,
+    });
+
+    const page = await queue.list();
+
+    expect(page.entries).toEqual([
+      {
+        askedBy: 'Wolverine',
+        availableRoutes: [],
+        blocked: false,
+        checkpoint: 'plan',
+        description: '',
+        id: `plan:${runId}:9`,
+        kind: 'review',
+        priority: 'P2',
+        projectId: alpha,
+        projectName: 'acme/alpha',
+        run: { id: runId },
+        since: new Date('2026-10-01T09:02:00Z'),
+        title: 'Add export button',
+        waitingReason: 'Plan waiting for your approval',
+      },
+    ]);
+
+    await note(4, '2026-10-01T09:03:00Z', {
+      kind: 'plan_answer',
+      planId: 9,
+      text: '',
+      verdict: 'approved',
+    });
+    expect((await queue.list()).entries).toEqual([]);
+
+    await note(5, '2026-10-01T09:04:00Z', {
+      kind: 'plan_approval',
+      markdown: '## Context',
+      planId: 10,
+    });
+    await note(6, '2026-10-01T09:05:00Z', {
+      kind: 'plan_withdrawn',
+      planId: 10,
+    });
+    expect((await queue.list()).entries).toEqual([]);
+
+    await note(7, '2026-10-01T09:06:00Z', {
+      kind: 'plan_approval',
+      markdown: '## Context',
+      planId: 11,
+    });
+    expect((await queue.list()).entries).toHaveLength(1);
+    await database
+      .updateTable('runs')
+      .set({ status: 'failed' })
+      .where('id', '=', runId)
+      .execute();
+    expect((await queue.list()).entries).toEqual([]);
+  });
+
+  test('marks a change waiting for the navigator’s own GitHub review', async () => {
+    const id = await file(alpha, 'Check the change', 'merging');
+    await wait(
+      id,
+      'code_review',
+      'Waiting for your review on GitHub',
+      'merging',
+    );
+    const other = await file(alpha, 'Stuck', 'build_ready');
+    await wait(other, 'escalation', 'Attempts ran out.', 'build_ready');
+
+    const page = await queue.list();
+
+    expect(
+      page.entries.map((entry) => [entry.title, entry.checkpoint]),
+    ).toEqual([
+      ['Stuck', null],
+      ['Check the change', 'code_review'],
     ]);
   });
 

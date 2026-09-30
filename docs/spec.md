@@ -68,7 +68,8 @@ A project's settings:
 - **Stages.** Whether the *grooming*, *design* and *verify* stages are on (all on by default).
   Build, review and merge are always on.
 - **Involvement.** How much of the builders' work the navigator approves, as a preset of
-  checkpoints (§4.9). *Autonomous* by default.
+  checkpoints (§4.9). *Autonomous* by default. Under `full`, the project also names the GitHub
+  account whose review counts (D33).
 - **Application paths.** Which paths a person using the product can see; a merge that touches none
   of them skips verification.
 - **Limits.** Maximum concurrent runs in the project (the instance also has a ceiling; §5.4); `max_attempts` (default 3) and `max_rounds`
@@ -586,7 +587,7 @@ The UI lists names, scopes, when each was last used and by which run, never valu
   opens a pull request, all with its agent GitHub token (§7). Every commit carries a `Work-Item: cb-42`
   trailer and the pull request names the item, so the code leads back to the work.
 - **Navigator reviews.** Under the `code_review` checkpoint the navigator reviews on GitHub, and
-  the backend reads the review of the navigator's configured GitHub account (D33).
+  the backend reads the review of the project's review account (D33).
 - **Reviews.** The reviewer posts its review on the pull request as a comment with its agent
   GitHub token, and records its verdict, the revision it reviewed, the review's link and its
   findings on the item.

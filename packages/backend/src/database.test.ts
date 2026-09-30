@@ -116,6 +116,10 @@ describe('database migrations', { concurrent: false }, () => {
           migrationName: '20261006000000_record_usage',
           status: 'Success',
         }),
+        expect.objectContaining({
+          migrationName: '20261007000000_involvement',
+          status: 'Success',
+        }),
       ]);
       expect(
         await database.introspection.getTables({

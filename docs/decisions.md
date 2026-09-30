@@ -324,7 +324,10 @@ reviewer agent's review always runs; the navigator's code review is on top of it
 ### D33. The navigator reviews code on GitHub — decided
 
 Under `code_review` the navigator reviews the pull request on GitHub, and the backend reads that
-review (approval or requested changes) from the navigator's configured GitHub account. It sits
+review (approval or requested changes) from the project's review account, set with its
+involvement. The account was first an instance setting; it moved to the project when the
+experience was agreed, since the navigator may review different repositories from different
+GitHub accounts. It sits
 behind the same forge interface as everything else GitHub (D12), so a review inside Cerebra's own
 UI can be added later without changing the lifecycle.
 

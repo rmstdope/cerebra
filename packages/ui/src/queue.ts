@@ -7,6 +7,11 @@ export interface QueueEntry {
   readonly availableRoutes: readonly BoardRoute[];
   /** It could not merge or finish; the navigator answers it on the item itself. */
   readonly blocked: boolean;
+  /**
+   * The navigator checkpoint it waits at (spec §4.9): a builder's plan, answered in its
+   * conversation, or a pull request waiting for the navigator's review on GitHub.
+   */
+  readonly checkpoint: 'code_review' | 'plan' | null;
   readonly description: string;
   readonly id: string;
   readonly kind: QueueEntryKind;

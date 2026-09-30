@@ -92,6 +92,9 @@ interface Nested {
   readonly parentToolCallId?: string;
 }
 
+/** What the navigator answered a plan with (spec §4.9). */
+export type PlanVerdict = 'approved' | 'changes';
+
 export type AgentEvent = Nested &
   (
     | { readonly kind: 'message'; readonly text: string }
@@ -130,6 +133,27 @@ export type AgentEvent = Nested &
         readonly answers: Answers;
       }
     | { readonly kind: 'user_message'; readonly text: string }
+    /**
+     * A builder's plan waiting for the navigator's approval (spec §4.9). Written by the backend,
+     * never accepted from a runner.
+     */
+    | {
+        readonly kind: 'plan_approval';
+        readonly planId: number;
+        readonly markdown: string;
+      }
+    /**
+     * A plan whose `submit_plan` call stopped waiting before the navigator answered, so it can no
+     * longer be answered; written by the backend, never accepted from a runner.
+     */
+    | { readonly kind: 'plan_withdrawn'; readonly planId: number }
+    /** The navigator's answer to a plan; written by the backend, never accepted from a runner. */
+    | {
+        readonly kind: 'plan_answer';
+        readonly planId: number;
+        readonly verdict: PlanVerdict;
+        readonly text: string;
+      }
     | { readonly kind: 'status'; readonly status: RunStatus }
     | { readonly kind: 'error'; readonly message: string }
     | {

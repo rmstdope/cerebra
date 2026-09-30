@@ -18,11 +18,20 @@ import type {
 
 export type QueueEntryKind = 'attention' | 'new' | 'question' | 'review';
 
+export type QueueCheckpoint = 'code_review' | 'plan';
+
+export const planWaitingReason = 'Plan waiting for your approval';
+
 export interface QueueEntry {
   readonly askedBy: string | null;
   readonly availableRoutes: readonly BoardRoute[];
   /** Whether it waits because it could not merge or finish (spec §4.5): answered on the item. */
   readonly blocked: boolean;
+  /**
+   * The navigator checkpoint it waits at (spec §4.9): a builder's plan, answered in its
+   * conversation, or a change waiting for the navigator's own review on GitHub.
+   */
+  readonly checkpoint: QueueCheckpoint | null;
   readonly description: string;
   readonly id: string;
   readonly kind: QueueEntryKind;
@@ -210,10 +219,76 @@ async function runQuestions(database: Kysely<Database>): Promise<QueueEntry[]> {
       projectId: row.project_id,
       projectName: projectLabel(row.project_name, row.project_owner),
       blocked: false,
+      checkpoint: null,
       run: { id: row.run_id },
       since: row.created_at,
       title: text,
       waitingReason: text,
+    });
+  }
+  return [...newest.values()];
+}
+
+/** The newest plan of every live builder that still waits for the navigator's answer. */
+async function waitingPlans(database: Kysely<Database>): Promise<QueueEntry[]> {
+  const rows = await database
+    .selectFrom('run_events as shown')
+    .innerJoin('runs', 'runs.id', 'shown.run_id')
+    .innerJoin('work_items', 'work_items.holder_run_id', 'runs.id')
+    .innerJoin('projects', 'projects.id', 'work_items.project_id')
+    .select([
+      'runs.id as run_id',
+      'runs.agent_name',
+      'shown.event',
+      'shown.created_at',
+      'work_items.title',
+      'work_items.priority',
+      'projects.id as project_id',
+      'projects.name as project_name',
+      'projects.owner as project_owner',
+    ])
+    .where('runs.status', 'in', ['starting', 'active', 'awaiting_input'])
+    .where(sql<string>`shown.event->>'kind'`, '=', 'plan_approval')
+    .where(({ not, exists, selectFrom }) =>
+      not(
+        exists(
+          selectFrom('run_events as answer')
+            .select('answer.id')
+            .whereRef('answer.run_id', '=', 'shown.run_id')
+            .where(sql<string>`answer.event->>'kind'`, 'in', [
+              'plan_answer',
+              'plan_withdrawn',
+            ])
+            .where(
+              sql<string>`answer.event->>'planId'`,
+              '=',
+              sql<string>`shown.event->>'planId'`,
+            ),
+        ),
+      ),
+    )
+    .orderBy('shown.position', 'desc')
+    .execute();
+
+  const newest = new Map<string, QueueEntry>();
+  for (const row of rows) {
+    if (newest.has(row.run_id)) continue;
+    const { planId } = row.event as { planId: number };
+    newest.set(row.run_id, {
+      askedBy: row.agent_name,
+      availableRoutes: [],
+      blocked: false,
+      checkpoint: 'plan',
+      description: '',
+      id: `plan:${row.run_id}:${planId}`,
+      kind: 'review',
+      priority: row.priority,
+      projectId: row.project_id,
+      projectName: projectLabel(row.project_name, row.project_owner),
+      run: { id: row.run_id },
+      since: row.created_at,
+      title: row.title,
+      waitingReason: planWaitingReason,
     });
   }
   return [...newest.values()];
@@ -315,6 +390,10 @@ export function createNavigatorQueue(
             row.waiting_since !== null &&
             new Date(row.blocked_at).getTime() >=
               new Date(row.waiting_since).getTime(),
+          checkpoint:
+            row.state === 'waiting' && row.waiting_kind === 'code_review'
+              ? 'code_review'
+              : null,
           description: row.description,
           id: row.id,
           kind,
@@ -329,6 +408,7 @@ export function createNavigatorQueue(
       });
 
       entries.push(...(await runQuestions(database)));
+      entries.push(...(await waitingPlans(database)));
       return {
         entries: orderQueue(entries),
         notices: await backupNotices(database),

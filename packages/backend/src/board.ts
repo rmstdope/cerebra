@@ -107,7 +107,26 @@ export type DeliveryEvent = {
   | { readonly kind: 'sent_back' }
   | { readonly kind: 'returned_to_design'; readonly reason: string }
   | { readonly kind: 'merged'; readonly base: string; readonly sha: string }
+  | {
+      readonly kind: 'navigator_review';
+      readonly body: string;
+      readonly comments: readonly NavigatorReviewComment[];
+      readonly url: string | null;
+      readonly verdict: 'approved' | 'changes_requested';
+    }
+  | {
+      readonly kind: 'review_not_counted';
+      readonly account: string;
+      readonly login: string;
+    }
 );
+
+/** A comment on the navigator's own GitHub review (spec §4.9). */
+export interface NavigatorReviewComment {
+  readonly body: string;
+  readonly file: string;
+  readonly line?: number;
+}
 
 export interface ReviewFinding {
   readonly file: string;
@@ -167,6 +186,14 @@ export type DeliveryCurrent =
       readonly reviewer: string | null;
     }
   | { readonly kind: 'waiting_for_checks' }
+  | {
+      /** The GitHub account whose review counts, as it was when the wait began. */
+      readonly account: string;
+      readonly kind: 'code_review';
+      readonly pullRequestUrl: string | null;
+      /** The agent that approved it. */
+      readonly reviewer: string | null;
+    }
   | null;
 
 /** The block the item waits on the navigator for; null once it has moved on. */
@@ -1052,6 +1079,25 @@ function toDeliveryEvent(row: {
         kind: 'merged',
         sha: text(payload.sha),
       };
+    case 'navigator_review':
+      return {
+        ...common,
+        body: text(payload.body),
+        comments: Array.isArray(payload.comments)
+          ? (payload.comments as NavigatorReviewComment[])
+          : [],
+        kind: 'navigator_review',
+        url: typeof payload.url === 'string' ? payload.url : null,
+        verdict:
+          payload.verdict === 'approved' ? 'approved' : 'changes_requested',
+      };
+    case 'review_not_counted':
+      return {
+        ...common,
+        account: text(payload.account),
+        kind: 'review_not_counted',
+        login: text(payload.login),
+      };
   }
   if (row.kind === 'pull_request') {
     const url = typeof payload.url === 'string' ? payload.url : '';
@@ -1080,6 +1126,8 @@ const deliveryRecordKinds = [
   'sent_back',
   'returned_to_design',
   'merged',
+  'navigator_review',
+  'review_not_counted',
 ] as const;
 
 /**
@@ -1191,9 +1239,17 @@ async function deliveryCurrent(
   const item = await database
     .selectFrom('work_items')
     .leftJoin('runs', 'runs.id', 'work_items.holder_run_id')
-    .select(['work_items.project_id', 'work_items.state', 'runs.agent_name'])
+    .select([
+      'work_items.project_id',
+      'work_items.state',
+      'work_items.waiting_kind',
+      'runs.agent_name',
+    ])
     .where('work_items.id', '=', itemId)
     .executeTakeFirstOrThrow();
+  if (item.state === 'waiting' && item.waiting_kind === 'code_review') {
+    return codeReviewCurrent(database, itemId);
+  }
   if (item.state === 'merging') {
     return { kind: 'waiting_for_checks' };
   }
@@ -1216,6 +1272,41 @@ async function deliveryCurrent(
   return { kind: 'waiting_for_review', reviewer: reviewer?.name ?? null };
 }
 
+/** The navigator's GitHub review the item waits for (spec §4.9), from the records of its wait. */
+async function codeReviewCurrent(
+  database: Kysely<Database>,
+  itemId: string,
+): Promise<DeliveryCurrent> {
+  const [waiting, approval, pullRequest] = await Promise.all([
+    database
+      .selectFrom('work_item_records')
+      .select('payload')
+      .where('work_item_id', '=', itemId)
+      .where('kind', '=', 'awaiting_code_review')
+      .orderBy('id', 'desc')
+      .limit(1)
+      .executeTakeFirst(),
+    database
+      .selectFrom('work_item_records')
+      .leftJoin('runs', 'runs.id', 'work_item_records.run_id')
+      .select('runs.agent_name')
+      .where('work_item_records.work_item_id', '=', itemId)
+      .where('work_item_records.kind', '=', 'review')
+      .orderBy('work_item_records.id', 'desc')
+      .limit(1)
+      .executeTakeFirst(),
+    livePullRequest(database, itemId),
+  ]);
+  const account = (waiting?.payload as { account?: unknown } | undefined)
+    ?.account;
+  return {
+    account: typeof account === 'string' ? account : '',
+    kind: 'code_review',
+    pullRequestUrl: pullRequest?.url ?? null,
+    reviewer: approval?.agent_name ?? null,
+  };
+}
+
 /**
  * Appends a record to the item a run holds while building (spec §4.11), under the row lock, so a
  * plan or checks report can only come from the run that holds the item right now.
@@ -1226,7 +1317,7 @@ export async function recordForHeldItem(
   runId: string,
   record: Readonly<Record<string, unknown>> & { readonly kind: string },
 ): Promise<
-  | { readonly ok: true }
+  | { readonly ok: true; readonly recordId: number }
   | {
       readonly code: 'nothing_held' | 'refused';
       readonly ok: false;
@@ -1249,7 +1340,7 @@ export async function recordForHeldItem(
         reason: `A ${record.kind} is recorded while building; this item is ${item.state}.`,
       };
     }
-    await transaction
+    const inserted = await transaction
       .insertInto('work_item_records')
       .values({
         kind: record.kind,
@@ -1257,8 +1348,10 @@ export async function recordForHeldItem(
         run_id: runId,
         work_item_id: itemId,
       })
-      .execute();
-    return { ok: true as const };
+      .returning('id')
+      .executeTakeFirstOrThrow();
+    // A bigserial id arrives as a string.
+    return { ok: true as const, recordId: Number(inserted.id) };
   });
 }
 
@@ -1336,7 +1429,9 @@ async function getLockedItem(
       'work_items.return_state',
       'projects.design_enabled',
       'projects.grooming_enabled',
+      'projects.involvement',
       'projects.max_rounds',
+      'projects.review_account',
       'projects.verify_enabled',
     ])
     .where('work_items.id', '=', itemId)
@@ -1372,11 +1467,15 @@ async function getLockedItem(
       },
       maxRounds: row.max_rounds,
       supportsSplitting: false,
+      codeReviewAccount: row.involvement === 'full' ? row.review_account : null,
     },
   };
 }
 
-/** What the holding run has recorded on the item: a plan, and its newest checks report. */
+/**
+ * What the holding run has recorded on the item: a plan, whether the navigator approved it when it
+ * needed approval (spec §4.9), and its newest checks report.
+ */
 async function buildEvidenceOf(
   database: DatabaseExecutor,
   itemId: string,
@@ -1384,12 +1483,24 @@ async function buildEvidenceOf(
 ): Promise<BuildEvidence> {
   const rows = await database
     .selectFrom('work_item_records')
-    .select(['kind', 'payload'])
+    .select(['id', 'kind', 'payload'])
     .where('work_item_id', '=', itemId)
     .where('run_id', '=', runId)
-    .where('kind', 'in', ['plan', 'checks'])
+    .where('kind', 'in', ['plan', 'plan_answer', 'checks'])
     .orderBy('id', 'desc')
     .execute();
+  const plan = rows.find((row) => row.kind === 'plan');
+  const planApproved =
+    plan === undefined ||
+    (plan.payload as { approval?: unknown } | null)?.approval !== 'required' ||
+    rows.some((row) => {
+      const answer = row.payload as { planId?: unknown; verdict?: unknown };
+      return (
+        row.kind === 'plan_answer' &&
+        answer.planId === Number(plan.id) &&
+        answer.verdict === 'approved'
+      );
+    });
   const checks = rows.find((row) => row.kind === 'checks');
   const passed =
     checks === undefined
@@ -1399,7 +1510,8 @@ async function buildEvidenceOf(
         : 'failed';
   return {
     checks: passed,
-    planRecorded: rows.some((row) => row.kind === 'plan'),
+    planApproved,
+    planRecorded: plan !== undefined,
   };
 }
 

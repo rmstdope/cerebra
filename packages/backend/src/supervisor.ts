@@ -57,6 +57,15 @@ export interface Supervisor extends RunControl {
   read(runId: string): Promise<Conversation | null>;
   send(runId: string, text: string): Promise<void>;
   answer(runId: string, questionId: string, answers: Answers): Promise<void>;
+  /**
+   * Appends an event the backend wrote to a live run's conversation, such as a plan waiting for
+   * the navigator (spec §4.9), and sets the run's state; an ended run refuses it.
+   */
+  note(
+    runId: string,
+    event: AgentEvent,
+    state: Extract<RunState, 'active' | 'awaiting_input'>,
+  ): Promise<void>;
   stopRun(runId: string): Promise<void>;
   /** Ends a live run as finished once its current turn ends: its item has left it (architecture §5.3). */
   finishAfterTurn(runId: string): void;
@@ -770,6 +779,15 @@ export function createSupervisor({
 
     async answer(runId, questionId, answers) {
       deliver(await liveRun(runId), { answers, questionId, type: 'answer' });
+    },
+
+    async note(runId, event, state) {
+      await liveRun(runId);
+      const record = await runs.append(runId, event);
+      publish(runId, { type: 'event', ...record });
+      if (await runs.setState(runId, state)) {
+        publish(runId, { failure: null, state, type: 'state' });
+      }
     },
 
     async fetchFiles(runId, paths) {

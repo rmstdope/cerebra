@@ -438,6 +438,37 @@ describe('the run supervisor', { concurrent: false }, () => {
     });
   });
 
+  test('writes the backend’s own events into a live run’s conversation, with its state', async () => {
+    await withSupervisor(async ({ agent, connect, runs, supervisor }) => {
+      const { runId } = await supervisor.start(await agent('Cerebro'));
+      const updates: RunUpdate[] = [];
+      supervisor.subscribe(runId, (update) => updates.push(update));
+      const runner = await connect(runId);
+
+      await supervisor.note(
+        runId,
+        { kind: 'plan_approval', markdown: '## Context', planId: 4 },
+        'awaiting_input',
+      );
+
+      expect((await runs.get(runId))?.state).toBe('awaiting_input');
+      expect(
+        (await runs.read(runId))?.events.map((record) => record.event),
+      ).toEqual([{ kind: 'plan_approval', markdown: '## Context', planId: 4 }]);
+      expect(updates.map((update) => update.type)).toEqual(['event', 'state']);
+
+      runner.listener.message(up({ end: 'completed', kind: 'result', usage }));
+      await settle();
+      await expect(
+        supervisor.note(
+          runId,
+          { kind: 'plan_answer', planId: 4, text: '', verdict: 'approved' },
+          'active',
+        ),
+      ).rejects.toBeInstanceOf(RunEndedError);
+    });
+  });
+
   test('a completed result finishes the run, removes its container, then its checkout, and adds its cost', async () => {
     await withSupervisor(
       async ({

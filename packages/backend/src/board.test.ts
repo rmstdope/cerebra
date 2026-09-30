@@ -679,7 +679,7 @@ describe('provenance and records', { concurrent: false }, () => {
           kind: 'plan',
           markdown: 'plan',
         }),
-      ).toEqual({ ok: true });
+      ).toEqual({ ok: true, recordId: expect.any(Number) });
       expect(await handOver()).toMatchObject({
         ok: false,
         reason: expect.stringContaining('report_checks'),

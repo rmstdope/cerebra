@@ -8,7 +8,7 @@ import {
   type LivePullRequest,
 } from './board.js';
 import type { Database } from './database.js';
-import type { Forge, ProjectForge } from './forge.js';
+import type { Forge, ForgeReview, ProjectForge } from './forge.js';
 
 export interface MergeWatcher {
   /** Nudges a pass soon; passes never overlap. */
@@ -56,6 +56,26 @@ export function createMergeWatcher(options: {
         );
       } catch (error) {
         log(`Merge check for work item ${item.id} failed: ${String(error)}`);
+      }
+    }
+  };
+
+  const watchCodeReviews = async () => {
+    const items = await database
+      .selectFrom('work_items')
+      .select(['work_items.id', 'work_items.project_id'])
+      .where('work_items.state', '=', 'waiting')
+      .where('work_items.waiting_kind', '=', 'code_review')
+      .execute();
+    for (const item of items) {
+      try {
+        await codeReviewOne(
+          database,
+          item.id,
+          await options.forge(item.project_id),
+        );
+      } catch (error) {
+        log(`Review check for work item ${item.id} failed: ${String(error)}`);
       }
     }
   };
@@ -121,6 +141,8 @@ export function createMergeWatcher(options: {
   };
 
   const pass = async () => {
+    // An approval found here merges in the same pass.
+    await watchCodeReviews();
     await watchMerging();
     await closeReturned();
   };
@@ -216,6 +238,112 @@ async function mergeOne(
   }
   await forge.deleteBranch(current.branch);
   return merged(database, itemId, base, current.head);
+}
+
+/**
+ * The navigator's own review on GitHub (spec §4.9): only a review submitted by the account the
+ * wait was started for, after it started, counts; an approval moves the item on to merge and a
+ * changes request sends it back to the builder. Approvals from anyone else are noted, once each.
+ */
+async function codeReviewOne(
+  database: Kysely<Database>,
+  itemId: string,
+  forge: Forge,
+): Promise<void> {
+  const waiting = await database
+    .selectFrom('work_item_records')
+    .select(['created_at', 'payload'])
+    .where('work_item_id', '=', itemId)
+    .where('kind', '=', 'awaiting_code_review')
+    .orderBy('id', 'desc')
+    .limit(1)
+    .executeTakeFirst();
+  const account = (waiting?.payload as { account?: unknown } | undefined)
+    ?.account;
+  const pullRequest = await livePullRequest(database, itemId);
+  if (
+    waiting === undefined ||
+    typeof account !== 'string' ||
+    pullRequest === null
+  ) {
+    throw new Error(
+      'An item waiting for a code review has no account or pull request.',
+    );
+  }
+  // GitHub keeps whole seconds; a review in the same second as the wait began still counts.
+  const since = Math.floor(waiting.created_at.getTime() / 1000) * 1000;
+  const reviews = (await forge.reviews(pullRequest.number)).filter(
+    (review) => review.submittedAt.getTime() >= since,
+  );
+  const counted = (review: ForgeReview) =>
+    review.login.toLowerCase() === account.toLowerCase();
+  const answer = reviews.find(
+    (review) =>
+      counted(review) &&
+      (review.state === 'approved' || review.state === 'changes_requested'),
+  );
+  if (answer !== undefined) {
+    const changes = answer.state === 'changes_requested';
+    const comments = changes
+      ? await forge.reviewComments(pullRequest.number, answer.id)
+      : [];
+    await transitionLocked(database, itemId, (current) =>
+      current.item.state === 'waiting' &&
+      current.item.waitingKind === 'code_review'
+        ? {
+            actor: { role: 'backend' },
+            reason: changes
+              ? 'You requested changes on GitHub'
+              : 'You approved on GitHub',
+            record: {
+              body: answer.body,
+              comments,
+              kind: 'navigator_review',
+              login: answer.login,
+              reviewId: answer.id,
+              url: answer.url,
+              verdict: changes ? 'changes_requested' : 'approved',
+            },
+            to: changes ? 'build_ready' : 'merging',
+          }
+        : { ok: false as const },
+    );
+    return;
+  }
+  const noted = new Set(
+    (
+      await database
+        .selectFrom('work_item_records')
+        .select('payload')
+        .where('work_item_id', '=', itemId)
+        .where('kind', '=', 'review_not_counted')
+        .execute()
+    ).map((row) => (row.payload as { reviewId?: unknown }).reviewId),
+  );
+  for (const review of reviews) {
+    if (
+      counted(review) ||
+      review.state !== 'approved' ||
+      noted.has(review.id)
+    ) {
+      continue;
+    }
+    await database
+      .insertInto('work_item_records')
+      .values({
+        kind: 'review_not_counted',
+        payload: JSON.stringify({
+          account,
+          kind: 'review_not_counted',
+          login: review.login,
+          reviewId: review.id,
+          url: review.url,
+        }),
+        run_id: null,
+        work_item_id: itemId,
+      })
+      .execute();
+  }
 }
 
 const noChecksGraceMs = 5 * 60_000;

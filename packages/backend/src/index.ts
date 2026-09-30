@@ -264,6 +264,20 @@ export {
   type SupervisorOptions,
 } from './supervisor.js';
 export {
+  createPlanApprovals,
+  PlanAnswerError,
+  type PlanAnswer,
+  type PlanApprovals,
+} from './plan-approvals.js';
+export {
+  createInvolvementSettings,
+  InvolvementInputError,
+  involvements,
+  type Involvement,
+  type InvolvementSetting,
+  type InvolvementSettings,
+} from './involvement.js';
+export {
   createStartSettings,
   LimitInputError,
   type Limits,

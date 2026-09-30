@@ -226,8 +226,11 @@ A tool never takes a run or item id the token already implies, and every call is
 the calling type's allowed tools and the lifecycle.
 
 The endpoint is `POST /mcp` on the main container, stateless: each request is one JSON-RPC
-message answered with one JSON response, with no session and no event stream (`GET` and `DELETE`
-answer 405). It sits outside `/api`, so the navigator's session does not apply; a missing or
+message answered with one JSON response, with no session (`GET` and `DELETE` answer 405). A call
+still unsettled after 20 seconds, from a client that accepts `text/event-stream`, is answered as an
+event stream instead: a comment every 25 seconds keeps the connection alive, and the response is
+its one `message` event. A client that goes away aborts the call. The runner gives the `cerebra`
+server a tool-call timeout of a day, so a `submit_plan` waiting for the navigator is not cut off. It sits outside `/api`, so the navigator's session does not apply; a missing or
 ended run's token answers 401, and a request carrying an `Origin` header, which only a browser
 sends, answers 403. The supervisor's `start` message names it as the `cerebra` MCP server, with
 the run token as its bearer.
@@ -253,7 +256,15 @@ A builder records its plan with `submit_plan` and each run of the project's chec
 `report_checks`, both only while it holds the item in `building`; each is a record carrying the
 run that wrote it (`item_records.created_by_run`). The lifecycle reads the holding run's records as
 build evidence and refuses `building → review_ready` without a plan or with a latest checks report
-that failed. The tool layer also refuses a pull request outside the project's repository or on a
+that failed. Under the `plan` or `full` involvement, `submit_plan` records the plan as needing
+approval and then waits (`plan-approvals.ts`): the plan is written into the run's conversation as a
+`plan_approval` event, the run shows as awaiting input, and the call returns once the navigator
+answers with `POST /api/runs/:runId/plan-answers` (`{ planId, verdict: "approved" | "changes",
+text }`). The answer is kept as a `plan_answer` record and written to the conversation, and the
+lifecycle refuses `building → review_ready` unless the newest plan's answer is an approval. A
+`submit_plan` call the runner abandons stops waiting and writes `plan_withdrawn`. An answer to a
+plan that is not the newest, is already answered or withdrawn, or whose run has ended is refused
+as `not_waiting`; the navigator queue lists the newest unanswered plan of each live run. The tool layer also refuses a pull request outside the project's repository or on a
 branch not named after the item's key. The Overview reads these records, newest 50 at a time,
 through `GET /api/work-items/:id/delivery-activity`.
 
@@ -319,8 +330,8 @@ ticks missed while the instance was down are not replayed.
 
 One client behind a `Forge` interface (D12). The backend polls, since a local instance cannot
 receive webhooks: pull requests and check runs of items in `merging`; reviews on the pull requests
-of items waiting at the `code_review` checkpoint, of which only those by the navigator's GitHub
-login (an instance setting) count (D33); issues for the inbox agent's schedule. A merge uses the
+of items waiting at the `code_review` checkpoint, of which only those by the project's review
+account count (D33); issues for the inbox agent's schedule. A merge uses the
 backend's own project GitHub token (`spec.md` §7), which no run is given, through the merge API,
 then deletes the branch. A server deployment can add webhooks as a faster path; polling stays the
 fallback.
@@ -340,6 +351,15 @@ failures are logged and leave it in `merging` for the next pass. The same pass c
 navigator's reason as a comment, the still-open pull request of every item returned to design
 whose closing is not yet recorded, and deletes its branch; the record written after makes that an
 outbox that survives a restart.
+
+Before `merging`, the same pass reads the reviews of every item waiting at the `code_review`
+checkpoint, so an approval merges in that pass. The account that counts is the project's review
+account as it was when the wait began, kept on the item's `awaiting_code_review` record, and is
+matched case-insensitively; a review submitted before the wait began is ignored. An approval moves
+the item to `merging`; requested changes move it back to `build_ready` with a `navigator_review`
+record carrying the review's body, its line comments and its link, which the next builder's first
+message quotes, and count a round like the reviewer agent's. An approval by any other login is
+recorded once as `review_not_counted`, so the trail says why nothing moved.
 
 ### Releases
 
@@ -416,7 +436,7 @@ the ones the lifecycle depends on are the implementer's.
 | Table | Holds |
 |---|---|
 | `users`, `sessions` | The navigator (one row in v1) and their login sessions. |
-| `projects` | Remote, default branch, settings (§3 of the spec), involvement preset, limits, pause, whether it raises browser notifications, and whether its default fleet has been created (so an emptied fleet is never refilled). |
+| `projects` | Remote, default branch, settings (§3 of the spec), involvement preset and review account, limits, pause, whether it raises browser notifications, and whether its default fleet has been created (so an emptied fleet is never refilled). |
 | `agent_types`, `agent_type_overrides` | Instance defaults, seeded on start from `packages/backend/agent-types/` without overwriting a stored type, and per-project overrides (only the fields changed). |
 | `agents` | Named agents: project, type, name, enabled. |
 | `items` | `key`, `title`, `description`, `type`, `priority`, `state`, `holder_run_id`, `waiting_reason`, `waiting_kind`, `return_state`, `involvement`, `attempts`, `rounds`, `filed_by`, `source`, `parent_id`. The constraints of §4 live here. |

@@ -67,9 +67,14 @@ const directions: readonly {
   },
 ];
 
+/** The checkpoint an entry waits at; none when the backend sent none. */
+function checkpointOf(entry: QueueEntry): QueueEntry['checkpoint'] {
+  return entry.checkpoint ?? null;
+}
+
 /** Whether the request is answered in the queue's own panel, not on its run or item. */
 function opensHere(entry: QueueEntry): boolean {
-  return entry.run === null && !entry.blocked;
+  return entry.run === null && !entry.blocked && checkpointOf(entry) === null;
 }
 
 function asker(entry: QueueEntry): string {
@@ -598,7 +603,8 @@ export function NavigatorQueue({
                     <div hidden={!open} id={`queue-project-${group.id}`}>
                       {open
                         ? group.entries.map((entry) =>
-                            entry.run !== null ? (
+                            entry.run !== null &&
+                            checkpointOf(entry) === null ? (
                               <div
                                 className="grid grid-cols-1 gap-2 border-b border-[var(--border)] p-4 sm:grid-cols-[auto_1fr_auto] sm:items-center sm:gap-3"
                                 data-run={entry.run.id}
@@ -634,16 +640,28 @@ export function NavigatorQueue({
                                   Answer
                                 </button>
                               </div>
-                            ) : entry.blocked ? (
+                            ) : entry.blocked ||
+                              checkpointOf(entry) !== null ? (
                               <div
                                 className="grid grid-cols-1 gap-2 border-b border-[var(--border)] p-4 sm:grid-cols-[auto_1fr_auto] sm:items-center sm:gap-3"
-                                data-blocked={entry.id}
+                                data-blocked={
+                                  entry.blocked ? entry.id : undefined
+                                }
+                                data-checkpoint={
+                                  checkpointOf(entry) ?? undefined
+                                }
                                 key={entry.id}
                               >
                                 <span
-                                  className={`w-max self-start rounded-full px-2 py-1 text-xs font-bold ${kindBadges.attention}`}
+                                  className={`w-max self-start rounded-full px-2 py-1 text-xs font-bold ${kindBadges[checkpointOf(entry) === null ? 'attention' : 'review']}`}
                                 >
-                                  {kindLabels.attention}
+                                  {
+                                    kindLabels[
+                                      checkpointOf(entry) === null
+                                        ? 'attention'
+                                        : 'review'
+                                    ]
+                                  }
                                 </span>
                                 <span className="min-w-0">
                                   <strong className="block break-words">
@@ -655,13 +673,17 @@ export function NavigatorQueue({
                                 </span>
                                 <button
                                   className="primary-button w-max"
-                                  onClick={() =>
-                                    onViewWork(
-                                      entry.projectId,
-                                      entry.id,
-                                      'overview',
-                                    )
-                                  }
+                                  onClick={() => {
+                                    if (entry.run !== null) {
+                                      onOpenConversation(entry.run.id);
+                                    } else {
+                                      onViewWork(
+                                        entry.projectId,
+                                        entry.id,
+                                        'overview',
+                                      );
+                                    }
+                                  }}
                                   ref={(element) => {
                                     if (element === null)
                                       rows.current.delete(entry.id);

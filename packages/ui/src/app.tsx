@@ -31,6 +31,8 @@ import type { BoardClient } from './board';
 import type { AutomaticStartsClient } from './automatic-starts';
 import type { BackupsClient } from './backups';
 import { BackupsPage } from './backups-page';
+import { type InvolvementClient } from './involvement';
+import { InvolvementPage } from './involvement-page';
 import { LimitsPage } from './limits-page';
 import { NavigatorQueue, type WorkTab } from './navigator-queue';
 import { ProjectBoard } from './project-board';
@@ -78,6 +80,7 @@ interface AppProps {
   authClient?: AuthClient;
   boardClient?: BoardClient;
   automaticStartsClient?: AutomaticStartsClient;
+  involvementClient?: InvolvementClient;
   backupsClient?: BackupsClient;
   fleetClient?: FleetClient;
   queueClient?: QueueClient;
@@ -101,6 +104,7 @@ type SettingsRoute =
   | { readonly page: 'credentials' }
   | { readonly page: 'agents' }
   | { readonly page: 'limits' }
+  | { readonly page: 'involvement' }
   | { readonly page: 'notifications' }
   | { readonly page: 'backups' }
   | { readonly page: 'agent'; readonly agentType: string };
@@ -118,6 +122,9 @@ function settingsRoute(hash: string): SettingsRoute | null {
   }
   if (hash === '#/settings/limits') {
     return { page: 'limits' };
+  }
+  if (hash === '#/settings/involvement') {
+    return { page: 'involvement' };
   }
   if (hash === '#/settings/notifications') {
     return { page: 'notifications' };
@@ -167,6 +174,7 @@ export function App({
   authClient = browserAuthClient,
   boardClient,
   automaticStartsClient,
+  involvementClient,
   backupsClient,
   fleetClient,
   queueClient,
@@ -845,6 +853,7 @@ export function App({
                 ['credentials', 'Credentials', '#/settings/credentials'],
                 ['agents', 'Agent types', '#/settings/agents'],
                 ['limits', 'Limits', '#/settings/limits'],
+                ['involvement', 'Involvement', '#/settings/involvement'],
                 ['notifications', 'Notifications', '#/settings/notifications'],
                 ['backups', 'Backups', '#/settings/backups'],
               ] as const
@@ -883,6 +892,12 @@ export function App({
           ) : settings.page === 'limits' ? (
             <LimitsPage
               client={automaticStartsClient}
+              key={projectId ?? 'instance'}
+              projectId={projectId}
+            />
+          ) : settings.page === 'involvement' ? (
+            <InvolvementPage
+              client={involvementClient}
               key={projectId ?? 'instance'}
               projectId={projectId}
             />
