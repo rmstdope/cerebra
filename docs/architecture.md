@@ -453,6 +453,7 @@ the ones the lifecycle depends on are the implementer's.
 | `items` | `key`, `title`, `description`, `type`, `priority`, `state`, `holder_run_id`, `waiting_reason`, `waiting_kind`, `return_state`, `involvement`, `attempts`, `rounds`, `filed_by`, `source`, `parent_id`. The constraints of §4 live here. |
 | `item_dependencies` | `(item, depends_on, kind)`. |
 | `item_records` | `(item, kind, version, body, created_by_run)`; attachments such as mockups beside them. |
+| `mockups` | `(id, work_item, run, path, content_type, content)`: a drawing the designer showed, served by id from its own origin (§11). |
 | `item_comments`, `item_history` | Discussion; every state change with actor, reason, from and to. |
 | `runs` | Project, agent, type revision, item held, the item it first claimed (`work_item_id`, kept after the hold ends, so cost stays attributed; null for a run that never held one), state, container id, backend session id, token hash, cost, started and ended. |
 | `run_model_usage` | `(run, model)`: input, output and cache tokens, added to as each result arrives, so a run that later fails keeps what it spent. |
@@ -489,13 +490,22 @@ The first application UI supports persistent Light/Dark/System themes and the WC
 accessibility target of `spec.md` §12.
 
 **Mockups.** `show_mockups` has the gateway fetch the named files from the run's checkout with
-`fetch_files` (§5.2) and stores them with the item's records. They are served from a second listener on its own port, so they have an origin
-of their own, with `Content-Security-Policy: sandbox allow-scripts` and no network access
-(`connect-src 'none'`, `default-src` limited to the mockup itself), and shown in the UI in
-sandboxed iframes. A mockup's script can therefore run but can reach neither Cerebra's page, its
-cookies, the API, nor anything else. Until that listener exists, a round's drawings carry no address and
-each card says the drawing couldn't be shown; the cards, the full-size view and the choice already
-work.
+`fetch_files` (§5.2) and stores each in the `mockups` table, beside the item's records, under an
+unguessable id; HTML and PNG, JPEG, GIF, WebP and SVG images are accepted. A second listener
+(`CEREBRA_MOCKUP_PORT`, 4318, published as `CEREBRA_MOCKUP_ADDRESS`) serves `GET /mockups/:id`, so
+drawings have an origin of their own and never see the session cookie; it reads no cookie, and
+the id is the capability. Every response carries `Content-Security-Policy: sandbox allow-scripts`
+with no network access (`default-src 'none'`, `connect-src 'none'`, only inline scripts and styles
+and `data:`/`blob:` images and fonts), `nosniff`, `no-referrer` and `no-store`; an image is wrapped
+in a page that shows it inline. A mockup's script can therefore run but can reach neither
+Cerebra's page, its cookies, the API, nor anything else, and anything it tries to load from outside
+is simply missing. The application's own policy allows frames from that origin only. The UI asks
+`GET /api/mockups/:id` for a drawing's address, then shows it in a card as a still picture — an
+iframe with an empty `sandbox`, `inert`, drawn at four times the card's size and scaled down — and
+full size live, with `sandbox="allow-scripts"`. Keys pressed inside a frame stay there, so the
+served page posts `cerebra-mockup:escape` to its parent on Escape and the dialog closes on that
+message from its own frame. A live drawing's script can still navigate its own frame to another
+address, which no policy served with the drawing can prevent; that is accepted for the MVP.
 
 **Notifications.** The backend reads the attention list (questions, waiting work and trouble) every
 five seconds and diffs it against the entries it has already seen; the first read after a start
