@@ -757,7 +757,7 @@ describe(
 
     test('requested changes that reach max_rounds block the item', async () => {
       await withTestDatabase(async (database) => {
-        const { board, itemId } = await waitingForCode(database, {
+        const { itemId } = await waitingForCode(database, {
           maxRounds: 1,
         });
         const { forge } = fakeForge({
