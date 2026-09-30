@@ -166,7 +166,7 @@ export function projectLabel(name: string, owner: string | null): string {
   return owner === null ? name : `${owner}/${name}`;
 }
 
-/** The newest unanswered question of every live run in a project. */
+/** The newest unanswered question or drawings round of every live run in a project. */
 async function runQuestions(database: Kysely<Database>): Promise<QueueEntry[]> {
   const rows = await database
     .selectFrom('run_events as asked')
@@ -182,18 +182,16 @@ async function runQuestions(database: Kysely<Database>): Promise<QueueEntry[]> {
       'projects.owner as project_owner',
     ])
     .where('runs.status', 'in', ['starting', 'active', 'awaiting_input'])
-    .where(sql<string>`asked.event->>'kind'`, '=', 'question')
+    .where(sql<string>`asked.event->>'kind'`, 'in', ['question', 'drawings'])
     .where(({ not, exists, selectFrom }) =>
       not(
         exists(
           selectFrom('run_events as answer')
             .select('answer.id')
             .whereRef('answer.run_id', '=', 'asked.run_id')
-            .where(sql<string>`answer.event->>'kind'`, '=', 'answer')
             .where(
-              sql<string>`answer.event->>'questionId'`,
-              '=',
-              sql<string>`asked.event->>'questionId'`,
+              sql<boolean>`(answer.event->>'kind' = 'answer' and answer.event->>'questionId' = asked.event->>'questionId')
+                or (answer.event->>'kind' in ('drawings_answer', 'drawings_withdrawn') and answer.event->>'drawingsId' = asked.event->>'drawingsId')`,
             ),
         ),
       ),
@@ -204,16 +202,22 @@ async function runQuestions(database: Kysely<Database>): Promise<QueueEntry[]> {
   const newest = new Map<string, QueueEntry>();
   for (const row of rows) {
     if (newest.has(row.run_id)) continue;
-    const event = row.event as {
-      questionId: string;
-      questions: readonly { question: string }[];
-    };
-    const text = event.questions[0]?.question ?? '';
+    const event = row.event as
+      | {
+          kind: 'question';
+          questionId: string;
+          questions: readonly { question: string }[];
+        }
+      | { kind: 'drawings'; drawingsId: string; question: string };
+    const [askedId, text] =
+      event.kind === 'drawings'
+        ? [event.drawingsId, event.question]
+        : [event.questionId, event.questions[0]?.question ?? ''];
     newest.set(row.run_id, {
       askedBy: row.agent_name ?? 'The assistant',
       availableRoutes: [],
       description: '',
-      id: `run:${row.run_id}:${event.questionId}`,
+      id: `run:${row.run_id}:${askedId}`,
       kind: 'question',
       priority: null,
       projectId: row.project_id,
