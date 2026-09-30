@@ -869,6 +869,94 @@ describe('board tools', { concurrent: false }, () => {
     });
   });
 
+  describe('reading a kept drawing', () => {
+    test('a builder and a reviewer read a drawing of their project, a web page as text and an image as base64', async () => {
+      await withBoard(async ({ caller, item, mockups, tools }) => {
+        const iris = await caller('Xavier', 'designer');
+        const itemId = await item({ heldBy: iris, state: 'design_ready' });
+        const page = await mockups.save({
+          content: Buffer.from('<!doctype html><p>Export</p>'),
+          contentType: 'text/html',
+          path: 'mockups/a.html',
+          runId: iris.runId,
+          workItemId: itemId,
+        });
+        const png = Buffer.from([
+          0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+        ]);
+        const image = await mockups.save({
+          content: png,
+          contentType: 'image/png',
+          path: 'mockups/b.png',
+          runId: iris.runId,
+          workItemId: itemId,
+        });
+        const storm = await caller('Storm', 'builder');
+        const emma = await caller('Emma', 'reviewer');
+
+        expect(
+          await tools.call(storm, 'get_mockup', { mockup_id: page }),
+        ).toEqual({
+          ok: true,
+          value: {
+            content: '<!doctype html><p>Export</p>',
+            contentType: 'text/html',
+            encoding: 'utf8',
+            id: page,
+            itemId,
+            path: 'mockups/a.html',
+          },
+        });
+        expect(
+          await tools.call(emma, 'get_mockup', { mockup_id: image }),
+        ).toMatchObject({
+          ok: true,
+          value: {
+            content: png.toString('base64'),
+            contentType: 'image/png',
+            encoding: 'base64',
+          },
+        });
+      });
+    });
+
+    test('refuses a drawing that does not exist, of another project, or to a type not given the tool', async () => {
+      await withBoard(async ({ caller, database, item, mockups, tools }) => {
+        const elsewhere = await registerTestProject(database);
+        const iris = await caller('Xavier', 'designer', elsewhere);
+        const foreign = await mockups.save({
+          content: Buffer.from('<p>x</p>'),
+          contentType: 'text/html',
+          path: 'mockups/a.html',
+          runId: iris.runId,
+          workItemId: await item({
+            heldBy: iris,
+            projectId: elsewhere,
+            state: 'design_ready',
+          }),
+        });
+        const storm = await caller('Storm', 'builder');
+        const jubilee = await caller('Jubilee', 'groomer');
+
+        for (const id of [crypto.randomUUID(), 'not-a-uuid']) {
+          expect(
+            await tools.call(storm, 'get_mockup', { mockup_id: id }),
+          ).toMatchObject({ code: 'not_found', ok: false });
+        }
+        expect(
+          await tools.call(storm, 'get_mockup', { mockup_id: foreign }),
+        ).toMatchObject({ code: 'other_project', ok: false });
+        expect(
+          await tools.call(jubilee, 'get_mockup', { mockup_id: foreign }),
+        ).toMatchObject({ code: 'tool_not_allowed', ok: false });
+        expect(await tools.call(storm, 'get_mockup', {})).toMatchObject({
+          code: 'invalid_arguments',
+          ok: false,
+        });
+      });
+    });
+  });
+
   describe('showing drawings', () => {
     const page = Buffer.from('<!doctype html><button>Export</button>');
     const png = Buffer.from([

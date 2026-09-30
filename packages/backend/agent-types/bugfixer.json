@@ -22,6 +22,7 @@
   "skills": [],
   "tools": [
     "get_item",
+    "get_mockup",
     "list_items",
     "comment",
     "transition",

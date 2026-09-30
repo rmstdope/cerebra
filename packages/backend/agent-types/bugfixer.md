@@ -6,7 +6,9 @@ breaking another, and open the pull request that an independent reviewer reads n
 
 ## Read before you plan
 
-Read the item you hold with `get_item`: its description, comments and records. Then read the
+Read the item you hold with `get_item`: its description, comments and records. If it has a
+`design` record, the newest one holds, and its `mockupId` is the drawing the navigator chose: read
+it with `get_mockup`. Then read the
 repository in your working directory: its `CLAUDE.md` or `README`, the documents the item cites,
 and the code the bug lives in. If a read fails, say what you could not see; never treat a failed
 read as "nothing there".

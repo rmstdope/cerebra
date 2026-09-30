@@ -541,6 +541,55 @@ export function createBoardTools({
         return { comments, history, item, provenance, records };
       },
     },
+    get_mockup: {
+      descriptor: {
+        name: 'get_mockup',
+        description:
+          'Read a drawing kept with a work item of this project: the design record’s mockupId names the drawing the navigator chose. A web page comes back as UTF-8 text, an image as base64.',
+        inputSchema: {
+          type: 'object',
+          properties: { mockup_id: { type: 'string', minLength: 1 } },
+          required: ['mockup_id'],
+        },
+      },
+      async run(caller, args) {
+        const mockupId = text(args, 'mockup_id');
+        const row = isUuid(mockupId)
+          ? await database
+              .selectFrom('mockups')
+              .innerJoin('work_items', 'work_items.id', 'mockups.work_item_id')
+              .select([
+                'mockups.content',
+                'mockups.content_type',
+                'mockups.path',
+                'mockups.work_item_id',
+                'work_items.project_id',
+              ])
+              .where('mockups.id', '=', mockupId)
+              .executeTakeFirst()
+          : undefined;
+        if (row === undefined) {
+          throw new Refusal('not_found', `Drawing ${mockupId} does not exist.`);
+        }
+        if (row.project_id !== caller.projectId) {
+          throw new Refusal(
+            'other_project',
+            `Drawing ${mockupId} belongs to another project.`,
+          );
+        }
+        const asText =
+          row.content_type === 'text/html' ||
+          row.content_type === 'image/svg+xml';
+        return {
+          content: row.content.toString(asText ? 'utf8' : 'base64'),
+          contentType: row.content_type,
+          encoding: asText ? 'utf8' : 'base64',
+          id: mockupId,
+          itemId: row.work_item_id,
+          path: row.path,
+        };
+      },
+    },
     list_items: {
       descriptor: {
         name: 'list_items',
