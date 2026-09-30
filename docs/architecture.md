@@ -512,9 +512,8 @@ authentication.
 
 Vitest is the workspace test runner. `pnpm install --frozen-lockfile` installs dependencies;
 `pnpm run check` is both gates, locally and in GitHub Actions on `ubuntu-latest`: lint, format
-checks, typecheck, build, unit and real-Postgres database tests (D44). Foundations implements this
-contract and documents how to provide the database; real-Podman end-to-end coverage arrives at
-roadmap step 7.
+checks, typecheck, build, unit and real-Postgres database tests (D44). A second CI job runs
+`pnpm run test:e2e`, the real-Podman suites below.
 
 - **Lifecycle:** every `(state, transition, actor)` triple, and every invariant as a database
   constraint test.
@@ -524,4 +523,9 @@ roadmap step 7.
 - **Runner:** each backend adapter against recorded SDK event streams; the protocol against a fake
   gateway.
 - **End to end:** a stub agent image whose runner replays a script instead of calling a model,
-  started by the real supervisor under real Podman in CI.
+  started by the real supervisor under real Podman in CI. The image is `images/stub-agent.Containerfile`,
+  `FROM cerebro-agent`; its runner reads `.cerebra-stub.json` from the checkout, asks `get_item`
+  which state the held item is in and how many times it has entered it, and replays that round's
+  steps: say something, run a command in the checkout, or call a board tool. The test composes the
+  whole backend, serves the project's repository with `git daemon` and fakes only GitHub's API. The
+  engine contract runs in the same job against the same socket.

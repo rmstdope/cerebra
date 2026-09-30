@@ -59,12 +59,14 @@ planning.
 - Code is written test-first, and the work continues without pausing for approval between phases
   until it is done and ready to commit.
 - Tests assert the behaviour of code. Prose and configuration get no test.
-- The gate a producer runs before opening a pull request is exactly what CI runs, on
+- The gate a producer runs before opening a pull request is exactly what CI's `check` job runs, on
   `ubuntu-latest`; a test that passes only on macOS is a red pull request.
 - Install with `pnpm install --frozen-lockfile`; both gates are `pnpm run check` (lint, format
   checks, typecheck, build, unit and real-Postgres database tests). Foundations implements these
   commands and documents the database prerequisite; they are not runnable in the documents-only
-  repository. Step 7 adds real-Podman end-to-end coverage.
+  repository. CI's second job, `e2e`, runs `pnpm run test:e2e`: the loop under real rootless
+  Podman (D44). Run it locally when a change touches the runner, the supervisor, the engine or
+  `images/`.
 - Before the workspace exists, worktree preparation installs nothing: `install` is deliberately
   undeclared. The foundation producer creates the manifest and lockfile and installs dependencies;
   once `pnpm-lock.yaml` exists, the harness detects `pnpm install --frozen-lockfile` automatically.

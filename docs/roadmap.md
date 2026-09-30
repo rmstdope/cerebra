@@ -63,7 +63,7 @@ One epic implementing the foundation choices confirmed during project definition
 - **UI:** React with Vite, shadcn/ui with Radix primitives and Tailwind CSS. The first application
   UI includes Light/Dark/System themes and WCAG 2.2 AA accessibility (D45).
 - **Tests:** Vitest everywhere; database tests against a real Postgres (a service container in CI);
-  end-to-end tests against real Podman later (step 7).
+  end-to-end tests against real Podman (step 7: `pnpm run test:e2e`, CI's `e2e` job, D44).
 - **Lint and format:** ESLint and Prettier; TypeScript `strict`.
 - **CI and gate:** GitHub Actions on `ubuntu-latest`: `pnpm run check` covers lint, format checks,
   typecheck, build, unit and database tests on every pull request. Both declared gates use that

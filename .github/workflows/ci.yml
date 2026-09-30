@@ -34,3 +34,45 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm run check
+
+  # The loop under real rootless Podman, with the stub agent image (architecture §13).
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: cerebra_test
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+        options: >-
+          --health-cmd "pg_isready --username=postgres --dbname=cerebra_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/cerebra_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Start the rootless Podman API
+        run: |
+          podman version
+          socket="$XDG_RUNTIME_DIR/podman/podman.sock"
+          mkdir -p "$(dirname "$socket")"
+          podman system service --time=0 "unix://$socket" &
+          for attempt in $(seq 1 30); do
+            [ -S "$socket" ] && break
+            sleep 1
+          done
+          test -S "$socket"
+          echo "CEREBRA_TEST_PODMAN_SOCKET=$socket" >> "$GITHUB_ENV"
+      - run: pnpm run test:e2e
