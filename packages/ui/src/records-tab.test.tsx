@@ -131,8 +131,8 @@ test('shows only the agreed outcome until a design is agreed, every heading open
   const heading = within(shown).getByRole('button', { name: 'Outcome' });
   expect(heading.getAttribute('aria-expanded')).toBe('true');
   expect(
-    within(shown).getByRole('button', { name: 'Version 1 ▾' }),
-  ).toBeTruthy();
+    within(shown).getByRole('button', { name: 'Version 1' }).textContent,
+  ).toBe('Version 1 ▾');
   expect(reads.reads).toEqual(['item-1']);
 });
 
@@ -207,7 +207,7 @@ test('lists every version newest first and shows an earlier one until Show curre
     within(shown).getByText('A “Download CSV” button above the invoice list.'),
   ).toBeTruthy();
   const menuButton = within(shown).getByRole('button', {
-    name: 'Version 2 ▾',
+    name: 'Version 2',
   });
   menuButton.focus();
   await user.keyboard('{Enter}');
@@ -234,9 +234,7 @@ test('lists every version newest first and shows an earlier one until Show curre
   expect(
     within(shown).getByText('You are looking at an earlier version.'),
   ).toBeTruthy();
-  expect(
-    within(shown).getByRole('button', { name: 'Version 1 ▾' }),
-  ).toBeTruthy();
+  expect(within(shown).getByRole('button', { name: 'Version 1' })).toBeTruthy();
 
   await user.click(within(shown).getByRole('button', { name: 'Show current' }));
   expect(
@@ -255,7 +253,7 @@ test('Escape closes the version menu and returns focus to its button', async () 
 
   const shown = await screen.findByRole('region', { name: 'Agreed design' });
   const menuButton = within(shown).getByRole('button', {
-    name: 'Version 2 ▾',
+    name: 'Version 2',
   });
   await user.click(menuButton);
   expect(screen.getByRole('menu')).toBeTruthy();
@@ -362,6 +360,8 @@ test('shows a neutral placeholder before anything is read, then Loading… besid
     await vi.advanceTimersByTimeAsync(1000);
   });
   expect(screen.getByText('Loading…')).toBeTruthy();
+  // A background refresh is not announced every interval.
+  expect(screen.queryByRole('status')).toBeNull();
   expect(screen.getByRole('region', { name: 'Agreed design' })).toBeTruthy();
   await act(async () => {
     answer(both(version1));
@@ -393,7 +393,7 @@ test('a version confirmed while the tab is open becomes current without moving w
   expect(
     within(shown).getByText('You are looking at an earlier version.'),
   ).toBeTruthy();
-  await user.click(within(shown).getByRole('button', { name: 'Version 1 ▾' }));
+  await user.click(within(shown).getByRole('button', { name: 'Version 1' }));
   expect(
     within(screen.getByRole('menu'))
       .getAllByRole('menuitemradio')
@@ -433,7 +433,7 @@ test('dates a version of another year with its year', async () => {
   );
 
   const shown = await screen.findByRole('region', { name: 'Agreed design' });
-  await user.click(within(shown).getByRole('button', { name: 'Version 2 ▾' }));
+  await user.click(within(shown).getByRole('button', { name: 'Version 2' }));
   expect(
     within(screen.getByRole('menu')).getByText(
       `Version 1 · 24 Sep ${year - 1}`,

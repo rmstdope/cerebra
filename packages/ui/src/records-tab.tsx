@@ -188,10 +188,10 @@ function RecordCard({
         <span className="flex-1" />
         <DropdownMenu.Root>
           <DropdownMenu.Trigger asChild>
-            <button
-              className="secondary-button text-sm"
-              type="button"
-            >{`Version ${shown.version} ▾`}</button>
+            <button className="secondary-button text-sm" type="button">
+              {`Version ${shown.version} `}
+              <span aria-hidden="true">▾</span>
+            </button>
           </DropdownMenu.Trigger>
           <DropdownMenu.Portal>
             <DropdownMenu.Content
@@ -402,9 +402,7 @@ export function RecordsTab({
   return (
     <div>
       {reading ? (
-        <p className="mt-3 text-sm text-[var(--muted)]" role="status">
-          Loading…
-        </p>
+        <p className="mt-3 text-sm text-[var(--muted)]">Loading…</p>
       ) : null}
       {cards.length === 0 ? (
         <p className="mt-4 text-sm text-[var(--muted)]">
