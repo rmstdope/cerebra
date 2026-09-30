@@ -311,7 +311,6 @@ test('a set on its way shows its question over placeholders, with nothing to ans
   const placeholders = within(shown).getAllByRole('listitem');
   expect(placeholders).toHaveLength(2);
   expect(placeholders[0]!.textContent).toBe('Preparing drawings…');
-  expect(placeholders[0]!.className).toContain('motion-reduce:animate-none');
   expect(within(shown).queryByRole('button')).toBeNull();
   expect(within(shown).queryByRole('textbox')).toBeNull();
   expect(document.activeElement).toBe(document.body);

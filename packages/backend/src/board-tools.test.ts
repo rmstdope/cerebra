@@ -103,10 +103,14 @@ interface Fixture {
   readonly plans: PlanApprovals;
   readonly drawings: DrawingQuestions;
   readonly mockups: MockupStore;
-  /** Sets what the run's checkout answers the next file requests with. */
-  serve(served: Served): void;
+  /** Sets what the run's checkout answers the next file requests with, and what to do first. */
+  serve(served: Served, before?: () => void): void;
   /** The paths of every file request made, in order. */
   readonly fetched: (readonly string[])[];
+  /** The first event of this kind the backend writes, once it is written. */
+  noted(kind: string): Promise<unknown>;
+  /** Makes writing events of this kind fail, as when the run has ended. */
+  failNotes(kind: string): void;
   /** Runs whose tool call gave up their held item, in order. */
   readonly released: string[];
   readonly database: Kysely<Database>;
@@ -138,31 +142,50 @@ async function withBoard(run: (fixture: Fixture) => Promise<void>) {
     const runs = createRunStore(database);
     const released: string[] = [];
     const notes: Fixture['notes'] = [];
+    const listeners: (() => void)[] = [];
+    const failing = new Set<string>();
     const note = async (
       runId: string,
       event: Parameters<Parameters<typeof createPlanApprovals>[0]['note']>[1],
       state: string,
     ) => {
+      if (failing.has(event.kind)) throw new Error('The run has ended.');
       notes.push({ event, runId, state });
       await runs.append(runId, event);
+      for (const listener of listeners.splice(0)) listener();
+    };
+    const noted = async (kind: string): Promise<unknown> => {
+      for (;;) {
+        const found = notes.find(
+          ({ event }) => (event as { kind?: string }).kind === kind,
+        );
+        if (found !== undefined) return found.event;
+        await new Promise<void>((resolve) => listeners.push(resolve));
+      }
     };
     const plans = createPlanApprovals({ database, note });
     const drawings = createDrawingQuestions({ note });
     const mockups = createMockupStore(database);
     let served: Served = {};
+    let beforeServing = () => {};
     const fetched: (readonly string[])[] = [];
     await run({
       board,
       database,
       drawings,
+      failNotes(kind) {
+        failing.add(kind);
+      },
       fetched,
       mockups,
+      noted,
       notes,
       plans,
       projectId,
       released,
-      serve(next) {
+      serve(next, before = () => {}) {
         served = next;
+        beforeServing = before;
       },
       tools: createBoardTools({
         board,
@@ -170,6 +193,7 @@ async function withBoard(run: (fixture: Fixture) => Promise<void>) {
         drawings,
         fetchFiles: async (_runId, paths) => {
           fetched.push(paths);
+          beforeServing();
           if (served instanceof Error) throw served;
           const files = served;
           return paths.map((path) => {
@@ -782,18 +806,12 @@ describe('board tools', { concurrent: false }, () => {
     }
 
     async function shown(
-      notes: Fixture['notes'],
+      noted: Fixture['noted'],
     ): Promise<{ drawingsId: string; drawings: Drawing[] }> {
-      for (let tries = 0; tries < 400; tries += 1) {
-        const found = notes.find(
-          ({ event }) => (event as { kind?: string }).kind === 'drawings',
-        );
-        if (found !== undefined) {
-          return found.event as { drawingsId: string; drawings: Drawing[] };
-        }
-        await new Promise((resolve) => setTimeout(resolve, 5));
-      }
-      throw new Error('No round was shown.');
+      return (await noted('drawings')) as {
+        drawingsId: string;
+        drawings: Drawing[];
+      };
     }
 
     test('only a designer may show drawings', async () => {
@@ -885,6 +903,45 @@ describe('board tools', { concurrent: false }, () => {
       );
     });
 
+    test('says why a set was refused even when its withdrawal cannot be written', async () => {
+      await withBoard(
+        async ({ caller, database, failNotes, item, serve, tools }) => {
+          const iris = await caller('Xavier', 'designer');
+          await item({ heldBy: iris, state: 'design_ready' });
+          serve(new FileRequestError('There is no file mockups/b.png.'));
+          failNotes('drawings_withdrawn');
+
+          const result = await tools.call(iris, 'show_mockups', set);
+          expect(result).toMatchObject({ code: 'refused', ok: false });
+          expect(result.ok ? '' : result.message).toBe(
+            `There is no file mockups/b.png. ${nothingShown}`,
+          );
+          expect(await mockupCount(database)).toBe(0);
+        },
+      );
+    });
+
+    test('a set abandoned while its files are fetched is withdrawn and not stored', async () => {
+      await withBoard(
+        async ({ caller, database, item, notes, serve, tools }) => {
+          const iris = await caller('Xavier', 'designer');
+          await item({ heldBy: iris, state: 'design_ready' });
+          const abandoned = new AbortController();
+          serve({ 'mockups/a.html': page, 'mockups/b.png': png }, () =>
+            abandoned.abort(),
+          );
+
+          await expect(
+            tools.call(iris, 'show_mockups', set, abandoned.signal),
+          ).rejects.toThrow();
+          expect(
+            notes.map(({ event }) => (event as { kind: string }).kind),
+          ).toEqual(['drawings_preparing', 'drawings_withdrawn']);
+          expect(await mockupCount(database)).toBe(0);
+        },
+      );
+    });
+
     test('withdraws it when a file is not what its name says', async () => {
       await withBoard(
         async ({ caller, database, item, notes, serve, tools }) => {
@@ -912,6 +969,7 @@ describe('board tools', { concurrent: false }, () => {
           fetched,
           item,
           mockups,
+          noted,
           notes,
           serve,
           tools,
@@ -921,7 +979,7 @@ describe('board tools', { concurrent: false }, () => {
           serve({ 'mockups/a.html': page, 'mockups/b.png': png });
 
           const calling = tools.call(iris, 'show_mockups', set);
-          const round = await shown(notes);
+          const round = await shown(noted);
           expect(fetched).toEqual([['mockups/a.html', 'mockups/b.png']]);
           const preparing = notes[0]?.event as { drawingsId: string };
           expect(round.drawingsId).toBe(preparing.drawingsId);
@@ -966,13 +1024,13 @@ describe('board tools', { concurrent: false }, () => {
 
     test("returns the navigator's written change", async () => {
       await withBoard(
-        async ({ caller, drawings, item, notes, serve, tools }) => {
+        async ({ caller, drawings, item, noted, serve, tools }) => {
           const iris = await caller('Xavier', 'designer');
           await item({ heldBy: iris, state: 'design_ready' });
           serve({ 'mockups/a.html': page, 'mockups/b.png': png });
 
           const calling = tools.call(iris, 'show_mockups', set);
-          const round = await shown(notes);
+          const round = await shown(noted);
           await drawings.answer(iris.runId, {
             drawingsId: round.drawingsId,
             text: 'Make the button red.',

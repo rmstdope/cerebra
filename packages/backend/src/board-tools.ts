@@ -758,6 +758,7 @@ export function createBoardTools({
             caller.runId,
             set.drawings.map((drawing) => drawing.path),
           );
+          signal?.throwIfAborted();
           const content = new Map(
             files.map((file) => [
               file.path,
@@ -789,7 +790,8 @@ export function createBoardTools({
             });
           }
         } catch (error) {
-          await preparing.withdraw();
+          // The refusal is the answer; a withdrawal that cannot be written is the run ending anyway.
+          await preparing.withdraw().catch(() => {});
           if (error instanceof FileRequestError) {
             throw setRefused(error.message);
           }

@@ -304,7 +304,47 @@ describe('drawing questions', () => {
       await expect(prepared.show(round.drawings)).rejects.toThrow(
         'The set holds 2 drawings, not the 3 prepared.',
       );
-      expect(notes).toHaveLength(1);
+      // A set that could not be shown is not left on its way.
+      expect(notes.map(([, event]) => event.kind)).toEqual([
+        'drawings_preparing',
+        'drawings_withdrawn',
+      ]);
+    });
+
+    it('a set abandoned while on its way is withdrawn at once', async () => {
+      const { drawings, notes } = setup();
+      const abandoned = new AbortController();
+      const prepared = await drawings.prepare(
+        runId,
+        preparing,
+        abandoned.signal,
+      );
+      abandoned.abort();
+      await settle();
+      expect(notes[1]?.[1]).toEqual({
+        drawingsId: prepared.drawingsId,
+        kind: 'drawings_withdrawn',
+      });
+      await expect(prepared.show(round.drawings)).rejects.toThrow();
+      expect(notes).toHaveLength(2);
+    });
+
+    it('a newer round withdraws a set still on its way', async () => {
+      const { drawings, notes } = setup();
+      const older = await drawings.prepare(runId, preparing);
+      const newer = drawings.ask(runId, round);
+      await settle();
+      expect(notes.map(([, event]) => event.kind)).toEqual([
+        'drawings_preparing',
+        'drawings_withdrawn',
+        'drawings',
+      ]);
+      expect(notes[1]?.[1]).toMatchObject({ drawingsId: older.drawingsId });
+      await drawings.answer(runId, {
+        drawingsId: askedId(notes),
+        text: 'Fine.',
+      });
+      await expect(newer).resolves.toMatchObject({ text: 'Fine.' });
     });
 
     it('preparing replaces an older waiting round', async () => {

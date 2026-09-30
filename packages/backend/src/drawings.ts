@@ -117,9 +117,12 @@ export function createDrawingQuestions({
   readonly note: RunNote;
 }): DrawingQuestions {
   const waiting = new Map<string, Waiting>();
+  /** Each run's set on its way, by how it is withdrawn. */
+  const onItsWay = new Map<string, () => Promise<void>>();
 
   // The older round's withdrawal lands before the newer round, so the chat reads in order.
   async function withdrawOlder(runId: string): Promise<void> {
+    await onItsWay.get(runId)?.();
     await waiting
       .get(runId)
       ?.withdraw(new Error('A newer round of drawings replaced this one.'));
@@ -210,6 +213,21 @@ export function createDrawingQuestions({
         'active',
       );
       let stage: 'preparing' | 'shown' | 'withdrawn' = 'preparing';
+      const leave = (next: 'shown' | 'withdrawn') => {
+        stage = next;
+        signal?.removeEventListener('abort', abandoned);
+        if (onItsWay.get(runId) === withdraw) onItsWay.delete(runId);
+      };
+      const withdraw = async () => {
+        if (stage !== 'preparing') return;
+        leave('withdrawn');
+        await note(runId, { drawingsId, kind: 'drawings_withdrawn' }, 'active');
+      };
+      // An abandoned call leaves nothing on its way; a failed note is the run ending anyway.
+      const abandoned = () => void withdraw().catch(() => {});
+      signal?.addEventListener('abort', abandoned, { once: true });
+      onItsWay.set(runId, withdraw);
+      if (signal?.aborted) abandoned();
       return {
         drawingsId,
         async show(drawings) {
@@ -217,25 +235,22 @@ export function createDrawingQuestions({
             throw new Error('This set of drawings is no longer on its way.');
           }
           const round = { drawings, question };
-          checkRound(round);
-          if (drawings.length !== count) {
-            throw new Error(
-              `The set holds ${drawings.length} drawings, not the ${count} prepared.`,
-            );
+          try {
+            checkRound(round);
+            if (drawings.length !== count) {
+              throw new Error(
+                `The set holds ${drawings.length} drawings, not the ${count} prepared.`,
+              );
+            }
+            signal?.throwIfAborted();
+          } catch (error) {
+            await withdraw().catch(() => {});
+            throw error;
           }
-          signal?.throwIfAborted();
-          stage = 'shown';
+          leave('shown');
           return wait(runId, drawingsId, round, signal);
         },
-        async withdraw() {
-          if (stage !== 'preparing') return;
-          stage = 'withdrawn';
-          await note(
-            runId,
-            { drawingsId, kind: 'drawings_withdrawn' },
-            'active',
-          );
-        },
+        withdraw,
       };
     },
 
