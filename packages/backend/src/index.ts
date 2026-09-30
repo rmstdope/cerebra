@@ -270,6 +270,13 @@ export {
   type PlanApprovals,
 } from './plan-approvals.js';
 export {
+  createDrawingQuestions,
+  DrawingsAnswerError,
+  type DrawingQuestions,
+  type DrawingsAnswer,
+  type DrawingsRound,
+} from './drawings.js';
+export {
   createInvolvementSettings,
   InvolvementInputError,
   involvements,

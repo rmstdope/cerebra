@@ -34,6 +34,7 @@ import { createMcpEndpoint } from './mcp.js';
 import { createServer } from './server.js';
 import { createInvolvementSettings } from './involvement.js';
 import { createPlanApprovals, type PlanApprovals } from './plan-approvals.js';
+import { createDrawingQuestions, type DrawingQuestions } from './drawings.js';
 import { createStartSettings } from './start-settings.js';
 import {
   createSupervisor,
@@ -77,6 +78,8 @@ export interface BackendOptions {
 export interface Backend {
   readonly server: FastifyInstance;
   readonly plans: PlanApprovals | undefined;
+  /** The designer's drawings question, for the tool that shows mockups (spec §6.2). */
+  readonly drawings: DrawingQuestions | undefined;
   readonly supervisor: Supervisor | undefined;
 }
 
@@ -184,6 +187,12 @@ export async function createBackend(options: BackendOptions): Promise<Backend> {
           database,
           note: (runId, event, state) => supervisor.note(runId, event, state),
         });
+  const drawings =
+    supervisor === undefined
+      ? undefined
+      : createDrawingQuestions({
+          note: (runId, event, state) => supervisor.note(runId, event, state),
+        });
   const queue = createNavigatorQueue(database);
   const attention = createAttention(database, queue);
   const notificationSettings = createNotificationSettings(database);
@@ -247,6 +256,7 @@ export async function createBackend(options: BackendOptions): Promise<Backend> {
     startSettings: createStartSettings(database),
     involvement: createInvolvementSettings(database),
     ...(plans === undefined ? {} : { plans }),
+    ...(drawings === undefined ? {} : { drawings }),
     uiDirectory: options.uiDirectory,
   });
   server.addHook('onClose', async () => {
@@ -259,5 +269,5 @@ export async function createBackend(options: BackendOptions): Promise<Backend> {
     await backups?.idle();
     await options.onClose?.();
   });
-  return { server, plans, supervisor };
+  return { server, plans, drawings, supervisor };
 }
